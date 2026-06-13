@@ -2514,10 +2514,51 @@ const char* UI::summonTypeLabel(const CardInfo& ci, bool special) const {
 }
 
 // ── Shared card-art draw helper (orientation source of truth) ────────────
+// Compact a prompt description to a single short line (compact prompts on).
+std::string UI::compactPromptDesc(const std::string& full) const {
+    if (full.empty()) return full;
+    if (!m_settings.compactPrompts) return full;
+    std::string s = full;
+    for (char& c : s) if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+    std::string out;
+    out.reserve(s.size());
+    bool sp = false;
+    for (char c : s) {
+        if (c == ' ') { if (!sp) out.push_back(' '); sp = true; }
+        else { out.push_back(c); sp = false; }
+    }
+    const size_t kMax = 72;
+    if (out.size() > kMax) out = out.substr(0, kMax - 1) + "...";
+    return out;
+}
+
+// Aspect-preserving fit of a card inside slot [a,b], centred. `landscape`
+// fits the rotated (defense) 614:421 footprint; otherwise the upright
+// 421:614 card. The visible art NEVER stretches — the slot can be any size
+// and the card keeps its true proportions inside it.
+void UI::fitCardRect(ImVec2 a, ImVec2 b, bool landscape,
+                     ImVec2* o0, ImVec2* o1) {
+    float sw = b.x - a.x, sh = b.y - a.y;
+    if (sw < 1.f) sw = 1.f; if (sh < 1.f) sh = 1.f;
+    const float ar = landscape ? (614.f / 421.f) : (421.f / 614.f); // w/h
+    float h = sh, w = h * ar;
+    if (w > sw) { w = sw; h = w / ar; }
+    float ox = a.x + (sw - w) * 0.5f;
+    float oy = a.y + (sh - h) * 0.5f;
+    *o0 = {ox, oy};
+    *o1 = {ox + w, oy + h};
+}
+
 void UI::drawCardArt(ImDrawList* dl, uint32_t code, void* tex,
                      ImVec2 a, ImVec2 b, bool rotateDefenseCW,
                      bool dbgCheck) {
     if (!dl || !tex) return;
+    // Aspect-fit the visible rect inside the slot so card art is never
+    // stretched (the reported Pendulum-scale distortion). The caller passes
+    // the full slot; the click/hit-test still uses that full slot elsewhere.
+    ImVec2 f0, f1;
+    fitCardRect(a, b, /*landscape*/ rotateDefenseCW, &f0, &f1);
+
     // One-shot [CARD RENDER CHECK] per Pendulum code so the user can confirm
     // (in Debug Log) that no path flips the art. UV0/UV1 are always the
     // upright (0,0)-(1,1) pair; defense applies a pure 90° rotation, not a
@@ -2538,13 +2579,13 @@ void UI::drawCardArt(ImDrawList* dl, uint32_t code, void* tex,
     if (rotateDefenseCW) {
         // Screen winding TL,TR,BR,BL ← image bottom-left,top-left,top-right,
         // bottom-right = a pure 90° clockwise rotation (orientation-preserving;
-        // det > 0). NOT a horizontal flip.
+        // det > 0). NOT a horizontal flip. Drawn into the fitted landscape rect.
         dl->AddImageQuad((ImTextureID)tex,
-            {a.x, a.y}, {b.x, a.y}, {b.x, b.y}, {a.x, b.y},
+            {f0.x, f0.y}, {f1.x, f0.y}, {f1.x, f1.y}, {f0.x, f1.y},
             {0.f, 1.f}, {0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f});
     } else {
         // Upright: explicit UVs make the non-flipped contract obvious.
-        dl->AddImage((ImTextureID)tex, a, b, {0.f, 0.f}, {1.f, 1.f});
+        dl->AddImage((ImTextureID)tex, f0, f1, {0.f, 0.f}, {1.f, 1.f});
     }
 }
 
@@ -3689,6 +3730,8 @@ void UI::drawLobby(int w, int h) {
         UIStyle::SectionHeader("Gameplay UI");
         savedToggle("Confirm before Restart Duel", &m_settings.confirmRestart);
         savedToggle("Show click-first hints",      &m_settings.clickFirstHints);
+        savedToggle("Compact prompts (full text in side panel)",
+                    &m_settings.compactPrompts);
         ImGui::Separator();
 
         // — Replays
@@ -5429,7 +5472,13 @@ void UI::drawCardZone(const char* label, const CardState* card,
         // obviously do not have a "defense" orientation at all).
         CardInfo zci = m_db.getCard(card->code);
         bool isMonsterCard = (zci.type & TYPE_MONSTER) != 0;
-        bool isDefense = isMonsterCard &&
+        // Defense rotation applies ONLY to monsters sitting in a MONSTER
+        // ZONE. A Pendulum monster used as a SCALE lives in the S/T (Pendulum)
+        // zone and ocgcore may report it with a defense position bit — but it
+        // must render UPRIGHT like a Spell, never rotated. Gating on
+        // LOC_MZONE is the fix for the "Pendulum scale looks distorted /
+        // mirrored" report.
+        bool isDefense = isMonsterCard && card->loc == LOC_MZONE &&
                          (card->pos & (POS_FACEUP_DEFENSE |
                                        POS_FACEDOWN_DEFENSE)) != 0;
         void* tex = faceDown ? m_rend.getBackTexture()
@@ -5437,13 +5486,32 @@ void UI::drawCardZone(const char* label, const CardState* card,
         if (tex) {
             ImVec2 a = {sp.x + 2.f, sp.y + 2.f};
             ImVec2 b = {br.x  - 2.f, br.y  - 2.f};
-            // Route through the shared helper — guaranteed-correct UVs (no
-            // horizontal flip) for upright cards; a true 90° rotation for
-            // defense. Face-down backs never rotate. dbgCheck emits the
-            // [CARD RENDER CHECK] line for Pendulum monsters.
+            // Route through the shared helper — aspect-fit (never stretched),
+            // guaranteed-correct UVs for upright cards, a true 90° rotation
+            // only for monster-zone defense. Face-down backs never rotate.
             drawCardArt(dl, card->code, tex, a, b,
                         /*rotateDefenseCW*/ isDefense && !faceDown,
                         /*dbgCheck*/ !faceDown);
+            // [PENDULUM SCALE RENDER] — a face-up Pendulum monster in an S/T
+            // zone (i.e. a scale). Verifies upright + aspect-fit at runtime.
+            if (m_debugLog && !faceDown && (zci.type & TYPE_PENDULUM) &&
+                card->loc == LOC_SZONE) {
+                static std::unordered_map<uint32_t, bool> s_psSeen;
+                if (!s_psSeen[card->code]) {
+                    s_psSeen[card->code] = true;
+                    ImVec2 f0, f1; fitCardRect(a, b, false, &f0, &f1);
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "[PENDULUM SCALE RENDER] code=%u name=%s zone=ST "
+                        "slot=%.0f,%.0f,%.0f,%.0f fit=%.0f,%.0f,%.0f,%.0f "
+                        "uv0=0,0 uv1=1,1 flipped=no aspect=%.3f",
+                        (unsigned)card->code, zci.name.c_str(),
+                        a.x, a.y, b.x - a.x, b.y - a.y,
+                        f0.x, f0.y, f1.x - f0.x, f1.y - f0.y,
+                        (f1.x - f0.x) / std::max(1.f, (f1.y - f0.y)));
+                    m_dm.logEvent(buf);
+                }
+            }
         } else {
             // No art: name truncated in zone
             CardInfo ci = m_db.getCard(card->code);
@@ -6354,7 +6422,7 @@ void UI::drawField(int fw, int fh) {
         int actN = 0;
         for (const auto& a : currentSelection().idle)
             if (a.con==(uint8_t)botP && a.loc==LOC_REM) ++actN;
-        m_dm.logEvent("[VIEWER OPEN] loc=BN player=" + std::to_string(botP) +
+        m_dm.logEvent("[GY VIEWER] loc=BN player=" + std::to_string(botP) +
                       " count=" + std::to_string(f.banished[botP].size()) +
                       " activatable=" + std::to_string(actN));
     }
@@ -6365,7 +6433,7 @@ void UI::drawField(int fw, int fh) {
         int actN = 0;
         for (const auto& a : currentSelection().idle)
             if (a.con==(uint8_t)botP && a.loc==LOC_GY) ++actN;
-        m_dm.logEvent("[VIEWER OPEN] loc=GY player=" + std::to_string(botP) +
+        m_dm.logEvent("[GY VIEWER] loc=GY player=" + std::to_string(botP) +
                       " count=" + std::to_string(f.gy[botP].size()) +
                       " activatable=" + std::to_string(actN));
     }
@@ -6840,7 +6908,7 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
                 ImGui::PopStyleColor(2);
                 if (go) {
                     const char* gysrc = zshort;
-                    m_dm.logEvent(std::string("[GY ACTIVATE] code=") +
+                    m_dm.logEvent(std::string("[GY VIEWER ACTIVATE] code=") +
                         std::to_string(rows[i].code) + " [" + nm + "]" +
                         " seq=" + std::to_string(rows[i].seq) +
                         " engineIdx=" +
@@ -7336,7 +7404,7 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
         ImGui::TextUnformatted("Choose an effect");
         if (UIStyle::fHeader) ImGui::PopFont();
         ImGui::PopStyleColor();
-        ImGui::TextDisabled("%d option%s offered by the engine",
+        ImGui::TextDisabled("%d option%s — hover for full text",
                             (int)sel.options.size(),
                             sel.options.size() == 1 ? "" : "s");
         ImGui::Dummy({1.f, 6.f});
@@ -7361,9 +7429,12 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
                 ? effN : (srcName + "  —  " + effN);
             std::string full  = (d && !d->text.empty()) ? d->text
                                                         : std::string();
+            // Compact prompts: short single-line label in the row; the FULL
+            // text rides into the right info panel on hover (set below).
+            std::string rowDesc = compactPromptDesc(full);
             std::string rid   = "##optrow" + std::to_string(i);
             bool hov = false;
-            if (PromptChoiceRow(rid.c_str(), title, full,
+            if (PromptChoiceRow(rid.c_str(), title, rowDesc,
                                 bw - 14.f, &hov))
                 submitMpChoice(WaitType::SelectOption, (int)i);
             if (hov) {
@@ -7399,9 +7470,17 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
             (sel.timing == TimingContext::PostSummonTrigger)   ? "Trigger Effect" :
             (sel.timing == TimingContext::OpponentChainWindow) ? "Chain Response" :
                                                                  "Quick Effect";
-        ImGui::Text(sel.forced ? "You must chain a card:"
-                               : "Respond with a card effect?");
-        ImGui::TextDisabled("Window: %s", DuelManager::timingName(sel.timing));
+        // Compact header — header font, gold. The technical timing-window
+        // name is debug-only so normal play reads cleanly.
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
+        ImGui::TextUnformatted(sel.forced ? "You must chain a card"
+                                          : "Respond with a chain?");
+        ImGui::PopStyleColor();
+        UIStyle::PopFont();
+        if (m_debugLog)
+            ImGui::TextDisabled("Window: %s", DuelManager::timingName(sel.timing));
         ImGui::Spacing();
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             auto& c = sel.cards[i];
@@ -7414,12 +7493,14 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
                 else if (d.raw && m_debugLog)
                     effFull = "desc#" + std::to_string(d.raw);
             }
-            // Full-text action row — title carries the effect kind + card
-            // name, the wrapped description sits below; never cut off.
+            // Compact action row — title carries the effect kind + card name,
+            // a SHORT effect snippet below; the full text goes to the right
+            // info panel on hover.
             std::string title = std::string(kindWord) + ": " + nm;
+            std::string rowDesc = compactPromptDesc(effFull);
             std::string rid   = "##chrow" + std::to_string(i);
             bool hov = false;
-            if (PromptChoiceRow(rid.c_str(), title, effFull,
+            if (PromptChoiceRow(rid.c_str(), title, rowDesc,
                                 bw - 14.f, &hov))
                 submitMpChoice(WaitType::SelectChain, (int)i);
             if (hov) {                          // hover -> preview + panel
@@ -8079,34 +8160,44 @@ void UI::drawCenteredModal(int screenW, int screenH) {
          sel.type != WaitType::SelectChain);
     if (!needModal) return;
 
-    // Pick a size that actually fits the content type. Viewer + select-card
-    // lists are tall; effect-choice prompts are WIDE so full effect text
-    // wraps comfortably (cut-off labels were the old complaint); plain
-    // Yes/No prompts stay compact.
+    // Pick a size that fits the content type. The VIEWER (GY/BN/ED browse) is
+    // a compact FLOATING panel anchored to the side — it never dims the field
+    // and never covers the centre. Real decision prompts (select-card,
+    // option, yes/no) stay centred but are kept compact: short action rows,
+    // with full effect text pushed to the right info panel on hover.
+    const bool isViewer = (m_viewerLoc != 0);
     const bool listLike =
-        m_viewerLoc != 0 ||
         sel.type == WaitType::SelectCard     ||
         sel.type == WaitType::SelectTribute  ||
         sel.type == WaitType::SelectUnselect;
     const bool optionLike =
         sel.type == WaitType::SelectOption   ||
         sel.type == WaitType::SelectEffectYn;
-    float MW   = listLike ? 500.f : optionLike ? 580.f : 420.f;
-    float MMax = listLike ? 640.f : optionLike ? 480.f : 300.f;
+    float MW, MMax;
+    if (isViewer)        { MW = 440.f; MMax = 600.f; }
+    else if (listLike)   { MW = 480.f; MMax = 600.f; }
+    else if (optionLike) { MW = 460.f; MMax = 360.f; }   // compact trigger/option
+    else                 { MW = 400.f; MMax = 280.f; }   // yes/no
     if (MW > (float)screenW - 80.f) MW = (float)screenW - 80.f;
-    // Option prompts grow with their content (rows wrap full text), but
-    // never beyond ~60% of the screen so the field stays visible.
-    if (optionLike) MMax = std::min(MMax, (float)screenH * 0.60f);
     const float MH   = std::min((float)screenH - 120.f, MMax);
-    float mx = ((float)screenW - MW) * 0.5f;
-    float my = ((float)screenH - MH) * 0.5f;
+    float mx, my;
+    if (isViewer) {
+        // Anchor to the right side (near the GY/BN/ED piles), just left of the
+        // card-info overlay, clamped on-screen. Vertically centred-ish.
+        const float infoW = ((float)screenW >= 1100.f) ? 330.f : 0.f;
+        mx = (float)screenW - infoW - MW - 28.f;
+        if (mx < 16.f) mx = 16.f;
+        my = 70.f;
+        if (my + MH > (float)screenH - 70.f) my = (float)screenH - MH - 70.f;
+        if (my < 60.f) my = 60.f;
+    } else {
+        mx = ((float)screenW - MW) * 0.5f;
+        my = ((float)screenH - MH) * 0.5f;
+    }
 
-    // Dim the duel underneath so the modal reads as the only live surface.
-    // A fullscreen pass-through window submitted just BEFORE the modal —
-    // renders above the field (later submission) but below the modal.
-    // NoInputs keeps field interactivity identical to the previous build;
-    // the dim is purely visual.
-    {
+    // Dim the duel underneath ONLY for real decision modals — the viewer is a
+    // browse panel and must keep the field fully visible/interactive.
+    if (!isViewer) {
         ImGui::SetNextWindowPos({0.f, 0.f});
         ImGui::SetNextWindowSize({(float)screenW, (float)screenH});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.f, 0.f, 0.f, 0.f});

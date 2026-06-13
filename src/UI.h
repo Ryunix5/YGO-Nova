@@ -77,6 +77,11 @@ private:
                       ImVec2 screenPos, float zW, float zH, ImVec4 col);
     void drawSelectionPanel(int w, int h);
     void drawTestingBar(int w);
+    // Shorten an effect description for a compact prompt row: collapse
+    // newlines and clip to one line when Settings.compactPrompts is on. The
+    // FULL text is still shown in the right info panel on hover. Returns the
+    // text unchanged when compact prompts are off.
+    std::string compactPromptDesc(const std::string& full) const;
     // Fixed-width right-side card info panel (modern-simulator style).
     // Shows the hovered card (falling back to the selected / last hovered
     // one): image, name, type line, attribute/race/level, ATK/DEF, full
@@ -262,6 +267,12 @@ private:
     void drawCardArt(ImDrawList* dl, uint32_t code, void* tex,
                      ImVec2 a, ImVec2 b, bool rotateDefenseCW,
                      bool dbgCheck = false);
+    // Aspect-preserving fit of a card inside a slot rect (never stretches).
+    // `landscape` fits the rotated defense footprint. Shared by every card
+    // draw so S/T-zone Pendulum scales, monster zones and piles all keep the
+    // true 421:614 proportion.
+    void fitCardRect(ImVec2 a, ImVec2 b, bool landscape,
+                     ImVec2* o0, ImVec2* o1);
 
     // Field-state delta observer — drives in-game SFX (draw / send_gy /
     // banish / damage / monster appear). Initialised on the first frame

@@ -49,6 +49,11 @@ struct Settings {
     bool   animShowSkippedPhases = true;
     float  animPhaseMinDuration  = 0.40f; // min time each queued banner shows
 
+    // Compact prompt rows — show a short effect label in trigger/chain/option
+    // prompts and push the FULL decoded text to the right card-info panel on
+    // hover, so prompts stay small instead of exploding to fit long text.
+    bool   compactPrompts        = true;
+
     // ── Logs ─────────────────────────────────────────────────────────────
     bool   logCollapsed      = true;     // collapsed by default — quiet UI
     int    selectedLogTab    = 0;        // 0 = Game, 1 = Debug
@@ -158,6 +163,7 @@ struct Settings {
         f << "animPhaseDelay="    << animPhaseDelay                  << "\n";
         f << "animShowSkippedPhases=" << (animShowSkippedPhases ? "1" : "0") << "\n";
         f << "animPhaseMinDuration="  << animPhaseMinDuration            << "\n";
+        f << "compactPrompts="        << (compactPrompts ? "1" : "0")    << "\n";
         f << "\n# Logs\n";
         f << "logCollapsed="      << (logCollapsed      ? "1" : "0") << "\n";
         f << "selectedLogTab="    << selectedLogTab                   << "\n";
@@ -208,6 +214,7 @@ private:
         else if (k == "animPhaseDelay")    animPhaseDelay    = floatFromStr(v, animPhaseDelay);
         else if (k == "animShowSkippedPhases") animShowSkippedPhases = boolFromStr(v);
         else if (k == "animPhaseMinDuration")  animPhaseMinDuration  = floatFromStr(v, animPhaseMinDuration);
+        else if (k == "compactPrompts")        compactPrompts        = boolFromStr(v);
         else if (k == "logCollapsed")      logCollapsed      = boolFromStr(v);
         else if (k == "selectedLogTab")    selectedLogTab    = intFromStr(v, selectedLogTab);
         else if (k == "debugLog")          debugLog          = boolFromStr(v);
