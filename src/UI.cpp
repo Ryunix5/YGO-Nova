@@ -7883,11 +7883,31 @@ void UI::drawSelectionPanel(int pw, int ph) {
         for (char& c : flt) c = (char)tolower((unsigned char)c);
 
         const bool fastSingle = (sel.min == 1 && sel.max == 1);
-        // Content-sized card list — fits the candidates, scrolls when many.
-        const float kScRowH = 30.f;
-        float scMaxH = std::max(120.f, kHeightCap - 180.f);
-        float scWant = std::max(kScRowH, sel.cards.size() * kScRowH);
-        ImGui::BeginChild("##sclist", {bw, std::min(scMaxH, scWant)}, true);
+        // Content-sized card list. Each row is a thumbnail + name + type line
+        // + Pick button (~76px), so it must size to that — the old 30px/row
+        // estimate clipped even a single card. Show up to 5 candidates
+        // without scrolling; beyond that the list scrolls.
+        const float kScRowH = 76.f;
+        const int   kScMaxVisible = 5;
+        // Count the candidates that pass the search filter so the list fits
+        // exactly (no empty space, no premature scroll).
+        int scVisible = 0;
+        for (int i = 0; i < (int)sel.cards.size(); i++) {
+            const auto& c = sel.cards[i];
+            CardInfo ci = m_db.getCard(c.code);
+            std::string nm = c.name.empty() && ci.name.empty()
+                ? ("#" + std::to_string(c.code))
+                : (c.name.empty() ? ci.name : c.name);
+            if (!flt.empty()) {
+                std::string lc = nm + "#" + std::to_string(c.code);
+                for (char& ch : lc) ch = (char)tolower((unsigned char)ch);
+                if (lc.find(flt) == std::string::npos) continue;
+            }
+            ++scVisible;
+        }
+        int   scRows = std::min(std::max(scVisible, 1), kScMaxVisible);
+        float scH    = scRows * kScRowH + 6.f;
+        ImGui::BeginChild("##sclist", {bw, scH}, true);
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             const auto& c = sel.cards[i];
             CardInfo ci = m_db.getCard(c.code);
