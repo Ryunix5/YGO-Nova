@@ -9189,13 +9189,10 @@ void UI::drawDeckBuilder(int w, int h) {
 
         UIStyle::SectionHeader("Card Search");
 
-        // Large search box.
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{10.f, 8.f});
-        ImGui::InputTextWithHint("##db_search_in",
-            "Search card name or code...", m_searchBuf, sizeof(m_searchBuf));
-        ImGui::PopStyleVar();
-        if (ImGui::IsItemEdited()) {
+        // Themed search box with a leading magnifier glyph.
+        if (UIStyle::SearchInput("##db_search_in", m_searchBuf,
+                                 sizeof(m_searchBuf),
+                                 "Search card name or code...", -1.f)) {
             if (strlen(m_searchBuf) >= 2)
                 m_searchResults = m_db.search(m_searchBuf, 80);
             else
@@ -9241,16 +9238,14 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::PopStyleColor();
             ImGui::TextDisabled("Place cards.cdb in assets/ next to the exe.");
         } else if (m_searchBuf[0] == '\0') {
-            ImGui::Dummy({1.f, 12.f});
-            if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImGui::ColorConvertU32ToFloat4(C.textLo));
-            ImGui::TextUnformatted("Search for cards to add to your deck.");
-            ImGui::PopStyleColor();
-            if (UIStyle::fHeader) ImGui::PopFont();
-            ImGui::TextDisabled("Type at least 2 characters to start.");
+            UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
+                "Search for cards to add",
+                "Type at least 2 characters to start");
         } else if (m_searchResults.empty()) {
-            ImGui::TextDisabled("No cards found for \"%s\".", m_searchBuf);
+            char es[96];
+            snprintf(es, sizeof(es), "No cards match \"%s\"", m_searchBuf);
+            UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
+                es, "Try a shorter or different term");
         } else {
             int rendered = 0;
             // Cap displayed rows so the panel never lags on huge searches —
@@ -9767,16 +9762,9 @@ void UI::drawDeckBuilder(int w, int h) {
         uint32_t code = m_deckHoverCode ? m_deckHoverCode : m_hoveredCard;
         CardInfo info = code ? m_db.getCard(code) : CardInfo{};
         if (code == 0 || info.id == 0) {
-            ImGui::Dummy({1.f, 12.f});
-            if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImGui::ColorConvertU32ToFloat4(C.textLo));
-            ImGui::TextUnformatted("Hover a card to preview");
-            ImGui::PopStyleColor();
-            if (UIStyle::fHeader) ImGui::PopFont();
-            ImGui::TextDisabled(
-                "Hover over a search result or a deck tile to see\n"
-                "the full card name, type, stats and effect text.");
+            UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
+                "Hover a card to preview",
+                "Name, type, stats and effect text appear here");
         } else {
             // Card image area — fixed slot so the layout never resizes.
             const float IMG_W = std::min(PREVIEW_W - 32.f, 260.f);
