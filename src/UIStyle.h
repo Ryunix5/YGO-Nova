@@ -79,6 +79,27 @@ void DrawGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color,
               float rounding, int layers = 3);
 // Horizontal hairline divider with vertical padding, layout-aware.
 void DrawDivider(float padTop = 6.f, float padBot = 6.f);
+// Premium OPAQUE game panel — deeper than glass, for solid menu surfaces
+// (main-menu cards, setup cards). Drop shadow + gradient fill + top sheen +
+// thin neon border + inner hairline. `accent` (0 = none) tints the border.
+void DrawGamePanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
+                   float rounding = 0.f, ImU32 accent = 0);
+// Gold-rimmed count pill centred on `center` (deck / GY / hand counters).
+void CountBadge(ImDrawList* dl, ImVec2 center, int count, ImU32 accent = 0);
+// Themed progress / fill bar inside [a,b] with sheen. `frac` 0..1.
+void ProgressBar(ImDrawList* dl, ImVec2 a, ImVec2 b, float frac, ImU32 fill);
+
+// ── Layout-cursor composite pieces ───────────────────────────────────────────
+// Centred empty-state block (glyph + title + optional subtitle) filling a
+// region of height `h`. Use inside viewers / lists when there's nothing to
+// show, instead of a big blank box.
+void EmptyState(float h, const char* title, const char* subtitle = nullptr);
+// Small square ghost icon button (HUD corner actions). `active` tints gold.
+bool IconButton(const char* label, ImVec2 sz, bool active = false);
+// Themed single-line search input with a leading magnifier glyph. Returns
+// true on edit. `width` <= 0 uses the available width.
+bool SearchInput(const char* id, char* buf, size_t bufSz,
+                 const char* hint, float width = -1.f);
 
 // ── Composite interactive pieces ─────────────────────────────────────────────
 // HUD pill — rounded chip-button used by phase bars and badge rows. Active

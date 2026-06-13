@@ -1,6 +1,7 @@
 #include "UIStyle.h"
 #include "imgui_internal.h"
 #include <cstring>
+#include <cstdio>
 #include <string>
 
 namespace UIStyle {
@@ -217,6 +218,128 @@ void DrawDivider(float padTop, float padBot) {
     float w = ImGui::GetContentRegionAvail().x;
     dl->AddLine(p, {p.x + w, p.y}, gC.borderSoft, 1.f);
     ImGui::Dummy({1.f, padBot + 1.f});
+}
+
+// Forward declaration — visibleLabel is defined further down; IconButton
+// (below) needs it before that point.
+static const char* visibleLabel(const char* label);
+
+void DrawGamePanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
+                   float rounding, ImU32 accent) {
+    if (rounding <= 0.f) rounding = gM.radL;
+    // Drop shadow.
+    for (int i = 5; i >= 1; --i) {
+        float e = (float)i * 1.8f;
+        dl->AddRectFilled({a.x - e, a.y - e + e * 0.7f},
+                          {b.x + e, b.y + e},
+                          IM_COL32(0, 0, 0, 20), rounding + e);
+    }
+    // Vertical gradient body (raised → deep) for a moulded surface.
+    dl->AddRectFilledMultiColor(a, b,
+        IM_COL32(28, 37, 60, 255), IM_COL32(28, 37, 60, 255),
+        IM_COL32(16, 22, 38, 255), IM_COL32(16, 22, 38, 255));
+    // Top sheen.
+    float h = b.y - a.y;
+    dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.22f},
+        IM_COL32(255, 255, 255, 20), IM_COL32(255, 255, 255, 20),
+        IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 0));
+    ImU32 border = accent ? accent : gC.border;
+    dl->AddRect(a, b, border, rounding, 0, 1.4f);
+    dl->AddRect({a.x + 1.5f, a.y + 1.5f}, {b.x - 1.5f, b.y - 1.5f},
+                IM_COL32(255, 255, 255, 12), rounding - 1.f, 0, 1.f);
+}
+
+void CountBadge(ImDrawList* dl, ImVec2 center, int count, ImU32 accent) {
+    if (accent == 0) accent = gC.accent;
+    PushFont(fSmall);
+    char b[12]; std::snprintf(b, sizeof(b), "%d", count);
+    ImVec2 ts = ImGui::CalcTextSize(b);
+    float hw = ts.x * 0.5f + 8.f, hh = ts.y * 0.5f + 3.f;
+    ImVec2 p0{center.x - hw, center.y - hh}, p1{center.x + hw, center.y + hh};
+    dl->AddRectFilled(p0, p1, IM_COL32(10, 12, 22, 225), hh);
+    dl->AddRect(p0, p1, (accent & 0x00FFFFFF) | 0xC0000000, hh, 0, 1.f);
+    dl->AddText({center.x - ts.x * 0.5f, center.y - ts.y * 0.5f},
+                IM_COL32(255, 244, 214, 245), b);
+    PopFont();
+}
+
+void ProgressBar(ImDrawList* dl, ImVec2 a, ImVec2 b, float frac, ImU32 fill) {
+    if (frac < 0.f) frac = 0.f; if (frac > 1.f) frac = 1.f;
+    float r = (b.y - a.y) * 0.5f;
+    dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 150), r);
+    if (frac > 0.f) {
+        float fw = a.x + (b.x - a.x) * frac;
+        dl->AddRectFilled(a, {fw, b.y}, fill, r);
+        dl->AddRectFilledMultiColor(a, {fw, a.y + (b.y - a.y) * 0.5f},
+            IM_COL32(255, 255, 255, 55), IM_COL32(255, 255, 255, 55),
+            IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 0));
+    }
+    dl->AddRect(a, b, IM_COL32(255, 255, 255, 24), r, 0, 1.f);
+}
+
+void EmptyState(float h, const char* title, const char* subtitle) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float w = ImGui::GetContentRegionAvail().x;
+    ImVec2 c{p.x + w * 0.5f, p.y + h * 0.42f};
+    // Subtle ring + slash glyph.
+    dl->AddCircle(c, 16.f, IM_COL32(120, 134, 170, 110), 24, 1.8f);
+    dl->AddLine({c.x - 9.f, c.y - 9.f}, {c.x + 9.f, c.y + 9.f},
+                IM_COL32(120, 134, 170, 110), 1.8f);
+    if (title && title[0]) {
+        ImVec2 ts = ImGui::CalcTextSize(title);
+        dl->AddText({c.x - ts.x * 0.5f, c.y + 26.f}, gC.textLo, title);
+    }
+    if (subtitle && subtitle[0]) {
+        PushFont(fSmall);
+        ImVec2 ss = ImGui::CalcTextSize(subtitle);
+        dl->AddText({c.x - ss.x * 0.5f, c.y + 46.f}, gC.textMuted, subtitle);
+        PopFont();
+    }
+    ImGui::Dummy({w, h});
+}
+
+bool IconButton(const char* label, ImVec2 sz, bool active) {
+    if (sz.x <= 0.f) sz.x = 30.f;
+    if (sz.y <= 0.f) sz.y = 30.f;
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(label, sz);
+    bool hovered = ImGui::IsItemHovered();
+    bool clicked = ImGui::IsItemClicked();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 br{pos.x + sz.x, pos.y + sz.y};
+    ImU32 fill = active  ? gC.accent
+              : hovered  ? IM_COL32(40, 52, 82, 255)
+                         : IM_COL32(24, 31, 50, 230);
+    dl->AddRectFilled(pos, br, fill, gM.radS);
+    dl->AddRect(pos, br,
+                active ? gC.accentHi : hovered ? gC.border : gC.borderSoft,
+                gM.radS, 0, 1.f);
+    const char* vis = visibleLabel(label);
+    ImVec2 ts = ImGui::CalcTextSize(vis);
+    dl->AddText({pos.x + (sz.x - ts.x) * 0.5f, pos.y + (sz.y - ts.y) * 0.5f},
+                active ? gC.accentText : hovered ? gC.textHi : gC.textMd, vis);
+    return clicked;
+}
+
+bool SearchInput(const char* id, char* buf, size_t bufSz,
+                 const char* hint, float width) {
+    if (width <= 0.f) width = ImGui::GetContentRegionAvail().x;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float h = gM.btnH;
+    // Magnifier glyph at the left.
+    ImVec2 gc{pos.x + 14.f, pos.y + h * 0.5f};
+    dl->AddCircle(gc, 5.f, gC.textLo, 16, 1.4f);
+    dl->AddLine({gc.x + 4.f, gc.y + 4.f}, {gc.x + 8.f, gc.y + 8.f},
+                gC.textLo, 1.4f);
+    // Inset the input field past the glyph.
+    ImGui::SetCursorScreenPos({pos.x + 28.f, pos.y});
+    ImGui::SetNextItemWidth(width - 28.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{8.f, 7.f});
+    bool edited = ImGui::InputTextWithHint(id, hint, buf, bufSz);
+    ImGui::PopStyleVar();
+    return edited;
 }
 
 // ── Heading / text helpers ──────────────────────────────────────────────────

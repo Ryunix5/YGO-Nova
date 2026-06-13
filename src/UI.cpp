@@ -3517,35 +3517,54 @@ void UI::drawLobby(int w, int h) {
             for (auto& e : fs::directory_iterator("assets/scripts/official", ec))
                 if (e.path().extension() == ".lua") ++scriptCount;
     }
-    // Lower-left news/status — slim HUD strip, NOT a boxy panel. Same glass
-    // tint + gold accent bar treatment as the profile so they read as one
-    // cohesive HUD instead of two pasted-on cards.
+    // Lower-left SYSTEM STATUS panel — a premium game panel with coloured
+    // status chips (DB / Scripts / Audio / Online) so the readiness of the
+    // runtime reads at a glance instead of a plain text strip.
     {
-        const float NW = 360.f, NH = 112.f;
+        const float NW = 372.f, NH = 132.f;
         ImVec2 a = {24.f, H - NH - 30.f};
         ImVec2 b = {a.x + NW, a.y + NH};
-        bg->AddRectFilled(a, b, IM_COL32(18, 26, 42, 110), UIStyle::M().radS);
-        // Gold left accent bar (matches the profile strip).
-        bg->AddRectFilled({a.x, a.y + 10.f}, {a.x + 4.f, b.y - 10.f},
-                          C.accent, 1.f);
-        // Heading.
-        bg->AddText({a.x + 18.f, a.y + 10.f}, C.textLo, "Topics");
-        // Status lines.
-        bg->AddText({a.x + 18.f, a.y + 32.f}, C.accent, "Duel Ready");
-        char l2[80];
-        snprintf(l2, sizeof(l2), "CDB %d source%s    Scripts %d",
-                 dbCount, dbCount == 1 ? "" : "s", scriptCount);
-        bg->AddText({a.x + 18.f, a.y + 56.f}, C.textMd, l2);
-        const char* l3Text =
-            !gAudio().isAvailable() ? "Audio  device unavailable"
-          :  gAudio().muted()       ? "Audio  muted"
-                                    : "Audio  ready";
-        bg->AddText({a.x + 18.f, a.y + 80.f}, C.textLo, l3Text);
+        UIStyle::DrawGamePanel(bg, a, b, UIStyle::M().radL, 0);
+        bg->AddRectFilled({a.x, a.y + 12.f}, {a.x + 4.f, b.y - 12.f},
+                          C.accent, 2.f);
+        UIStyle::PushFont(UIStyle::fSmall);
+        bg->AddText({a.x + 18.f, a.y + 12.f}, C.textLo, "SYSTEM STATUS");
+        UIStyle::PopFont();
+
+        // Chip drawer on the background list: dot + label, coloured by state.
+        auto chip = [&](ImVec2 p, ImU32 col, const char* text) {
+            ImVec2 ts = ImGui::CalcTextSize(text);
+            ImVec2 c0{p.x, p.y}, c1{p.x + ts.x + 30.f, p.y + 22.f};
+            bg->AddRectFilled(c0, c1, (col & 0x00FFFFFF) | 0x22000000, 11.f);
+            bg->AddRect(c0, c1, (col & 0x00FFFFFF) | 0x99000000, 11.f, 0, 1.f);
+            bg->AddCircleFilled({p.x + 12.f, p.y + 11.f}, 4.f, col, 12);
+            bg->AddText({p.x + 22.f, p.y + 4.f}, C.textHi, text);
+            return c1.x;
+        };
+        bool audioOk = gAudio().isAvailable() && !gAudio().muted();
+        char dbTxt[40]; snprintf(dbTxt, sizeof(dbTxt), "Card DB  %d", dbCount);
+        char scTxt[40]; snprintf(scTxt, sizeof(scTxt), "Scripts  %d", scriptCount);
+        float row1 = a.y + 38.f, row2 = a.y + 70.f, row3 = a.y + 102.f;
+        float x2 = chip({a.x + 18.f, row1},
+                        dbCount > 0 ? C.success : C.danger, dbTxt);
+        chip({x2 + 8.f, row1}, scriptCount > 0 ? C.success : C.warning, scTxt);
+        chip({a.x + 18.f, row2},
+             audioOk ? C.success : C.warning,
+             !gAudio().isAvailable() ? "Audio  off"
+             : gAudio().muted() ? "Audio  muted" : "Audio  ready");
+        // Online relay configured?
+        bool relayCfg = !m_settings.mpHostIP.empty() &&
+                        m_settings.mpHostIP != "127.0.0.1";
+        chip({a.x + 18.f, row3},
+             relayCfg ? C.primaryHi : C.textMuted,
+             relayCfg ? "Online relay set" : "Online relay: local");
     }
 
     // ── Bottom-right footer build line ──────────────────────────────────────
-    bg->AddText({W - 220.f, H - 28.f}, C.textMuted,
-                "EdoPro+  build dev");
+    UIStyle::PushFont(UIStyle::fSmall);
+    bg->AddText({W - 200.f, H - 26.f}, C.textMuted,
+                "EdoPro+  ·  modern duel client");
+    UIStyle::PopFont();
 
     // ── Audio settings popup (opened by the top-right Audio button) ────────
     if (m_audioPopupOpen) { ImGui::OpenPopup("Audio Settings"); m_audioPopupOpen = false; }
@@ -9968,23 +9987,82 @@ void UI::drawReplays(int w, int h) {
         ImGuiWindowFlags_NoSavedSettings);
     UIStyle::SectionHeader("Match History");
     if (m_replayFiles.empty()) {
-        ImGui::Dummy({1.f, 20.f});
-        ImGui::TextDisabled("No replays yet.");
-        ImGui::TextDisabled("Finish a duel with Auto-save on to record one.");
+        UIStyle::EmptyState((float)h - BAR_H - 80.f, "No replays yet",
+                            "Finish a duel with Auto-save on to record one");
     } else {
-        ImGui::TextDisabled("%d replay file%s", (int)m_replayFiles.size(),
-                            m_replayFiles.size() == 1 ? "" : "s");
+        ImGui::TextDisabled("%d match%s", (int)m_replayFiles.size(),
+                            m_replayFiles.size() == 1 ? "" : "es");
         ImGui::Dummy({1.f, 6.f});
         ImGui::BeginChild("##rep_list_inner", {-1.f, -1.f}, false,
                           ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        // Lazy per-file metadata cache so each match card can show deck
+        // names / winner / turns without re-parsing every frame.
+        static std::unordered_map<std::string, edo::Replay> s_meta;
         for (int i = 0; i < (int)m_replayFiles.size(); ++i) {
             const std::string& path = m_replayFiles[i];
-            std::string name = path;
-            auto sl = name.find_last_of("/\\");
-            if (sl != std::string::npos) name = name.substr(sl + 1);
-            std::string lbl = name + "##repsel" + std::to_string(i);
-            bool sel = (m_selectedReplay == i);
-            if (ImGui::Selectable(lbl.c_str(), sel, 0, ImVec2(-1, 24))) {
+            auto it = s_meta.find(path);
+            if (it == s_meta.end()) {
+                edo::Replay meta;
+                meta.load(path);                 // best-effort; empty if corrupt
+                it = s_meta.emplace(path, std::move(meta)).first;
+            }
+            const edo::Replay& m = it->second;
+            bool parsed = !m.deck1.main.empty() || !m.deck2.main.empty();
+            std::string fname = path;
+            auto sl = fname.find_last_of("/\\");
+            if (sl != std::string::npos) fname = fname.substr(sl + 1);
+
+            ImVec2 rp = ImGui::GetCursorScreenPos();
+            float rw = ImGui::GetContentRegionAvail().x - 4.f;
+            float rh = 60.f;
+            ImGui::PushID(i);
+            bool clicked = ImGui::InvisibleButton("##repcard", {rw, rh});
+            bool hov = ImGui::IsItemHovered();
+            bool selnow = (m_selectedReplay == i);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 rb{rp.x + rw, rp.y + rh};
+            // Card surface.
+            dl->AddRectFilled(rp, rb,
+                selnow ? IM_COL32(34, 46, 78, 255)
+                       : hov ? IM_COL32(28, 37, 62, 255)
+                             : IM_COL32(20, 27, 46, 235), 7.f);
+            dl->AddRect(rp, rb,
+                selnow ? C.accentHi : hov ? C.border : C.borderSoft,
+                7.f, 0, selnow ? 1.6f : 1.f);
+            // Winner colour stripe on the left edge.
+            ImU32 wcol = !parsed ? C.danger
+                       : m.winner == 0 ? IM_COL32(110, 220, 140, 255)
+                       : m.winner == 1 ? IM_COL32(232, 110, 100, 255)
+                                       : C.textMuted;
+            dl->AddRectFilled({rp.x, rp.y + 6.f}, {rp.x + 4.f, rb.y - 6.f},
+                              wcol, 2.f);
+            // Title: Deck1 vs Deck2 (or filename if unparsed).
+            UIStyle::PushFont(UIStyle::fHeader);
+            std::string title = parsed
+                ? ((m.deck1.name.empty() ? "P1" : m.deck1.name) + "  vs  " +
+                   (m.deck2.name.empty() ? "P2" : m.deck2.name))
+                : fname;
+            // Clip title to width.
+            dl->PushClipRect(rp, {rb.x - 8.f, rb.y}, true);
+            dl->AddText({rp.x + 14.f, rp.y + 9.f}, C.textHi, title.c_str());
+            dl->PopClipRect();
+            UIStyle::PopFont();
+            // Subline: date · winner · turns.
+            UIStyle::PushFont(UIStyle::fSmall);
+            char sub[128];
+            if (parsed)
+                snprintf(sub, sizeof(sub), "%s   ·   %s   ·   T%d",
+                    m.timestamp.empty() ? "—" : m.timestamp.c_str(),
+                    m.winner == 0 ? "P1 win" : m.winner == 1 ? "P2 win" : "draw",
+                    m.turns);
+            else
+                snprintf(sub, sizeof(sub), "unreadable replay");
+            dl->AddText({rp.x + 14.f, rp.y + 34.f}, C.textLo, sub);
+            UIStyle::PopFont();
+            ImGui::PopID();
+            ImGui::Dummy({1.f, 5.f});
+
+            if (clicked) {
                 m_selectedReplay = i;
                 m_viewerReplayValid = m_viewerReplay.load(path);
                 if (!m_viewerReplayValid)
