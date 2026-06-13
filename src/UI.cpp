@@ -2513,6 +2513,128 @@ const char* UI::summonTypeLabel(const CardInfo& ci, bool special) const {
     return special ? "SPECIAL SUMMON" : "NORMAL SUMMON";
 }
 
+// ── Shared card-art draw helper (orientation source of truth) ────────────
+void UI::drawCardArt(ImDrawList* dl, uint32_t code, void* tex,
+                     ImVec2 a, ImVec2 b, bool rotateDefenseCW,
+                     bool dbgCheck) {
+    if (!dl || !tex) return;
+    // One-shot [CARD RENDER CHECK] per Pendulum code so the user can confirm
+    // (in Debug Log) that no path flips the art. UV0/UV1 are always the
+    // upright (0,0)-(1,1) pair; defense applies a pure 90° rotation, not a
+    // mirror — so flipped is always "no".
+    if (dbgCheck && m_debugLog) {
+        CardInfo ci = m_db.getCard(code);
+        if (ci.type & TYPE_PENDULUM) {
+            static std::unordered_map<uint32_t, bool> s_seen;
+            if (!s_seen[code]) {
+                s_seen[code] = true;
+                m_dm.logEvent(std::string("[CARD RENDER CHECK] code=") +
+                    std::to_string(code) + " name=" + ci.name +
+                    " type=pendulum uv0=0,0 uv1=1,1 flipped=no" +
+                    (rotateDefenseCW ? " (defense 90CW rotation)" : ""));
+            }
+        }
+    }
+    if (rotateDefenseCW) {
+        // Screen winding TL,TR,BR,BL ← image bottom-left,top-left,top-right,
+        // bottom-right = a pure 90° clockwise rotation (orientation-preserving;
+        // det > 0). NOT a horizontal flip.
+        dl->AddImageQuad((ImTextureID)tex,
+            {a.x, a.y}, {b.x, a.y}, {b.x, b.y}, {a.x, b.y},
+            {0.f, 1.f}, {0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f});
+    } else {
+        // Upright: explicit UVs make the non-flipped contract obvious.
+        dl->AddImage((ImTextureID)tex, a, b, {0.f, 0.f}, {1.f, 1.f});
+    }
+}
+
+// ── Phase banner queue (Stage A bug-fix) ─────────────────────────────────
+// Canonical phase order so we can fill in phases the engine skipped through.
+// Battle sub-steps (0x08..0x80) all map to the single Battle slot.
+static int phaseOrderIndex(uint16_t ph) {
+    switch (ph) {
+        case 0x01:  return 0;   // Draw
+        case 0x02:  return 1;   // Standby
+        case 0x04:  return 2;   // Main 1
+        case 0x08: case 0x10: case 0x20: case 0x40: case 0x80:
+                    return 3;   // Battle (any sub-step)
+        case 0x100: return 4;   // Main 2
+        case 0x200: return 5;   // End
+        default:    return -1;
+    }
+}
+static const uint16_t kPhaseOrder[6] =
+    {0x01, 0x02, 0x04, 0x08, 0x100, 0x200};
+
+// Detect a phase change on the observed (engine/snapshot) phase and enqueue
+// the banner(s). When "show skipped phases" is on we fill in every phase
+// between the last shown one and the new one — so an empty turn that the
+// engine fast-forwards from Draw→Main still shows DRAW → STANDBY → MAIN 1.
+void UI::observePhaseForBanners() {
+    if (!m_settings.animationsEnabled || !m_settings.animPhaseBanners) return;
+    const FieldState& pf = currentField();
+    uint16_t newPhase = pf.phase;
+    if (newPhase == m_animObservedPhase) return;          // no change
+    int newIdx = phaseOrderIndex(newPhase);
+    if (newIdx < 0) { m_animObservedPhase = newPhase; return; }
+
+    bool turnChanged = (pf.turnPlayer != m_animPrevTurnPlayer);
+    if (m_debugLog)
+        m_dm.logEvent(std::string("[PHASE OBSERVE] old=") +
+                      phaseBannerText(m_animObservedPhase) +
+                      " new=" + phaseBannerText(newPhase) +
+                      " turnChanged=" + (turnChanged ? "yes" : "no") +
+                      " queued=yes");
+
+    int lastIdx = (m_animLastEnqueued == 0)
+                    ? -1 : phaseOrderIndex(m_animLastEnqueued);
+    // Where to start filling from: advancing within a turn fills only the
+    // skipped phases after the last shown; a new turn (wrap) restarts at Draw.
+    int startIdx;
+    if (m_settings.animShowSkippedPhases) {
+        startIdx = (turnChanged || newIdx <= lastIdx) ? 0 : (lastIdx + 1);
+        if (startIdx < 0) startIdx = 0;
+    } else {
+        startIdx = newIdx;                                // only the new phase
+    }
+    for (int k = startIdx; k <= newIdx; ++k)
+        m_phaseQueue.push_back(kPhaseOrder[k]);
+
+    if (m_debugLog)
+        m_dm.logEvent(std::string("[PHASE BANNER QUEUE] phase=") +
+                      phaseBannerText(newPhase) +
+                      " queueSize=" + std::to_string(m_phaseQueue.size()));
+
+    m_animLastEnqueued   = newPhase;
+    m_animObservedPhase  = newPhase;
+    m_animPrevTurnPlayer = pf.turnPlayer;
+}
+
+// Pop one queued phase banner per minimum-duration interval so a burst of
+// skipped phases displays sequentially instead of all at once.
+void UI::pumpPhaseBannerQueue() {
+    if (m_phaseQueue.empty()) return;
+    double now = ImGui::GetTime();
+    if (now < m_phaseQueueNextAt) return;
+    uint16_t ph = m_phaseQueue.front();
+    m_phaseQueue.erase(m_phaseQueue.begin());
+    const char* txt = phaseBannerText(ph);
+    if (txt[0]) {
+        bool battle = (ph & 0xFCu) != 0;
+        ImU32 bcol = battle ? IM_COL32(255, 132, 80, 255)
+                            : IM_COL32(232, 196, 110, 255);
+        m_anim.emitPhaseBanner(txt, ImGui::GetIO().DisplaySize, bcol);
+        if (gAudio().isLoaded("phase")) gAudio().play("phase");
+        m_animPrevPhase = ph;     // keep HUD-adjacent state coherent
+    }
+    // Pace: at least the configured minimum, shortened under reduce-motion.
+    double interval = (double)m_settings.animPhaseMinDuration;
+    if (m_settings.animReduceMotion) interval *= 0.5;
+    if (m_settings.animSpeed > 0.f)  interval /= (double)m_settings.animSpeed;
+    if (interval < 0.08) interval = 0.08;
+    m_phaseQueueNextAt = now + interval;
+}
+
 void UI::pushToast(const std::string& text, ImU32 color, double dur) {
     Toast t;
     t.text  = text;
@@ -3541,6 +3663,15 @@ void UI::drawLobby(int w, int h) {
             m_settings.animPhaseDelay = (float)delayMs / 1000.f;
             syncAnimConfig(); saveSettings();
         }
+        // Show skipped-phase banners (Draw/Standby on an empty turn).
+        animToggle("Show skipped phase banners",
+                   &m_settings.animShowSkippedPhases);
+        int pminMs = (int)(m_settings.animPhaseMinDuration * 1000.f);
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::SliderInt("Phase banner min (ms)", &pminMs, 100, 900)) {
+            m_settings.animPhaseMinDuration = (float)pminMs / 1000.f;
+            saveSettings();
+        }
         if (!m_settings.animationsEnabled) ImGui::EndDisabled();
         ImGui::Separator();
 
@@ -4120,30 +4251,22 @@ void UI::drawDuel(int w, int h) {
                 if (cs.seq < 7) pbMZ[p][cs.seq] = cs.code;
 
         if (!m_bossObsInited) {
-            // Seed without firing — avoids a banner/boss burst on the first
-            // observed frame (duel start / snapshot arrival).
-            m_animPrevPhase = pf.phase;
+            // Seed the BOSS diff + turn tracker, but deliberately leave
+            // m_animObservedPhase = 0xFFFF and m_animLastEnqueued = 0 so the
+            // FIRST observed phase triggers the Draw → Standby → Main 1
+            // banner fill for turn 1 (otherwise turn 1's banners are missed
+            // because the engine is already in Main Phase 1 by the first
+            // rendered frame).
+            m_animPrevTurnPlayer = pf.turnPlayer;
+            m_phaseQueue.clear();
             for (int p = 0; p < 2; ++p)
                 for (int z = 0; z < 7; ++z) m_bossPrevMZ[p][z] = pbMZ[p][z];
             m_bossObsInited = true;
         } else {
-            // Phase banner — fire on any change of the displayed phase.
-            if (pf.phase != m_animPrevPhase && pf.phase != 0) {
-                const char* bannerTxt = phaseBannerText(pf.phase);
-                if (bannerTxt[0]) {
-                    // Banner colour: gold normally, orange in Battle Phase
-                    // (sub-steps 0x08..0x80).
-                    bool battle = (pf.phase & 0xFCu) != 0;
-                    ImU32 bcol = battle ? IM_COL32(255, 132, 80, 255)
-                                        : IM_COL32(232, 196, 110, 255);
-                    ImVec2 winSz = ImGui::GetIO().DisplaySize;
-                    m_anim.emitPhaseBanner(bannerTxt, winSz, bcol);
-                    // Optional phase SFX — only if the user has supplied a
-                    // phase.wav, so we never log a missing-asset warning.
-                    if (gAudio().isLoaded("phase")) gAudio().play("phase");
-                }
-                m_animPrevPhase = pf.phase;
-            }
+            // Phase banners — enqueue any phase transition (including the
+            // Draw/Standby the engine skips through instantly), then pace
+            // them out below so none get visually skipped.
+            observePhaseForBanners();
             // Boss entrance — a high-impact monster newly occupying a zone.
             for (int p = 0; p < 2; ++p) {
                 for (int z = 0; z < 7; ++z) {
@@ -4171,9 +4294,16 @@ void UI::drawDuel(int w, int h) {
             for (int p = 0; p < 2; ++p)
                 for (int z = 0; z < 7; ++z) m_bossPrevMZ[p][z] = pbMZ[p][z];
         }
+        // Pace the queued phase banners regardless of init state so the very
+        // first turn's Draw/Standby still display.
+        pumpPhaseBannerQueue();
     } else if (m_bossObsInited && !isDuelVisiblyRunning()) {
         m_bossObsInited = false;
         m_animPrevPhase = 0xFFFF;
+        m_animObservedPhase = 0xFFFF;
+        m_animLastEnqueued = 0;
+        m_animPrevTurnPlayer = 0xFF;
+        m_phaseQueue.clear();
     }
 
     // ── Attack animation hook ─────────────────────────────────────────────
@@ -5126,31 +5256,62 @@ void UI::drawSideZone(const char* label, int count,
                        ImVec2 sp, float zW, float zH, ImVec4 col) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 br = {sp.x + zW, sp.y + zH};
+    // Classify the pile from its label so each reads distinctly.
+    bool isGY = label && label[0]=='G';
+    bool isBN = label && label[0]=='B';
+    bool isED = label && label[0]=='E';
+    bool isDK = label && label[0]=='D';
 
-    // Glass pile tile: the pile hue fades downward into dark glass so the
-    // GY / Banished / Deck / Extra piles stay colour-coded without flat
-    // saturated blocks. Hairline border + a tinted top strip for the label.
+    // Glass pile tile with a downward hue fade. Drop shadow for depth.
+    dl->AddRectFilled({sp.x + 2.f, sp.y + 3.f}, {br.x + 2.f, br.y + 3.f},
+                      IM_COL32(0, 0, 0, 90), 6.f);
     ImU32 hue = ImGui::ColorConvertFloat4ToU32(
         {col.x, col.y, col.z, col.w * 0.9f});
     ImU32 hueFade = ImGui::ColorConvertFloat4ToU32(
-        {col.x * 0.35f, col.y * 0.35f, col.z * 0.45f, 0.85f});
+        {col.x * 0.32f, col.y * 0.32f, col.z * 0.42f, 0.9f});
     dl->AddRectFilledMultiColor(sp, br, hue, hue, hueFade, hueFade);
-    dl->AddRect(sp, br, IM_COL32(104, 118, 162, 190), 6.f, 0, 1.2f);
-    dl->AddLine({sp.x + 4.f, sp.y + 18.f}, {br.x - 4.f, sp.y + 18.f},
-                IM_COL32(255, 255, 255, 26), 1.f);
+    // Coloured top accent bar so the pile type is identifiable at a glance.
+    ImU32 accent =
+        isGY ? IM_COL32(150, 165, 200, 255) :   // GY  — cool grey-blue
+        isBN ? IM_COL32(208, 120, 230, 255) :   // BN  — magenta
+        isED ? IM_COL32(120, 200, 255, 255) :   // ED  — cyan
+               IM_COL32(232, 196, 110, 255);    // DK  — gold
+    dl->AddRectFilled(sp, {br.x, sp.y + 4.f}, accent, 2.f);
+    dl->AddRect(sp, br, IM_COL32(104, 118, 162, 200), 6.f, 0, 1.2f);
 
-    // Label (top-left)
-    dl->AddText({sp.x + 5.f, sp.y + 4.f}, IM_COL32(214, 224, 244, 225), label);
+    // Pile glyph behind the count — original simple geometry per pile type.
+    ImVec2 gc{ sp.x + zW * 0.5f, sp.y + zH * 0.40f };
+    float gr = zW * 0.20f;
+    ImU32 gcol = (accent & 0x00FFFFFF) | 0x40000000;
+    if (isGY) {                                   // tombstone arch + base
+        dl->AddRectFilled({gc.x - gr, gc.y}, {gc.x + gr, gc.y + gr*1.1f}, gcol, 3.f);
+        dl->AddCircleFilled({gc.x, gc.y}, gr, gcol, 16);
+    } else if (isBN) {                            // X (banished)
+        dl->AddLine({gc.x - gr, gc.y - gr}, {gc.x + gr, gc.y + gr}, gcol, 3.f);
+        dl->AddLine({gc.x + gr, gc.y - gr}, {gc.x - gr, gc.y + gr}, gcol, 3.f);
+    } else if (isED) {                            // diamond (extra)
+        ImVec2 d[4]={{gc.x,gc.y-gr},{gc.x+gr,gc.y},{gc.x,gc.y+gr},{gc.x-gr,gc.y}};
+        dl->AddConvexPolyFilled(d, 4, gcol);
+    } else {                                       // stacked deck lines
+        for (int k=0;k<3;++k)
+            dl->AddRectFilled({gc.x-gr, gc.y-gr+k*gr*0.8f},
+                              {gc.x+gr, gc.y-gr*0.6f+k*gr*0.8f}, gcol, 1.f);
+    }
 
-    // Count — centred, with a subtle dark plate so it reads on any hue.
+    // Label (top-left).
+    dl->AddText({sp.x + 5.f, sp.y + 5.f}, IM_COL32(224, 232, 248, 235), label);
+
+    // Count — gold-rimmed pill near the bottom so it never overlaps the glyph.
     char cbuf[8];
     snprintf(cbuf, 8, "%d", count);
     ImVec2 ts = ImGui::CalcTextSize(cbuf);
     float cx = sp.x + (zW - ts.x) * 0.5f;
-    float cy = sp.y + (zH - ts.y) * 0.5f + 6.f;
-    dl->AddRectFilled({cx - 6.f, cy - 3.f}, {cx + ts.x + 6.f, cy + ts.y + 3.f},
-                      IM_COL32(0, 0, 0, 120), 5.f);
-    dl->AddText({cx, cy}, IM_COL32(255, 244, 214, 240), cbuf);
+    float cy = sp.y + zH - ts.y - 7.f;
+    dl->AddRectFilled({cx - 8.f, cy - 3.f}, {cx + ts.x + 8.f, cy + ts.y + 3.f},
+                      IM_COL32(10, 12, 22, 225), 9.f);
+    dl->AddRect({cx - 8.f, cy - 3.f}, {cx + ts.x + 8.f, cy + ts.y + 3.f},
+                IM_COL32(212, 178, 102, 200), 9.f, 0, 1.f);
+    dl->AddText({cx, cy}, IM_COL32(255, 244, 214, 245), cbuf);
 }
 
 // True if the engine is currently asking the LOCAL player (P0) for a
@@ -5276,13 +5437,13 @@ void UI::drawCardZone(const char* label, const CardState* card,
         if (tex) {
             ImVec2 a = {sp.x + 2.f, sp.y + 2.f};
             ImVec2 b = {br.x  - 2.f, br.y  - 2.f};
-            if (isDefense) {
-                dl->AddImageQuad((ImTextureID)tex,
-                    {a.x, a.y}, {b.x, a.y}, {b.x, b.y}, {a.x, b.y},
-                    {0.f, 1.f}, {0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f});
-            } else {
-                dl->AddImage((ImTextureID)tex, a, b);
-            }
+            // Route through the shared helper — guaranteed-correct UVs (no
+            // horizontal flip) for upright cards; a true 90° rotation for
+            // defense. Face-down backs never rotate. dbgCheck emits the
+            // [CARD RENDER CHECK] line for Pendulum monsters.
+            drawCardArt(dl, card->code, tex, a, b,
+                        /*rotateDefenseCW*/ isDefense && !faceDown,
+                        /*dbgCheck*/ !faceDown);
         } else {
             // No art: name truncated in zone
             CardInfo ci = m_db.getCard(card->code);
@@ -6159,19 +6320,54 @@ void UI::drawField(int fw, int fh) {
                       " Extra Deck viewer (" +
                       std::to_string(m_viewerExtraCache.size()) + " cards)");
     }
+    // Pile-effect glow: when the local player has an activatable effect in a
+    // pile (GY / Banished), the tile gets a magenta "effect available" glow so
+    // it's discoverable — clicking opens the viewer where the effect can be
+    // activated. This is the fix for "I can't activate the GY effect": the
+    // effect was always reachable via the viewer, but the tile gave no cue.
+    auto pileHasLocalAction = [&](uint8_t loc) -> bool {
+        const SelectionRequest& s = currentSelection();
+        if (s.type != WaitType::SelectIdleCmd &&
+            s.type != WaitType::SelectBattleCmd) return false;
+        for (const auto& a : s.idle)
+            if (a.con == (uint8_t)botP && a.loc == loc) return true;
+        return false;
+    };
+    auto pileEffectGlow = [&](ImVec2 tl, bool on) {
+        if (!on) return;
+        ImVec2 z1{tl.x + zW, tl.y + zH};
+        UIStyle::DrawGlow(dl, tl, z1, IM_COL32(244, 132, 232, 230), 5.f, 3);
+        dl->AddRect(tl, z1, IM_COL32(255, 150, 240, 255), 5.f, 0, 2.6f);
+        // Small "EFFECT" tag at the top of the tile.
+        dl->AddRectFilled({tl.x + 2.f, tl.y + 2.f},
+                          {tl.x + 46.f, tl.y + 15.f},
+                          IM_COL32(120, 30, 110, 220), 3.f);
+        dl->AddText({tl.x + 5.f, tl.y + 2.f},
+                    IM_COL32(255, 220, 250, 255), "EFFECT");
+    };
+    bool bnAct = pileHasLocalAction(LOC_REM);
+    bool gyAct = pileHasLocalAction(LOC_GY);
     drawSideZone ("BN", (int)f.banished[botP].size(), {cx(6),rY[3]}, zW,zH, COL_BN);
+    pileEffectGlow({cx(6),rY[3]}, bnAct);
     if (clickZone({cx(6),rY[3]}, "##zbnbot")) {
         m_viewerPlayer=botP; m_viewerLoc=LOC_REM; m_viewerFilter[0]=0;
-        m_dm.logEvent("Opened P" + std::to_string(botP+1) +
-                      " Banished viewer (" +
-                      std::to_string(f.banished[botP].size()) + " cards)");
+        int actN = 0;
+        for (const auto& a : currentSelection().idle)
+            if (a.con==(uint8_t)botP && a.loc==LOC_REM) ++actN;
+        m_dm.logEvent("[VIEWER OPEN] loc=BN player=" + std::to_string(botP) +
+                      " count=" + std::to_string(f.banished[botP].size()) +
+                      " activatable=" + std::to_string(actN));
     }
     drawSideZone ("GY", (int)f.gy[botP].size(),       {cx(6),rY[4]}, zW,zH, COL_GY);
+    pileEffectGlow({cx(6),rY[4]}, gyAct);
     if (clickZone({cx(6),rY[4]}, "##zgybot")) {
         m_viewerPlayer=botP; m_viewerLoc=LOC_GY; m_viewerFilter[0]=0;
-        m_dm.logEvent("Opened P" + std::to_string(botP+1) +
-                      " Graveyard viewer (" +
-                      std::to_string(f.gy[botP].size()) + " cards)");
+        int actN = 0;
+        for (const auto& a : currentSelection().idle)
+            if (a.con==(uint8_t)botP && a.loc==LOC_GY) ++actN;
+        m_dm.logEvent("[VIEWER OPEN] loc=GY player=" + std::to_string(botP) +
+                      " count=" + std::to_string(f.gy[botP].size()) +
+                      " activatable=" + std::to_string(actN));
     }
     drawDeck     ("DK",  f.deckCount[botP],           {cx(6),rY[5]});
 
@@ -6215,7 +6411,10 @@ void UI::drawField(int fw, int fh) {
                 ImVec2 hp, hbr;
                 fitCard({hx, rY[6]}, cw, hH, &hp, &hbr);
                 void* tex=m_rend.getCardTexture(c.code);
-                if (tex) dl->AddImage((ImTextureID)tex,hp,hbr);
+                // Hand cards are always upright — shared helper guarantees
+                // non-flipped UVs (Pendulum monsters included).
+                if (tex) drawCardArt(dl, c.code, tex, hp, hbr,
+                                     /*rotateDefenseCW*/false, /*dbgCheck*/true);
                 else {
                     dl->AddRectFilled(hp,hbr,IM_COL32(28,36,62,220),5.f);
                     dl->AddRect(hp,hbr,IM_COL32(65,78,118,200),5.f);
@@ -6265,7 +6464,7 @@ void UI::drawField(int fw, int fh) {
                         dl->AddRectFilled({la.x + 3.f, la.y + 6.f},
                                           {lb.x + 3.f, lb.y + 6.f},
                                           IM_COL32(0, 0, 0, 160), 5.f);
-                        dl->AddImage((ImTextureID)tex, la, lb);
+                        drawCardArt(dl, c.code, tex, la, lb, false, false);
                         dl->AddRect(la, lb, stateCol, 5.f, 0, 2.f);
                     } else {
                         dl->AddRect(hp,hbr,IM_COL32(180,210,255,230),5.f,0,2.f);
@@ -6416,50 +6615,89 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
     if (m_viewerLoc != 0) {
         const FieldState& fv = currentField();
         int pl = (m_viewerPlayer == 0 || m_viewerPlayer == 1) ? m_viewerPlayer : 0;
+        const int kViewerLocal = m_net.localPlayerIndex();
+        bool ownZone = (pl == kViewerLocal);
 
         const char* zname =
             (m_viewerLoc == LOC_GY)    ? "Graveyard" :
             (m_viewerLoc == LOC_REM)   ? "Banished"  :
             (m_viewerLoc == LOC_EXTRA) ? "Extra Deck": "Zone";
+        const char* zshort =
+            (m_viewerLoc == LOC_GY)  ? "GY" :
+            (m_viewerLoc == LOC_REM) ? "BN" :
+            (m_viewerLoc == LOC_EXTRA) ? "ED" : "ZN";
+        uint8_t expectedLoc =
+            (m_viewerLoc == LOC_EXTRA) ? LOC_EXTRA :
+            (m_viewerLoc == LOC_GY)    ? LOC_GY    :
+            (m_viewerLoc == LOC_REM)   ? LOC_REM   : 0;
 
-        // Build a uniform row list of (code, sequence) so GY/BN (CardState
-        // vectors) and ED (code-only cache) share the same render path.
+        // Build a uniform row list of (code, real-seq). For GY/BN we use the
+        // CardState's REAL engine sequence (not the array index) so action
+        // matching against idle/chain entries is robust even if the pile
+        // ordering and the engine's seq numbering differ.
         struct Row { uint32_t code; uint32_t seq; };
         std::vector<Row> rows;
         if (m_viewerLoc == LOC_GY) {
-            for (size_t i = 0; i < fv.gy[pl].size(); ++i)
-                rows.push_back({fv.gy[pl][i].code, (uint32_t)i});
+            for (const auto& c : fv.gy[pl]) rows.push_back({c.code, c.seq});
         } else if (m_viewerLoc == LOC_REM) {
-            for (size_t i = 0; i < fv.banished[pl].size(); ++i)
-                rows.push_back({fv.banished[pl][i].code, (uint32_t)i});
+            for (const auto& c : fv.banished[pl]) rows.push_back({c.code, c.seq});
         } else if (m_viewerLoc == LOC_EXTRA) {
-            // Refresh once per opening; field state may change underneath.
             if (m_viewerExtraCache.empty())
                 m_viewerExtraCache = viewerExtraDeckCodes(pl);
             for (size_t i = 0; i < m_viewerExtraCache.size(); ++i)
                 rows.push_back({m_viewerExtraCache[i], (uint32_t)i});
         }
 
-        ImGui::TextColored(COL_ACCENT, "%s  -  P%d  (%d card%s)",
-            zname, pl + 1, (int)rows.size(), rows.size() == 1 ? "" : "s");
+        // Owner-aware title: "Your Graveyard" / "Opponent Graveyard".
+        std::string ownerLbl =
+            (m_mpInDuel && !m_net.isOffline())
+                ? (ownZone ? std::string("Your ") + zname
+                           : std::string("Opponent ") + zname)
+                : (std::string("P") + std::to_string(pl + 1) + " " + zname);
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
+        ImGui::Text("%s", ownerLbl.c_str());
+        ImGui::PopStyleColor();
+        UIStyle::PopFont();
+        // Count + activatable-effect count.
+        int activatableTotal = 0;
+        {
+            const SelectionRequest& s = currentSelection();
+            if (expectedLoc && ownZone) {
+                if (s.type == WaitType::SelectIdleCmd ||
+                    s.type == WaitType::SelectBattleCmd) {
+                    for (const auto& a : s.idle)
+                        if (a.con == (uint8_t)kViewerLocal && a.loc == expectedLoc)
+                            ++activatableTotal;
+                } else if (s.type == WaitType::SelectChain) {
+                    for (const auto& c : s.cards)
+                        if (c.player == (uint8_t)kViewerLocal &&
+                            (uint8_t)c.loc == expectedLoc) ++activatableTotal;
+                }
+            }
+        }
+        ImGui::TextDisabled("%d card%s%s", (int)rows.size(),
+            rows.size() == 1 ? "" : "s",
+            activatableTotal > 0
+                ? ("  ·  " + std::to_string(activatableTotal) +
+                   " activatable").c_str() : "");
 
-        // Active-prompt hint: if the engine is waiting on a real selection
-        // (chain / card / yes-no / place / battle-target), tell the user the
-        // viewer is masking it, so they don't sit confused. We can't bind a
-        // local `sel` here because the panel reaches that declaration later;
-        // pull the selection directly.
+        // Active-prompt hint for NON-activatable prompts (yes-no / select card)
+        // that the viewer would mask.
         {
             const SelectionRequest& s = currentSelection();
             if (DuelManager::isRealSelect(s.type) &&
                 s.type != WaitType::SelectIdleCmd &&
                 s.type != WaitType::SelectBattleCmd &&
-                s.player == (uint8_t)m_net.localPlayerIndex()) {
+                s.type != WaitType::SelectChain &&
+                s.player == (uint8_t)kViewerLocal) {
                 ImGui::TextColored({1.f, 0.8f, 0.3f, 1.f},
                     "Engine is waiting for a response — close this viewer.");
             }
         }
 
-        if (ImGui::Button("Close##zv", {bw, 24.f})) {
+        if (UIStyle::GhostButton("Close##zv", {bw, 26.f})) {
             m_viewerLoc = 0;
             m_viewerExtraCache.clear();
             m_viewerFilter[0] = 0;
@@ -6470,15 +6708,88 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
         ImGui::InputTextWithHint("##zvfilter", "Search name or #code",
                                  m_viewerFilter, sizeof(m_viewerFilter));
 
-        // Lowercase-match helper for the filter (UI-only; never sent to engine).
+        // Type / activatable filter chips. Static so they persist while the
+        // viewer is open; harmless reset between openings.
+        static bool fMon = true, fSpl = true, fTrp = true, fActOnly = false;
+        if (UIStyle::SegmentedButton("Monster##gf", fMon, true, {78.f, 24.f})) fMon = !fMon;
+        ImGui::SameLine(0.f, 4.f);
+        if (UIStyle::SegmentedButton("Spell##gf", fSpl, true, {62.f, 24.f})) fSpl = !fSpl;
+        ImGui::SameLine(0.f, 4.f);
+        if (UIStyle::SegmentedButton("Trap##gf", fTrp, true, {58.f, 24.f})) fTrp = !fTrp;
+        if (expectedLoc && ownZone) {
+            ImGui::SameLine(0.f, 4.f);
+            if (UIStyle::SegmentedButton("Activatable##gf", fActOnly, true, {100.f, 24.f}))
+                fActOnly = !fActOnly;
+        }
+
         std::string flt = m_viewerFilter;
         for (char& c : flt) c = (char)tolower((unsigned char)c);
+
+        // Resolve the action for a row: idle (cmd 1/5) OR chain candidate.
+        // Returns kind: 0 none, 1 idle, 2 chain. For idle, matches by
+        // con+loc+code+seq, falling back to "single action of this code+loc"
+        // when seq numbering doesn't line up (robustness). For chain, matches
+        // the SelectChain candidate list by player+loc+code(+seq).
+        struct RowAct { int kind=0; int idleIdx=-1; int chainIdx=-1;
+                        int cmd=0; std::string label; };
+        auto resolveRowAct = [&](uint32_t code, uint32_t seq) -> RowAct {
+            RowAct out;
+            if (!expectedLoc || !ownZone) return out;
+            const SelectionRequest& s = currentSelection();
+            if (s.type == WaitType::SelectIdleCmd ||
+                s.type == WaitType::SelectBattleCmd) {
+                int exact = -1, codeMatch = -1, codeMatches = 0;
+                for (int k = 0; k < (int)s.idle.size(); ++k) {
+                    const IdleAction& a = s.idle[k];
+                    if (a.con != (uint8_t)kViewerLocal || a.loc != expectedLoc ||
+                        a.code != code) continue;
+                    ++codeMatches; codeMatch = k;
+                    if (a.seq == seq) { exact = k; break; }
+                }
+                int use = (exact >= 0) ? exact
+                        : (codeMatches == 1) ? codeMatch : -1;
+                if (use >= 0) {
+                    out.kind = 1; out.idleIdx = use; out.cmd = s.idle[use].cmd;
+                    const IdleAction& a = s.idle[use];
+                    const char* verb = (a.cmd == 1) ? "Special Summon"
+                                                    : "Activate effect";
+                    out.label = verb;
+                    if (a.cmd == 5 && !a.effect.text.empty()) {
+                        std::string et = a.effect.text;
+                        if (et.size() > 32) et = et.substr(0, 30) + "..";
+                        out.label = std::string(verb) + ": " + et;
+                    }
+                }
+            } else if (s.type == WaitType::SelectChain) {
+                int exact = -1, codeMatch = -1, codeMatches = 0;
+                for (int k = 0; k < (int)s.cards.size(); ++k) {
+                    const CardState& c = s.cards[k];
+                    if (c.player != (uint8_t)kViewerLocal ||
+                        (uint8_t)c.loc != expectedLoc || c.code != code) continue;
+                    ++codeMatches; codeMatch = k;
+                    if (c.seq == seq) { exact = k; break; }
+                }
+                int use = (exact >= 0) ? exact
+                        : (codeMatches == 1) ? codeMatch : -1;
+                if (use >= 0) {
+                    out.kind = 2; out.chainIdx = use; out.cmd = 5;
+                    out.label = "Activate (chain)";
+                }
+            }
+            return out;
+        };
 
         ImGui::BeginChild("##zvlist", {bw, 240.f}, true);
         if (rows.empty()) ImGui::TextDisabled("(empty)");
         int shown = 0;
         for (size_t i = 0; i < rows.size(); ++i) {
             CardInfo ci = m_db.getCard(rows[i].code);
+            bool isMon = (ci.type & TYPE_MONSTER) != 0;
+            bool isSpl = (ci.type & TYPE_SPELL)   != 0;
+            bool isTrp = (ci.type & TYPE_TRAP)    != 0;
+            if (isMon && !fMon) continue;
+            if (isSpl && !fSpl) continue;
+            if (isTrp && !fTrp) continue;
             std::string nm = ci.name.empty()
                 ? ("#" + std::to_string(rows[i].code)) : ci.name;
             if (!flt.empty()) {
@@ -6486,115 +6797,79 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
                 for (char& c : lc) c = (char)tolower((unsigned char)c);
                 if (lc.find(flt) == std::string::npos) continue;
             }
+            RowAct act = resolveRowAct(rows[i].code, rows[i].seq);
+            if (fActOnly && ownZone && expectedLoc && act.kind == 0) continue;
             ++shown;
             const char* tline =
-                (ci.type & TYPE_MONSTER) ? "Monster" :
-                (ci.type & TYPE_SPELL)   ? "Spell"   :
-                (ci.type & TYPE_TRAP)    ? "Trap"    : "Card";
+                isMon ? "Monster" : isSpl ? "Spell" : isTrp ? "Trap" : "Card";
 
-            // Match this row against the engine's idle action list. Three
-            // viewer locations participate in click-first action mapping:
-            //   * LOC_EXTRA — Fusion / Synchro / Xyz / Link / Pendulum
-            //     Special Summons (cmd 1).
-            //   * LOC_GY    — Graveyard effects (cmd 5 activate).
-            //   * LOC_REM   — Banished-zone effects (cmd 5 activate).
-            // Only the local player (m_viewerPlayer == 0) participates, so
-            // opponent zones never expose actions.
-            int viewerActionIdx = -1;
-            uint8_t expectedLoc =
-                (m_viewerLoc == LOC_EXTRA) ? LOC_EXTRA :
-                (m_viewerLoc == LOC_GY)    ? LOC_GY    :
-                (m_viewerLoc == LOC_REM)   ? LOC_REM   : 0;
-            const int kViewerLocal = m_net.localPlayerIndex();
-            if (expectedLoc && m_viewerPlayer == kViewerLocal) {
-                const SelectionRequest& selX = currentSelection();
-                for (int k = 0; k < (int)selX.idle.size(); ++k) {
-                    const IdleAction& a = selX.idle[k];
-                    if (a.con == (uint8_t)kViewerLocal && a.loc == expectedLoc &&
-                        a.code == rows[i].code && a.seq == rows[i].seq) {
-                        viewerActionIdx = k;
-                        if (m_debugLog)
-                            m_dm.logEvent(std::string("[VIEWER ACTION MATCH] ")
-                                + (m_viewerLoc == LOC_EXTRA ? "ED" :
-                                   m_viewerLoc == LOC_GY    ? "GY" : "BN")
-                                + " #" + std::to_string(a.code) + " [" + a.name + "]" +
-                                " con=" + std::to_string(a.con) +
-                                " loc=" + std::to_string(a.loc) +
-                                " seq=" + std::to_string(a.seq) +
-                                " engineIdx=" + std::to_string(a.index) +
-                                " cmd=" + std::to_string(a.cmd));
-                        break;
-                    }
-                }
-            }
-            // Keep the existing ED variable name alive for the rest of the
-            // row code (it's used for the orange name and Special Summon
-            // button below). ED rows have cmd==1 (special summon); GY/BN
-            // rows have cmd==5 (activate effect).
-            int edActionIdx = viewerActionIdx;
+            if (act.kind != 0 && m_debugLog)
+                m_dm.logEvent(std::string("[ACTION MATCH] clicked con=") +
+                    std::to_string(kViewerLocal) + " loc=" +
+                    std::to_string(expectedLoc) + " seq=" +
+                    std::to_string(rows[i].seq) + " code=" +
+                    std::to_string(rows[i].code) + " -> " +
+                    (act.kind == 1 ? "idle" : "chain") +
+                    " cmd=" + std::to_string(act.cmd) + " result=yes");
 
             ImGui::PushID((int)i);
             void* tex = m_rend.getCardTexture(rows[i].code);
-            ImGui::Image(tex ? tex : (void*)0, {30.f, 44.f});
+            ImGui::Image(tex ? tex : (void*)0, {32.f, 47.f});
             ImGui::SameLine();
             ImGui::BeginGroup();
-            // Highlight the name in orange when this row is summonable.
-            if (edActionIdx >= 0)
+            // Name — orange when an action is available; otherwise selectable.
+            if (act.kind != 0)
                 ImGui::TextColored({1.f, 0.78f, 0.30f, 1.f}, "%s", nm.c_str());
             else if (ImGui::Selectable(nm.c_str(), false,
                                        ImGuiSelectableFlags_None,
-                                       {bw - 50.f, 16.f})) {
-                m_hoveredCard = rows[i].code;
-                m_hoveredInfo = ci;
+                                       {bw - 54.f, 16.f})) {
+                m_hoveredCard = rows[i].code; m_hoveredInfo = ci;
             }
-            // Hovering the row updates the floating preview overlay so the
-            // user always has a preview without a side panel.
             if (ImGui::IsItemHovered()) {
-                m_hoveredCard = rows[i].code;
-                m_hoveredInfo = ci;
+                m_hoveredCard = rows[i].code; m_hoveredInfo = ci;
             }
             ImGui::TextDisabled("%s  #%u  seq %u",
                 tline, (unsigned)rows[i].code, (unsigned)rows[i].seq);
-            if (edActionIdx >= 0) {
-                const IdleAction& a = currentSelection().idle[edActionIdx];
-                // Label by command type — ED rows are Special Summons,
-                // GY/BN rows are activate-effect (cmd==5). Falls back to
-                // the explicit text if the description decoded cleanly.
-                const char* verb =
-                    (a.cmd == 1) ? "Special Summon" : "Activate effect";
-                std::string base = verb;
-                if (a.cmd == 5 && !a.effect.text.empty()) {
-                    std::string et = a.effect.text;
-                    if (et.size() > 32) et = et.substr(0, 30) + "..";
-                    base = std::string(verb) + ": " + et;
-                }
-                std::string lbl = base + "##va" + std::to_string(i);
-                if (ImGui::Button(lbl.c_str(), {-1.f, 22.f})) {
-                    m_dm.logEvent("[VIEWER ACTION] sending respondIdleCmd("
-                        + std::to_string(a.cmd) + "," +
-                        std::to_string(a.index) + ") for #" +
-                        std::to_string(a.code) + " from " +
-                        (m_viewerLoc == LOC_EXTRA ? "ED" :
-                         m_viewerLoc == LOC_GY    ? "GY" : "BN"));
-                    gAudio().play(a.cmd == 1 ? "special_summon" : "activate");
-                    if (a.cmd == 1) m_lastSummonSfxAt   = ImGui::GetTime();
-                    else            m_lastActivateSfxAt = ImGui::GetTime();
-                    // Animation cue near the centre of the duel field so
-                    // viewer activations don't feel "silent" before the
-                    // engine ripple drives the per-zone animation.
+            if (act.kind != 0) {
+                std::string lbl = act.label + "##va" + std::to_string(i);
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    ImGui::ColorConvertU32ToFloat4(IM_COL32(120, 40, 110, 255)));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                    ImGui::ColorConvertU32ToFloat4(IM_COL32(160, 60, 150, 255)));
+                bool go = ImGui::Button(lbl.c_str(), {-1.f, 24.f});
+                ImGui::PopStyleColor(2);
+                if (go) {
+                    const char* gysrc = zshort;
+                    m_dm.logEvent(std::string("[GY ACTIVATE] code=") +
+                        std::to_string(rows[i].code) + " [" + nm + "]" +
+                        " seq=" + std::to_string(rows[i].seq) +
+                        " engineIdx=" +
+                        std::to_string(act.kind == 1
+                            ? currentSelection().idle[act.idleIdx].index
+                            : act.chainIdx) +
+                        " kind=" + (act.kind == 1 ? "idle" : "chain") +
+                        " src=" + gysrc);
+                    gAudio().play(act.cmd == 1 ? "special_summon"
+                                  : act.kind == 2 ? "chain" : "activate");
+                    if (act.cmd == 1) m_lastSummonSfxAt   = ImGui::GetTime();
+                    else              m_lastActivateSfxAt = ImGui::GetTime();
                     if (m_zoneRectsReady) {
-                        int pl = (int)currentSelection().player & 1;
+                        int apl = (int)currentSelection().player & 1;
                         ImVec2 c{
-                            (m_rectGY_tl[pl].x + m_rectGY_br[pl].x) * 0.5f,
-                            (m_rectGY_tl[pl].y + m_rectGY_br[pl].y) * 0.5f
-                        };
-                        ImU32 col = (a.cmd == 1)
+                            (m_rectGY_tl[apl].x + m_rectGY_br[apl].x) * 0.5f,
+                            (m_rectGY_tl[apl].y + m_rectGY_br[apl].y) * 0.5f };
+                        ImU32 col = (act.cmd == 1)
                             ? IM_COL32(112, 220, 255, 255)
                             : IM_COL32(244, 132, 232, 255);
-                        m_anim.ring(c, a.cmd == 1 ? 56.f : 40.f, col, 0.60);
+                        m_anim.ring(c, act.cmd == 1 ? 56.f : 40.f, col, 0.60);
                     }
-                    submitIdleCmd(a.cmd, a.index, "viewer action");
-                    // Close viewer so the engine's next prompt takes over.
+                    if (act.kind == 1) {
+                        const IdleAction& a = currentSelection().idle[act.idleIdx];
+                        submitIdleCmd(a.cmd, a.index, "viewer action");
+                    } else {
+                        submitMpChoice(WaitType::SelectChain, act.chainIdx);
+                        clearSelection();
+                    }
                     m_viewerLoc = 0;
                     m_viewerExtraCache.clear();
                     m_viewerFilter[0] = 0;
@@ -6606,9 +6881,10 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
             }
             ImGui::EndGroup();
             ImGui::PopID();
+            ImGui::Separator();
         }
-        if (!flt.empty())
-            ImGui::TextDisabled("matched %d / %d", shown, (int)rows.size());
+        if (!flt.empty() || !fMon || !fSpl || !fTrp || fActOnly)
+            ImGui::TextDisabled("showing %d / %d", shown, (int)rows.size());
         ImGui::EndChild();
         return;
     }
@@ -7585,7 +7861,11 @@ void UI::drawCardActionPopup(int screenW, int screenH) {
     if (sel.type != WaitType::SelectIdleCmd &&
         sel.type != WaitType::SelectBattleCmd) return;
 
-    // Gather actions for THIS selected card only.
+    // Gather actions for THIS selected card only — matched by the FULL
+    // identity (code + controller + location + sequence). This is what keeps
+    // a field card's action distinct from a same-code card's GY action:
+    // clicking the field card shows only its field action; the GY action
+    // stays reachable via the GY viewer. Never collapse by code alone.
     std::vector<int> matching;
     matching.reserve(8);
     for (int i = 0; i < (int)sel.idle.size(); ++i) {
@@ -7594,6 +7874,13 @@ void UI::drawCardActionPopup(int screenW, int screenH) {
             a.loc == m_selLoc  && a.seq == m_selSeq)
             matching.push_back(i);
     }
+    if (m_debugLog)
+        m_dm.logEvent(std::string("[ACTION MATCH] clicked con=") +
+            std::to_string(m_selPlayer) + " loc=" + std::to_string(m_selLoc) +
+            " seq=" + std::to_string(m_selSeq) + " code=" +
+            std::to_string(m_selCode) + " -> matched=" +
+            std::to_string(matching.size()) + " field action(s) result=" +
+            (matching.empty() ? "no" : "yes"));
     if (matching.empty()) return;
 
     // Size + clamp to screen. Anchor pivot is bottom-centre, so the popup

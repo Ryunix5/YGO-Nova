@@ -227,6 +227,21 @@ private:
     // the client), so the banner plays on both peers without local ocgcore.
     // 0xFFFF = uninitialised (no banner on the very first observed frame).
     uint16_t m_animPrevPhase = 0xFFFF;
+    // ── Phase banner presentation queue ───────────────────────────────────
+    // The engine flashes through Draw/Standby instantly when there's nothing
+    // to do, so sampling currentField().phase only ever sees the latest phase
+    // and the intermediate banners get skipped. Instead we QUEUE the missing
+    // phases and pace them out so the player always sees DRAW → STANDBY →
+    // MAIN PHASE 1 even on an empty turn. Presentation only — never gates the
+    // engine or networking; works in offline / replay / host / client because
+    // it reads currentField().phase (snapshot-backed on the client).
+    std::vector<uint16_t> m_phaseQueue;       // phases awaiting their banner
+    double   m_phaseQueueNextAt   = 0.0;      // when the next banner may show
+    uint16_t m_animObservedPhase  = 0xFFFF;   // last actual phase we sampled
+    uint16_t m_animLastEnqueued    = 0;       // last phase pushed to the queue
+    uint8_t  m_animPrevTurnPlayer  = 0xFF;    // detect new-turn wrap
+    void     observePhaseForBanners();        // enqueue on phase change
+    void     pumpPhaseBannerQueue();          // pop + emit one per interval
     // Per-zone "boss already announced" guard so a big monster sitting in a
     // zone doesn't re-trigger the centre entrance every frame it's present.
     uint32_t m_bossPrevMZ[2][7] = {{0}};
@@ -235,6 +250,18 @@ private:
     // "boss" for the big-entrance animation. Defined in UI.cpp.
     bool     isBossCard(const CardInfo& ci) const;
     const char* summonTypeLabel(const CardInfo& ci, bool special) const;
+
+    // ── Shared card-art draw helper ───────────────────────────────────────
+    // Single source of truth for drawing a card image into a screen rect with
+    // GUARANTEED-correct orientation: upright cards use UV (0,0)-(1,1); a
+    // defense monster is rotated 90° CW (a true rotation, never a mirror).
+    // All zone/preview paths route through this so no path can accidentally
+    // flip a card (the reported Pendulum-flip symptom). When `dbgCheck` and
+    // Debug Log are on, emits one [CARD RENDER CHECK] line per Pendulum code
+    // so orientation is verifiable at runtime.
+    void drawCardArt(ImDrawList* dl, uint32_t code, void* tex,
+                     ImVec2 a, ImVec2 b, bool rotateDefenseCW,
+                     bool dbgCheck = false);
 
     // Field-state delta observer — drives in-game SFX (draw / send_gy /
     // banish / damage / monster appear). Initialised on the first frame

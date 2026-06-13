@@ -44,6 +44,10 @@ struct Settings {
     bool   animReduceMotion  = false;    // accessibility: short fades, no shake
     float  animSpeed         = 1.0f;     // 0.5 / 1 / 2 / 0(=instant)
     float  animPhaseDelay    = 0.45f;    // cosmetic hold between phases (s)
+    // Show a banner for EVERY phase transition — including Draw/Standby that
+    // the engine skips through instantly when there's nothing to do.
+    bool   animShowSkippedPhases = true;
+    float  animPhaseMinDuration  = 0.40f; // min time each queued banner shows
 
     // ── Logs ─────────────────────────────────────────────────────────────
     bool   logCollapsed      = true;     // collapsed by default — quiet UI
@@ -152,6 +156,8 @@ struct Settings {
         f << "animReduceMotion="  << (animReduceMotion  ? "1" : "0") << "\n";
         f << "animSpeed="         << animSpeed                       << "\n";
         f << "animPhaseDelay="    << animPhaseDelay                  << "\n";
+        f << "animShowSkippedPhases=" << (animShowSkippedPhases ? "1" : "0") << "\n";
+        f << "animPhaseMinDuration="  << animPhaseMinDuration            << "\n";
         f << "\n# Logs\n";
         f << "logCollapsed="      << (logCollapsed      ? "1" : "0") << "\n";
         f << "selectedLogTab="    << selectedLogTab                   << "\n";
@@ -200,6 +206,8 @@ private:
         else if (k == "animReduceMotion")  animReduceMotion  = boolFromStr(v);
         else if (k == "animSpeed")         animSpeed         = floatFromStr(v, animSpeed);
         else if (k == "animPhaseDelay")    animPhaseDelay    = floatFromStr(v, animPhaseDelay);
+        else if (k == "animShowSkippedPhases") animShowSkippedPhases = boolFromStr(v);
+        else if (k == "animPhaseMinDuration")  animPhaseMinDuration  = floatFromStr(v, animPhaseMinDuration);
         else if (k == "logCollapsed")      logCollapsed      = boolFromStr(v);
         else if (k == "selectedLogTab")    selectedLogTab    = intFromStr(v, selectedLogTab);
         else if (k == "debugLog")          debugLog          = boolFromStr(v);

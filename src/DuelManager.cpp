@@ -800,6 +800,26 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
 
         addLog(m_selection.player == 0 ? "[Your turn - Main Phase]"
                                        : "[Player 2 - Main Phase]");
+        // Per-action source dump so a GY effect and a field effect of the
+        // same card are visibly distinct (different loc/seq/index). Each
+        // activatable source is uniquely identified by con+loc+seq+code+
+        // cmd+index — the UI must never collapse these by code alone.
+        if (m_debugMsgs) {
+            for (const auto& a : m_selection.idle)
+                addLog(std::string("[IDLE ACTION SOURCE] cmd=") +
+                       std::to_string(a.cmd) +
+                       " idx=" + std::to_string(a.index) +
+                       " code=" + std::to_string(a.code) + " [" + a.name + "]" +
+                       " con=" + std::to_string(a.con) +
+                       " loc=" + std::to_string(a.loc) +
+                       " seq=" + std::to_string(a.seq) +
+                       " label=" + (a.cmd == 0 ? "Summon" :
+                                    a.cmd == 1 ? "SpSummon" :
+                                    a.cmd == 2 ? "Reposition" :
+                                    a.cmd == 3 ? "SetMonster" :
+                                    a.cmd == 4 ? "SetS/T" :
+                                    a.cmd == 5 ? "Activate" : "?"));
+        }
         // Effect-option logging (always on): every Activate action with its
         // decoded effect description, so a multi-effect card's offered effect
         // is identifiable. Timing context here is always "idle Main Phase".
