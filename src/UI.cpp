@@ -10549,50 +10549,59 @@ void UI::drawMultiplayer(int w, int h) {
         }
 
         // Peer info — populated by the Hello / DeckInfo / Ready packets.
-        UIStyle::SectionHeader("Peer");
-        if (!m_net.peer().displayName.empty() ||
-            !m_net.peer().addr.empty()) {
+        UIStyle::SectionHeader("Opponent");
+        bool havePeer = !m_net.peer().displayName.empty() ||
+                        !m_net.peer().addr.empty();
+        if (havePeer) {
             ImGui::Text("Name: %s",
-                m_net.peer().displayName.empty() ? "(awaiting hello)"
+                m_net.peer().displayName.empty() ? "(connecting…)"
                 : m_net.peer().displayName.c_str());
-            ImGui::Text("Addr: %s",
-                m_net.peer().addr.empty() ? "(local)"
-                : m_net.peer().addr.c_str());
             ImGui::Text("Deck: %s",
                 m_mpRemoteDeckRcvd
                     ? (m_mpRemoteDeck.name.empty() ? "(unnamed)"
                        : m_mpRemoteDeck.name.c_str())
                     : "(awaiting deck)");
-            if (m_mpRemoteDeckRcvd) {
+            if (m_mpRemoteDeckRcvd)
                 ImGui::TextDisabled("Main %d  Extra %d  Side %d",
                     (int)m_mpRemoteDeck.main.size(),
                     (int)m_mpRemoteDeck.extra.size(),
                     (int)m_mpRemoteDeck.side.size());
-            }
-            ImGui::Text("Ready: %s",
-                m_mpRemoteReady ? "yes" : "no");
+            ImGui::Dummy({1.f, 4.f});
+            // Readiness chips — connected / deck / ready.
+            UIStyle::StatusChip("Connected", C.success);
+            ImGui::SameLine(0.f, 6.f);
+            UIStyle::StatusChip(m_mpRemoteDeckRcvd ? "Deck received"
+                                                   : "No deck yet",
+                                m_mpRemoteDeckRcvd ? C.success : C.warning);
+            ImGui::SameLine(0.f, 6.f);
+            UIStyle::StatusChip(m_mpRemoteReady ? "Ready" : "Not ready",
+                                m_mpRemoteReady ? C.success : C.textMuted);
         } else {
-            ImGui::TextDisabled("(no peer yet)");
+            UIStyle::StatusChip("Waiting for opponent…", C.textMuted);
         }
-        ImGui::Dummy({1.f, 8.f});
-
-        UIStyle::SectionHeader("Activity");
-        auto st = m_net.stats();
-        ImGui::TextDisabled(
-            "Msgs sent: %llu  recv: %llu",
-            (unsigned long long)st.messagesSent,
-            (unsigned long long)st.messagesReceived);
-        ImGui::TextDisabled(
-            "Bytes sent: %llu  recv: %llu",
-            (unsigned long long)st.bytesSent,
-            (unsigned long long)st.bytesReceived);
-        ImGui::TextDisabled(
-            "Local player index = P%d", m_net.localPlayerIndex() + 1);
         if (!m_net.lastError().empty()) {
+            ImGui::Dummy({1.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Text, {1.f, 0.55f, 0.55f, 1.f});
-            ImGui::TextWrapped("Last network error: %s",
+            ImGui::TextWrapped("Network error: %s",
                 m_net.lastError().c_str());
             ImGui::PopStyleColor();
+        }
+
+        // Raw socket counters are debug-only — hidden from normal users.
+        if (m_debugLog) {
+            ImGui::Dummy({1.f, 8.f});
+            UIStyle::SectionHeader("Network (debug)");
+            auto st = m_net.stats();
+            ImGui::TextDisabled("Msgs sent %llu  recv %llu",
+                (unsigned long long)st.messagesSent,
+                (unsigned long long)st.messagesReceived);
+            ImGui::TextDisabled("Bytes sent %llu  recv %llu",
+                (unsigned long long)st.bytesSent,
+                (unsigned long long)st.bytesReceived);
+            ImGui::TextDisabled("Local seat = P%d  addr=%s",
+                m_net.localPlayerIndex() + 1,
+                m_net.peer().addr.empty() ? "(local)"
+                                          : m_net.peer().addr.c_str());
         }
 
         ImGui::End();
