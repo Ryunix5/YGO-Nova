@@ -7,6 +7,7 @@
 #include "Anim.h"
 #include "Settings.h"
 #include "Replay.h"
+#include "TestingTimeline.h"
 #include "NetSession.h"
 #include "NetSnapshots.h"
 #include <string>
@@ -199,6 +200,40 @@ private:
     // Testing mode
     bool   m_testingMode = false;
     bool   m_debugLog    = false;   // verbose ocgcore message logging
+
+    // ── Testing Mode timeline (offline deterministic rewind) ──────────────
+    // A chess-style move history. Every response is recorded with the root
+    // duel config; rewinding tears the engine down and rebuilds it from the
+    // seed + the recorded responses, restoring FULL internal state (deck
+    // order, once-per-turn flags, chain/lingering effects), not just the
+    // visible field. Offline-only; disabled in MP/replay. See TestingTimeline.h.
+    edo::TestingTimeline m_timeline;
+    // True only WHILE a rebuild is replaying recorded responses into a fresh
+    // engine — suppresses the response/replay recorders, SFX, animations and
+    // network so the rebuild is silent and never double-records.
+    bool   m_testingRebuilding = false;
+    // Set when a rewind just rebuilt the engine, so the observer's "duel
+    // started" seed sting + toast are skipped on the re-seed frame.
+    bool   m_testingJustRestored = false;
+    std::string m_testingLastRestore;       // diagnostics: last restore result
+    int    m_testingHoverIdx   = -1;         // timeline row hovered (preview)
+    // Capture the deterministic root at the start of an offline duel.
+    void captureTestingRoot();
+    // Record one response into the timeline (called from the response
+    // recorder). Gated to offline + testing-on + not-rebuilding.
+    void recordTestingAction(const void* data, uint32_t len);
+    // Rebuild the engine so exactly `applyCount` recorded responses are
+    // applied (0 = just the opening hands). Offline only. `reason` is log-only.
+    void testingJumpTo(int applyCount, const char* reason);
+    void testingStepBack();
+    void testingStepForward();
+    // True when the timeline rewind controls are usable (offline, has root,
+    // not in replay). Multiplayer / replay get a friendly disabled note.
+    bool testingRewindAvailable() const;
+    // Build a short human label for an action from the live selection.
+    std::string testingLabelForResponse() const;
+    // The Testing Mode timeline panel (rendered inside the Tools drawer).
+    void drawTestingTimeline();
 
     // Stage C visual toggles
     bool   m_showFieldNames = false; // small name strip overlay on every card

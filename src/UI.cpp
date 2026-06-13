@@ -2405,6 +2405,14 @@ std::string UI::buildFullDiagnostics() const {
         << "\n";
     os << "MP state       : " << (int)m_net.state() << "\n";
     os << "Pending request: " << (int)currentSelection().type << "\n";
+    os << "Testing mode   : " << (m_testingMode ? "yes" : "no") << "\n";
+    os << "Timeline size  : " << m_timeline.size() << "\n";
+    os << "Timeline index : " << m_timeline.applied()
+       << (m_timeline.atHead() ? " (head)" : " (rewound)") << "\n";
+    os << "Rebuild active : " << (m_testingRebuilding ? "yes" : "no") << "\n";
+    os << "Last restore   : "
+       << (m_testingLastRestore.empty() ? "(none)" : m_testingLastRestore)
+       << "\n";
     os << "\n=== Health summary ===\n" << m_healthSummary;
     os << "\n=== Last 100 debug lines ===\n";
     const auto& log = m_dm.log();
@@ -2719,6 +2727,10 @@ void UI::pushGameAndReplay(const std::string& text, ImU32 color) {
 }
 
 void UI::onResponseRecorded(const void* data, uint32_t len) {
+    // Suppress while a Testing-Mode rebuild is replaying recorded responses
+    // into a fresh engine — those are NOT new user input and must not be
+    // appended to the replay (would duplicate / corrupt it).
+    if (m_testingRebuilding) return;
     if (!m_replayRecording) return;
     edo::ReplayResponse r;
     r.t = ImGui::GetTime() - m_replayStartTime;
@@ -2764,9 +2776,219 @@ void UI::beginReplayRecording(const std::string& d0Path,
     m_replayStartTime    = ImGui::GetTime();
     m_replayRecording    = true;
     m_replaySavedOnce    = false;
-    // Install the response recorder on the manager.
+    // Install the response recorder on the manager. It fans out to BOTH the
+    // replay recorder AND the Testing-Mode timeline (each self-gates).
     m_dm.setResponseRecorder(
-        [this](const void* d, uint32_t n){ onResponseRecorded(d, n); });
+        [this](const void* d, uint32_t n){
+            onResponseRecorded(d, n);
+            recordTestingAction(d, n);
+        });
+}
+
+// ─── Testing Mode timeline (offline deterministic rewind) ───────────────────
+//
+// See TestingTimeline.h for the architecture. captureTestingRoot stores the
+// deterministic root at duel start; recordTestingAction records every response
+// with a label; testingJumpTo rebuilds the engine from the root + replays the
+// recorded responses up to the chosen point.
+
+bool UI::testingRewindAvailable() const {
+    // Offline only — never rewind during LAN / online / host-auth multiplayer
+    // (one peer can't rewind independently) or during replay playback.
+    return m_net.isOffline() && !m_replayMode && m_timeline.hasRoot();
+}
+
+void UI::captureTestingRoot() {
+    // Offline only. The seed is now canonical (startDuel consumed it).
+    if (!m_net.isOffline()) { m_timeline.clear(); return; }
+    edo::TestingRoot root;
+    root.seed      = m_dm.duelSeed();
+    root.deck0     = loadYdk(m_deck0Path);
+    root.deck1     = loadYdk(m_deck1Path);
+    root.lp        = 8000;
+    root.handCount = 5;
+    root.drawCount = 1;
+    auto baseName = [](const char* p) {
+        std::string s = p ? p : "";
+        auto sl = s.find_last_of("/\\");
+        if (sl != std::string::npos) s = s.substr(sl + 1);
+        if (s.size() > 4 && s.substr(s.size() - 4) == ".ydk")
+            s = s.substr(0, s.size() - 4);
+        return s.empty() ? std::string("Deck") : s;
+    };
+    root.deck0Name = baseName(m_deck0Path);
+    root.deck1Name = baseName(m_deck1Path);
+    m_timeline.beginDuel(root);
+    m_testingLastRestore.clear();
+    m_dm.logEvent("[TESTING START] seed=" + std::to_string(root.seed) +
+                  " p1Deck=" + root.deck0Name + "(" +
+                  std::to_string(root.deck0.main.size()) + ")" +
+                  " p2Deck=" + root.deck1Name + "(" +
+                  std::to_string(root.deck1.main.size()) + ")");
+}
+
+// Build a short label for the response about to be recorded, from the live
+// selection it answers. Called BEFORE the engine consumes the response (the
+// recorder fires before OCG_DuelSetResponse), so m_dm.selection() is valid.
+std::string UI::testingLabelForResponse() const {
+    const FieldState&       f = m_dm.field();
+    const SelectionRequest& s = m_dm.selection();
+    char head[48];
+    snprintf(head, sizeof(head), "T%d %s — ", f.turnCount, [&]{
+        switch (f.phase) {
+            case 0x01: return "DP"; case 0x02: return "SP"; case 0x04: return "M1";
+            case 0x08: case 0x10: case 0x20: case 0x40: case 0x80: return "BP";
+            case 0x100: return "M2"; case 0x200: return "EP"; default: return "--";
+        }
+    }());
+    std::string body;
+    switch (s.type) {
+        case WaitType::SelectIdleCmd:   body = "Main Phase action"; break;
+        case WaitType::SelectBattleCmd: body = "Battle action";     break;
+        case WaitType::SelectYesNo:     body = "Yes / No";          break;
+        case WaitType::SelectEffectYn:  body = "Activate effect?";  break;
+        case WaitType::SelectOption:    body = "Choose effect";     break;
+        case WaitType::SelectCard:      body = "Select card";       break;
+        case WaitType::SelectChain:     body = "Chain response";    break;
+        case WaitType::SelectPlace:     body = "Place card";        break;
+        case WaitType::SelectPosition:  body = "Battle position";   break;
+        case WaitType::SelectTribute:   body = "Select tribute";    break;
+        case WaitType::SelectSum:       body = "Sum selection";     break;
+        case WaitType::SelectUnselect:  body = "Material select";   break;
+        default:                        body = "Response";          break;
+    }
+    return std::string(head) + "P" + std::to_string((int)s.player + 1) +
+           " " + body;
+}
+
+void UI::recordTestingAction(const void* data, uint32_t len) {
+    // Only record live, offline, testing-on responses — never during a
+    // rebuild (those are replays of already-recorded actions) or in MP/replay.
+    if (m_testingRebuilding) return;
+    if (!m_testingMode || !m_net.isOffline() || m_replayMode) return;
+    if (!m_timeline.hasRoot()) return;
+
+    const FieldState&       f = m_dm.field();
+    const SelectionRequest& s = m_dm.selection();
+    edo::TestingAction a;
+    a.label    = testingLabelForResponse();
+    a.turn     = f.turnCount;
+    a.phase    = f.phase;
+    a.player   = (int)s.player;
+    a.waitType = (int)s.type;
+    a.responseBytes.assign((const uint8_t*)data, (const uint8_t*)data + len);
+
+    int discarded = 0;
+    int idx = m_timeline.record(std::move(a), &discarded);
+    if (discarded > 0)
+        m_dm.logEvent("[TESTING BRANCH] fromIndex=" + std::to_string(idx) +
+                      " discardedFuture=" + std::to_string(discarded));
+    // The replay stream must mirror the branch so it doesn't keep stale
+    // future responses (they were already truncated on the rewind that
+    // created this branch, but guard here too).
+    if (m_replayRecording && (int)m_replay.responses.size() > idx)
+        m_replay.responses.resize((size_t)idx + 1);
+
+    m_dm.logEvent("[TESTING RECORD] index=" + std::to_string(idx) +
+                  " turn=" + std::to_string(a.turn) +
+                  " phase=" + std::to_string(a.phase) +
+                  " player=" + std::to_string(a.player) +
+                  " waitType=" + std::to_string(a.waitType) +
+                  " label=" + a.label +
+                  " bytes=" + std::to_string(len));
+}
+
+void UI::testingJumpTo(int applyCount, const char* reason) {
+    if (!testingRewindAvailable()) {
+        pushToast("Testing rewind is available in offline testing mode only.",
+                  IM_COL32(232, 182, 72, 255), 2.6);
+        return;
+    }
+    const edo::TestingRoot& root = m_timeline.root();
+    applyCount = std::max(0, std::min(applyCount, m_timeline.size()));
+
+    // ── Rebuild: tear down + fresh seeded engine + replay responses ────────
+    // NOTE: do NOT finalizeReplay() here — that would auto-save a replay on
+    // every rewind and stop recording. We keep m_replayRecording on and just
+    // truncate m_replay.responses to the applied prefix (below) so the replay
+    // tracks the new line of play. The recorder is suppressed during the
+    // rebuild itself via m_testingRebuilding.
+    m_testingRebuilding = true;                  // suppress recorder/SFX/anim
+    bool prevLocal = m_dm.localMode();
+    if (m_dm.isRunning()) m_dm.endDuel();
+    m_dm.setForcedSeed(root.seed);
+    m_dm.setLocalMode(false);                    // feed recorded P2 bytes too
+
+    bool ok = m_dm.startDuel(root.deck0, root.deck1,
+                             root.lp, root.handCount, root.drawCount);
+    int replayed = 0;
+    if (ok) {
+        auto advance = [&]() {
+            int guard = 0;
+            while (m_dm.isRunning() && !m_dm.isDone() && guard++ < 20000) {
+                const SelectionRequest& s = m_dm.selection();
+                if (DuelManager::isRealSelect(s.type) || m_dm.isBlocked()) break;
+                if (!m_dm.process()) break;
+            }
+        };
+        advance();                               // reach the first prompt
+        for (int i = 0; i < applyCount; ++i) {
+            if (!m_dm.isRunning() || m_dm.isDone()) break;
+            const auto& bytes = m_timeline.actions()[(size_t)i].responseBytes;
+            m_dm.respond(bytes.data(), (uint32_t)bytes.size());
+            ++replayed;
+            advance();
+        }
+    }
+    m_dm.setLocalMode(prevLocal);
+    m_testingRebuilding = false;
+
+    // Sync bookkeeping + re-seed the presentation observers so the next frame
+    // doesn't fire a burst of SFX/banners for the rebuilt state.
+    m_timeline.setApplied(applyCount);
+    if (m_replayRecording && (int)m_replay.responses.size() > applyCount)
+        m_replay.responses.resize((size_t)applyCount);
+    m_anim.clear();
+    m_sfxObsInited       = false;
+    m_bossObsInited      = false;
+    m_zoneRectsReady     = false;
+    m_animObservedPhase  = 0xFFFF;
+    m_animLastEnqueued   = 0;
+    m_phaseQueue.clear();
+    m_testingJustRestored = true;   // skip the re-seed "duel started" sting
+    clearSelection();
+    m_viewerLoc = 0;
+    m_viewerExtraCache.clear();
+
+    std::string label = (applyCount == 0)
+        ? std::string("Duel start")
+        : m_timeline.actions()[(size_t)applyCount - 1].label;
+    m_testingLastRestore = ok ? ("OK · " + label) : "FAILED";
+    m_dm.logEvent(std::string("[TESTING RESTORE] target=") +
+                  std::to_string(applyCount) +
+                  " method=rebuild responsesReplayed=" +
+                  std::to_string(replayed) +
+                  " success=" + (ok ? "yes" : "no") +
+                  " reason=" + (reason ? reason : "jump"));
+    if (!ok)
+        m_dm.logEvent("[TESTING ERROR] reason=startDuel failed during rebuild");
+    pushToast(ok ? ("Restored to: " + label) : "Testing restore failed",
+              ok ? IM_COL32(180, 220, 255, 255) : IM_COL32(232, 110, 100, 255),
+              2.4);
+}
+
+void UI::testingStepBack() {
+    if (!testingRewindAvailable()) return;
+    int target = m_timeline.applied() - 1;
+    if (target < 0) target = 0;
+    testingJumpTo(target, "step-back");
+}
+
+void UI::testingStepForward() {
+    if (!testingRewindAvailable()) return;
+    int target = m_timeline.applied() + 1;
+    if (target > m_timeline.size()) target = m_timeline.size();
+    testingJumpTo(target, "step-forward");
 }
 
 // ─── Replay playback ────────────────────────────────────────────────────────
@@ -3855,6 +4077,8 @@ void UI::drawLobby(int w, int h) {
                 // Begin recording the replay AFTER startDuel populates the
                 // canonical seed so the metadata matches the live duel.
                 beginReplayRecording(m_deck0Path, m_deck1Path);
+                // Capture the deterministic root for Testing Mode rewind.
+                captureTestingRoot();
             } else {
                 gAudio().play("error");
             }
@@ -4075,14 +4299,17 @@ void UI::drawDuel(int w, int h) {
                 for (int z = 0; z < 7; ++z)
                     m_sfxPrevMZcode[p][z] = curMZ[p][z];
             }
-            gAudio().play("duel_start");
-            // Game Log + toast on duel start. This is the only seed-frame
-            // event we surface — counters were "zero" moments ago and we
-            // don't want a "P1 drew 5 cards" line per starting-hand card.
-            pushGameAndReplay("Duel started. Good luck!",
-                        IM_COL32(255, 214, 108, 255));
-            pushToast  ("Duel started",
-                        IM_COL32(255, 214, 108, 255), 2.0);
+            // Skip the "duel started" sting/toast when this seed frame is a
+            // Testing-Mode rebuild re-seed (we already showed a "Restored to"
+            // toast) — otherwise every rewind would re-announce the duel.
+            if (!m_testingJustRestored) {
+                gAudio().play("duel_start");
+                pushGameAndReplay("Duel started. Good luck!",
+                            IM_COL32(255, 214, 108, 255));
+                pushToast  ("Duel started",
+                            IM_COL32(255, 214, 108, 255), 2.0);
+            }
+            m_testingJustRestored = false;
             m_sfxObsInited = true;
         } else if (m_sfxObsInited && m_dm.isRunning()) {
             // Damage / heal: LP changed this frame.
@@ -7082,8 +7309,10 @@ void UI::drawSelectionPanel(int pw, int ph) {
             finalizeReplay("restart duel");
             Deck d0 = loadYdk(m_deck0Path);
             Deck d1 = loadYdk(m_deck1Path);
-            if (m_dm.startDuel(d0, d1))
+            if (m_dm.startDuel(d0, d1)) {
                 beginReplayRecording(m_deck0Path, m_deck1Path);
+                captureTestingRoot();
+            }
             m_anim.clear();
             m_zoneRectsReady = false;
             m_sfxObsInited   = false;
@@ -8680,10 +8909,10 @@ void UI::drawTestingBar(int /*w*/) {
     UIStyle::Subtle("Debug");
     if (ImGui::Checkbox("Debug Log", &m_debugLog))
         m_dm.setDebugMessages(m_debugLog);
-    bool wasEnabled = m_snap.isEnabled();
-    ImGui::Checkbox("Testing Mode", &m_testingMode);
-    if (m_testingMode != wasEnabled)
+    if (ImGui::Checkbox("Testing Mode (rewind)", &m_testingMode)) {
         m_snap.setEnabled(m_testingMode);
+        m_timeline.setEnabled(m_testingMode);
+    }
     bool sfxMuted = gAudio().muted();
     if (ImGui::Checkbox("Mute SFX", &sfxMuted))
         gAudio().setMuted(sfxMuted);
@@ -8695,27 +8924,92 @@ void UI::drawTestingBar(int /*w*/) {
         Deck d0 = loadYdk(m_deck0Path);
         Deck d1 = loadYdk(m_deck1Path);
         m_dm.startDuel(d0, d1);
+        beginReplayRecording(m_deck0Path, m_deck1Path);
+        captureTestingRoot();
         m_viewerLoc = 0;
     }
 
-    if (!m_testingMode) return;
+    if (m_testingMode) {
+        UIStyle::DrawDivider(6.f, 6.f);
+        drawTestingTimeline();
+    }
+}
 
-    UIStyle::DrawDivider(6.f, 6.f);
-    UIStyle::Subtle("Snapshots");
-    if (ImGui::Button("Rewind") && m_snap.count() > 0)
-        m_snap.rewind();
-    ImGui::SameLine(0.f, 8.f);
-    ImGui::TextDisabled("%d snapshots", m_snap.count());
-    auto& snaps = m_snap.snapshots();
-    for (int i = 0; i < (int)snaps.size(); i++) {
-        char lbl[32];
-        snprintf(lbl, 32, "T%d##sn%d", snaps[i].turnCount, i);
-        bool cur = (i == m_snap.count() - 1);
-        if (cur) ImGui::PushStyleColor(ImGuiCol_Button, COL_ACCENT);
-        if (ImGui::Button(lbl, {36.f, 22.f}))
-            m_snap.jumpTo(i);
+// ─── Testing Mode timeline panel (inside the Tools drawer) ──────────────────
+void UI::drawTestingTimeline() {
+    UIStyle::Subtle("Timeline");
+    if (!testingRewindAvailable()) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().textLo));
+        ImGui::TextWrapped(m_replayMode
+            ? "Rewind is disabled during replay playback."
+            : (!m_net.isOffline()
+                ? "Testing rewind is available in offline testing mode only."
+                : "Start an offline duel to record a timeline."));
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    const int total   = m_timeline.size();
+    const int applied = m_timeline.applied();
+
+    // ── Step / restart controls ────────────────────────────────────────
+    if (ImGui::Button("|< Start")) testingJumpTo(0, "restart");
+    ImGui::SameLine(0.f, 4.f);
+    bool canBack = applied > 0;
+    if (!canBack) ImGui::BeginDisabled();
+    if (ImGui::Button("< Back")) testingStepBack();
+    if (!canBack) ImGui::EndDisabled();
+    ImGui::SameLine(0.f, 4.f);
+    bool canFwd = applied < total;
+    if (!canFwd) ImGui::BeginDisabled();
+    if (ImGui::Button("Fwd >")) testingStepForward();
+    if (!canFwd) ImGui::EndDisabled();
+    ImGui::SameLine(0.f, 4.f);
+    if (!canFwd) ImGui::BeginDisabled();
+    if (ImGui::Button("Head >|")) testingJumpTo(total, "to-head");
+    if (!canFwd) ImGui::EndDisabled();
+
+    ImGui::TextDisabled("Step %d / %d%s", applied, total,
+                        m_timeline.atHead() ? "  (live)" : "  (rewound)");
+
+    // ── Action list — click a row to jump to AFTER that action ──────────
+    float listH = std::min(220.f,
+                           std::max(40.f, (float)(total + 1) * 22.f + 8.f));
+    ImGui::BeginChild("##tl_list", {-1.f, listH}, true);
+    // Row 0 = "Duel start" (apply 0 responses).
+    {
+        bool cur = (applied == 0);
+        if (cur) ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
+        if (ImGui::Selectable("● Duel start##tl0", cur))
+            testingJumpTo(0, "list-click");
         if (cur) ImGui::PopStyleColor();
-        if ((i + 1) % 5 != 0) ImGui::SameLine(0.f, 2.f);
+    }
+    for (int i = 0; i < total; ++i) {
+        const edo::TestingAction& a = m_timeline.actions()[(size_t)i];
+        // applied == i+1  → this action is the current head.
+        bool cur     = (applied == i + 1);
+        bool future  = (i + 1 > applied);
+        char id[64];
+        snprintf(id, sizeof(id), "%s##tl%d", a.label.c_str(), i + 1);
+        if (cur) ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
+        else if (future) ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().textMuted));
+        if (ImGui::Selectable(id, cur))
+            testingJumpTo(i + 1, "list-click");
+        if (cur || future) ImGui::PopStyleColor();
+    }
+    ImGui::EndChild();
+
+    if (!m_testingLastRestore.empty())
+        ImGui::TextDisabled("Last restore: %s", m_testingLastRestore.c_str());
+    // Debug diagnostics.
+    if (m_debugLog) {
+        ImGui::TextDisabled("rebuilding=%s  seed=%llu",
+            m_testingRebuilding ? "yes" : "no",
+            (unsigned long long)m_timeline.root().seed);
     }
 }
 
