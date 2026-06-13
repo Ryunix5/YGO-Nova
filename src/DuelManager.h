@@ -3,6 +3,7 @@
 #include <vector>
 #include <functional>
 #include <cstdint>
+#include <chrono>
 #include "CardDB.h"
 #include "SnapshotManager.h"
 #include "ocgapi.h"
@@ -242,6 +243,16 @@ public:
     void setSuppressAutoResolve(bool on) { m_suppressAutoResolve = on; }
     bool suppressAutoResolve() const { return m_suppressAutoResolve; }
 
+    // Per-phase presentation pacing. When > 0, process() holds the engine for
+    // `sec` seconds after each phase transition so the player can SEE every
+    // phase (Draw / Standby / Main / Battle / End) and isn't blown past
+    // end-of-phase effect windows. Pure timing — it NEVER changes engine
+    // state, responses or message order; it only delays WHEN the next
+    // OCG_DuelProcess runs. The UI gates this to offline live duels (0 in
+    // multiplayer / replay / rebuild). 0 = off (instant, as before).
+    void setPhaseDelay(double sec) { m_phaseDelaySec = sec < 0.0 ? 0.0 : sec; }
+    double phaseDelay() const { return m_phaseDelaySec; }
+
     bool isRunning() const { return m_duel != nullptr && m_running; }
     bool isDone()    const { return m_done; }
     bool isBlocked() const { return m_blocked; }   // parked on an unsupported request
@@ -342,6 +353,13 @@ private:
     // into the live replay's response stream. The peer's engine runs
     // the same deterministic path and auto-resolves identically.
     bool                     m_internalAutoResolve = false;
+
+    // ── Per-phase pacing (presentation timing only) ───────────────────────
+    double                   m_phaseDelaySec = 0.0;
+    std::chrono::steady_clock::time_point m_phaseHoldUntil{};
+    // Set by the MSG_NEW_PHASE handler; consumed by the process() pump to
+    // arm the hold once per phase change.
+    bool                     m_phaseChangedThisProcess = false;
 
     // Last engine message frame seen, captured at the top of handleMsg().
     // When the engine awaits input on a message type the parser doesn't

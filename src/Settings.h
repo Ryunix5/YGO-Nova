@@ -48,6 +48,10 @@ struct Settings {
     // the engine skips through instantly when there's nothing to do.
     bool   animShowSkippedPhases = true;
     float  animPhaseMinDuration  = 0.40f; // min time each queued banner shows
+    // Per-phase ENGINE pacing (offline): hold the duel briefly on each phase
+    // so the player sees every phase and end-of-phase effects aren't blown
+    // past. Seconds; 0 = off (instant). Default 1.0 per user request.
+    float  enginePhasePacing     = 1.0f;
 
     // Compact prompt rows — show a short effect label in trigger/chain/option
     // prompts and push the FULL decoded text to the right card-info panel on
@@ -163,6 +167,7 @@ struct Settings {
         f << "animPhaseDelay="    << animPhaseDelay                  << "\n";
         f << "animShowSkippedPhases=" << (animShowSkippedPhases ? "1" : "0") << "\n";
         f << "animPhaseMinDuration="  << animPhaseMinDuration            << "\n";
+        f << "enginePhasePacing="     << enginePhasePacing               << "\n";
         f << "compactPrompts="        << (compactPrompts ? "1" : "0")    << "\n";
         f << "\n# Logs\n";
         f << "logCollapsed="      << (logCollapsed      ? "1" : "0") << "\n";
@@ -214,6 +219,7 @@ private:
         else if (k == "animPhaseDelay")    animPhaseDelay    = floatFromStr(v, animPhaseDelay);
         else if (k == "animShowSkippedPhases") animShowSkippedPhases = boolFromStr(v);
         else if (k == "animPhaseMinDuration")  animPhaseMinDuration  = floatFromStr(v, animPhaseMinDuration);
+        else if (k == "enginePhasePacing")     enginePhasePacing     = floatFromStr(v, enginePhasePacing);
         else if (k == "compactPrompts")        compactPrompts        = boolFromStr(v);
         else if (k == "logCollapsed")      logCollapsed      = boolFromStr(v);
         else if (k == "selectedLogTab")    selectedLogTab    = intFromStr(v, selectedLogTab);

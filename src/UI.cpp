@@ -2914,6 +2914,7 @@ void UI::testingJumpTo(int applyCount, const char* reason) {
     // tracks the new line of play. The recorder is suppressed during the
     // rebuild itself via m_testingRebuilding.
     m_testingRebuilding = true;                  // suppress recorder/SFX/anim
+    m_dm.setPhaseDelay(0.0);                      // rebuild must run instantly
     bool prevLocal = m_dm.localMode();
     if (m_dm.isRunning()) m_dm.endDuel();
     m_dm.setForcedSeed(root.seed);
@@ -3955,6 +3956,17 @@ void UI::drawLobby(int w, int h) {
             saveSettings();
         }
         if (!m_settings.animationsEnabled) ImGui::EndDisabled();
+
+        // Engine phase pacing — independent of animations (works even with
+        // animations off). Offline only. 0 = instant.
+        ImGui::TextDisabled("Phase pacing (offline) — hold each phase so you "
+                            "see every phase + end-of-phase effects");
+        int paceMs = (int)(m_settings.enginePhasePacing * 1000.f);
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::SliderInt("Phase pacing (ms)##pace", &paceMs, 0, 2000)) {
+            m_settings.enginePhasePacing = (float)paceMs / 1000.f;
+            saveSettings();
+        }
         ImGui::Separator();
 
         // — Logs
@@ -4162,6 +4174,15 @@ void UI::drawDuel(int w, int h) {
                           "window centre)");
         }
     }
+
+    // Per-phase engine pacing — applied ONLY to offline live duels so phases
+    // are visible and end-of-phase effects aren't blown past. Disabled in
+    // multiplayer (would delay snapshots for both peers), replay playback, and
+    // during a Testing-Mode rebuild (must run instantly). Synced every frame
+    // so mode changes take effect immediately.
+    m_dm.setPhaseDelay(
+        (m_net.isOffline() && !m_replayMode && !m_testingRebuilding)
+            ? (double)m_settings.enginePhasePacing : 0.0);
 
     // Replay playback — auto-feed recorded responses BEFORE any input UI
     // runs this frame. The feeder is a no-op outside replay mode.

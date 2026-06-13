@@ -270,6 +270,14 @@ bool DuelManager::process() {
 
     if (m_blocked) return true;   // parked on an unsupported request — see log
 
+    // Per-phase pacing hold: after a phase change we paused here (below); keep
+    // holding until the delay elapses so the player sees each phase. This only
+    // gates WHEN we next advance — engine state + responses are untouched.
+    if (m_phaseDelaySec > 0.0 &&
+        std::chrono::steady_clock::now() < m_phaseHoldUntil) {
+        return true;
+    }
+
     bool sawMessages = false;
 
     // Bounded pump: advance until the engine needs a P0 decision, the duel
@@ -361,6 +369,18 @@ bool DuelManager::process() {
         uint32_t msgLen = 0;
         void* msgBuf = OCG_DuelGetMessage(m_duel, &msgLen);
         if (msgBuf && msgLen > 0) { parseMessages(msgBuf, msgLen); sawMessages = true; }
+
+        // A phase changed in this step — arm the pacing hold and YIELD so the
+        // player sees the new phase (and any end-of-phase prompt) before the
+        // engine races on. Resumes automatically once the hold elapses.
+        if (m_phaseDelaySec > 0.0 && m_phaseChangedThisProcess && !m_done) {
+            m_phaseChangedThisProcess = false;
+            m_phaseHoldUntil = std::chrono::steady_clock::now() +
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(m_phaseDelaySec));
+            queryField();
+            return true;
+        }
 
         // MSG_WIN inside the buffer sets m_done — stop the pump immediately,
         // before any further OCG_DuelProcess / autoresponse, even if the
@@ -572,6 +592,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         if (m_postSummonPending)
             endPostSummonTrace("MSG_NEW_PHASE", {}, "n/a (phase changed)");
         m_field.phase = r16(p);
+        m_phaseChangedThisProcess = true;   // arm the per-phase pacing hold
         static const char* names[]={"Draw","Standby","Main 1","Battle","","","","","Main 2","","End"};
         int pi=0; uint16_t ph=m_field.phase; while(ph>1){ph>>=1;pi++;}
         if(pi<11) addLog(std::string(names[pi])+" Phase");
