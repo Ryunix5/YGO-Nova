@@ -8777,28 +8777,41 @@ void UI::drawCardInfoPanel(int w, int /*h*/) {
         ImGui::TextDisabled("%s", sub);
     }
 
-    // ── Location / controller / position (when the hover context is for
-    //    THIS card — prompt-button hovers show card data only) ─────────
+    // ── Location / controller / position — grouped CHIPS (controller-
+    //    coloured: cyan = your card, red = opponent) ───────────────────
     if (m_infoCtxCode == code) {
         const char* locName =
             (m_infoLoc == LOC_HAND)  ? "Hand"          :
             (m_infoLoc == LOC_MZONE) ? "Monster Zone"  :
-            (m_infoLoc == LOC_SZONE) ? "Spell/Trap Zone" :
+            (m_infoLoc == LOC_SZONE) ? "S/T Zone"      :
             (m_infoLoc == LOC_GY)    ? "Graveyard"     :
             (m_infoLoc == LOC_REM)   ? "Banished"      :
             (m_infoLoc == LOC_EXTRA) ? "Extra Deck"    :
             (m_infoLoc == LOC_DECK)  ? "Deck"          : nullptr;
         const char* posName =
-            (m_infoLoc != LOC_MZONE && m_infoLoc != LOC_SZONE) ? "" :
-            (m_infoPos & POS_FACEUP_ATTACK)    ? "  ·  face-up ATK"  :
-            (m_infoPos & POS_FACEDOWN_ATTACK)  ? "  ·  face-down ATK":
-            (m_infoPos & POS_FACEUP_DEFENSE)   ? "  ·  face-up DEF"  :
-            (m_infoPos & POS_FACEDOWN_DEFENSE) ? "  ·  set"          : "";
-        if (locName)
-            ImGui::TextDisabled("P%d  ·  %s%s",
-                                (int)m_infoCon + 1, locName, posName);
+            (m_infoLoc != LOC_MZONE && m_infoLoc != LOC_SZONE) ? nullptr :
+            (m_infoPos & POS_FACEUP_ATTACK)    ? "face-up ATK"  :
+            (m_infoPos & POS_FACEDOWN_ATTACK)  ? "face-down ATK":
+            (m_infoPos & POS_FACEUP_DEFENSE)   ? "face-up DEF"  :
+            (m_infoPos & POS_FACEDOWN_DEFENSE) ? "set"          : nullptr;
+        if (locName) {
+            ImGui::Dummy({1.f, 2.f});
+            bool mine = (m_infoCon == (uint8_t)m_net.localPlayerIndex());
+            UIStyle::StatusChip(mine ? "You" : "Opponent",
+                                mine ? IM_COL32(110, 200, 255, 230)
+                                     : IM_COL32(240, 120, 110, 230));
+            ImGui::SameLine(0.f, 6.f);
+            UIStyle::StatusChip(locName, UIStyle::C().textMd);
+            if (posName) {
+                ImGui::SameLine(0.f, 6.f);
+                UIStyle::StatusChip(posName, UIStyle::C().textLo);
+            }
+        }
     }
+    // Card code, small + muted, on its own quiet line.
+    UIStyle::PushFont(UIStyle::fSmall);
     ImGui::TextDisabled("#%u", (unsigned)code);
+    UIStyle::PopFont();
     UIStyle::DrawDivider(4.f, 6.f);
 
     // ── Effect text — wraps inside a scroll area; the panel itself never
