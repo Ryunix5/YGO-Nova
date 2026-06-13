@@ -6592,7 +6592,11 @@ void UI::drawField(int fw, int fh) {
 }
 
 // ─── drawSelectionPanel (content-only) ───────────────────────────────────────
-void UI::drawSelectionPanel(int pw, int /*ph*/) {
+void UI::drawSelectionPanel(int pw, int ph) {
+    // ph = the modal's height CAP (maxH). Inner scrollable lists size their
+    // child against the room left after the panel's fixed chrome, so the
+    // auto-resizing window grows to fit content and never shows empty space.
+    const float kHeightCap = (ph > 0) ? (float)ph : 560.f;
     // The card preview was moved to a SEPARATE compact overlay
     // (drawCompactPreviewOverlay) so card descriptions can never reshape this
     // panel. The block below would normally show a preview here — it's left
@@ -6772,26 +6776,27 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
             return;
         }
 
-        ImGui::SetNextItemWidth(bw);
-        ImGui::InputTextWithHint("##zvfilter", "Search name or #code",
-                                 m_viewerFilter, sizeof(m_viewerFilter));
-
-        // Type / activatable filter chips. Static so they persist while the
-        // viewer is open; harmless reset between openings.
+        // Search + filter chips ONLY when the pile has cards — an empty pile
+        // shows a compact empty-state instead of an unusable search row.
         static bool fMon = true, fSpl = true, fTrp = true, fActOnly = false;
-        if (UIStyle::SegmentedButton("Monster##gf", fMon, true, {78.f, 24.f})) fMon = !fMon;
-        ImGui::SameLine(0.f, 4.f);
-        if (UIStyle::SegmentedButton("Spell##gf", fSpl, true, {62.f, 24.f})) fSpl = !fSpl;
-        ImGui::SameLine(0.f, 4.f);
-        if (UIStyle::SegmentedButton("Trap##gf", fTrp, true, {58.f, 24.f})) fTrp = !fTrp;
-        if (expectedLoc && ownZone) {
+        std::string flt;
+        if (!rows.empty()) {
+            ImGui::SetNextItemWidth(bw);
+            ImGui::InputTextWithHint("##zvfilter", "Search name or #code",
+                                     m_viewerFilter, sizeof(m_viewerFilter));
+            if (UIStyle::SegmentedButton("Monster##gf", fMon, true, {78.f, 24.f})) fMon = !fMon;
             ImGui::SameLine(0.f, 4.f);
-            if (UIStyle::SegmentedButton("Activatable##gf", fActOnly, true, {100.f, 24.f}))
-                fActOnly = !fActOnly;
+            if (UIStyle::SegmentedButton("Spell##gf", fSpl, true, {62.f, 24.f})) fSpl = !fSpl;
+            ImGui::SameLine(0.f, 4.f);
+            if (UIStyle::SegmentedButton("Trap##gf", fTrp, true, {58.f, 24.f})) fTrp = !fTrp;
+            if (expectedLoc && ownZone) {
+                ImGui::SameLine(0.f, 4.f);
+                if (UIStyle::SegmentedButton("Activatable##gf", fActOnly, true, {100.f, 24.f}))
+                    fActOnly = !fActOnly;
+            }
+            flt = m_viewerFilter;
+            for (char& c : flt) c = (char)tolower((unsigned char)c);
         }
-
-        std::string flt = m_viewerFilter;
-        for (char& c : flt) c = (char)tolower((unsigned char)c);
 
         // Resolve the action for a row: idle (cmd 1/5) OR chain candidate.
         // Returns kind: 0 none, 1 idle, 2 chain. For idle, matches by
@@ -6847,8 +6852,74 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
             return out;
         };
 
-        ImGui::BeginChild("##zvlist", {bw, 240.f}, true);
-        if (rows.empty()) ImGui::TextDisabled("(empty)");
+        // ── Empty pile → compact centred empty-state, no big list box ──────
+        if (rows.empty()) {
+            ImGui::Dummy({1.f, 14.f});
+            ImDrawList* edl = ImGui::GetWindowDrawList();
+            ImVec2 ep = ImGui::GetCursorScreenPos();
+            float cxp = ep.x + bw * 0.5f;
+            // Subtle pile glyph.
+            edl->AddCircle({cxp, ep.y + 14.f}, 13.f,
+                           IM_COL32(120, 134, 170, 120), 20, 1.6f);
+            edl->AddLine({cxp - 7.f, ep.y + 14.f}, {cxp + 7.f, ep.y + 14.f},
+                         IM_COL32(120, 134, 170, 120), 1.6f);
+            std::string msg = std::string("No cards in ") +
+                (m_mpInDuel && !m_net.isOffline()
+                    ? (ownZone ? "your " : "the opponent's ") : "this ") +
+                std::string(zname);
+            ImGui::Dummy({1.f, 34.f});
+            ImVec2 ts = ImGui::CalcTextSize(msg.c_str());
+            ImGui::SetCursorPosX((bw - ts.x) * 0.5f + 8.f);
+            ImGui::TextDisabled("%s", msg.c_str());
+            ImGui::Dummy({1.f, 8.f});
+            if (m_debugLog)
+                m_dm.logEvent(std::string("[VIEWER SIZE] loc=") + zshort +
+                    " count=0 size=" + std::to_string((int)bw) +
+                    ",compact scroll=no");
+            return;
+        }
+
+        // ── Pre-count VISIBLE rows so the list child fits exactly ──────────
+        auto rowVisible = [&](size_t i) -> bool {
+            CardInfo ci = m_db.getCard(rows[i].code);
+            bool isMon = (ci.type & TYPE_MONSTER) != 0;
+            bool isSpl = (ci.type & TYPE_SPELL)   != 0;
+            bool isTrp = (ci.type & TYPE_TRAP)    != 0;
+            if (isMon && !fMon) return false;
+            if (isSpl && !fSpl) return false;
+            if (isTrp && !fTrp) return false;
+            if (!flt.empty()) {
+                std::string lc = (ci.name.empty()
+                    ? ("#" + std::to_string(rows[i].code)) : ci.name) +
+                    "#" + std::to_string(rows[i].code);
+                for (char& c : lc) c = (char)tolower((unsigned char)c);
+                if (lc.find(flt) == std::string::npos) return false;
+            }
+            if (fActOnly && ownZone && expectedLoc &&
+                resolveRowAct(rows[i].code, rows[i].seq).kind == 0) return false;
+            return true;
+        };
+        int visibleRows = 0;
+        for (size_t i = 0; i < rows.size(); ++i) if (rowVisible(i)) ++visibleRows;
+
+        // Content-driven list height: rows*rowH, capped at the room left under
+        // the modal cap. Scrolls only when the rows exceed that cap. rowH is
+        // slightly generous (rows with an Activate button are taller) so a
+        // perfectly-fitting list doesn't sprout a 1px scrollbar.
+        const float kRowH = 62.f;
+        float maxListH = std::max(120.f, kHeightCap - 210.f);
+        float wantH = (visibleRows > 0) ? (visibleRows * kRowH + 6.f) : 40.f;
+        float listH = std::min(maxListH, wantH);
+        bool  listScroll = (wantH > maxListH);
+        if (m_debugLog)
+            m_dm.logEvent(std::string("[VIEWER SIZE] loc=") + zshort +
+                " count=" + std::to_string(visibleRows) +
+                " size=" + std::to_string((int)bw) + "," +
+                std::to_string((int)listH) +
+                " scroll=" + (listScroll ? "yes" : "no"));
+
+        ImGui::BeginChild("##zvlist", {bw, listH}, true);
+        if (visibleRows == 0) ImGui::TextDisabled("No matching cards.");
         int shown = 0;
         for (size_t i = 0; i < rows.size(); ++i) {
             CardInfo ci = m_db.getCard(rows[i].code);
@@ -7408,11 +7479,19 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
                             (int)sel.options.size(),
                             sel.options.size() == 1 ? "" : "s");
         ImGui::Dummy({1.f, 6.f});
-        // Scrollable list of full-text choice rows: the row height adapts
-        // to the WRAPPED effect text, so nothing is ever cut off. A footer
-        // hint + the right-side info panel cover preview behaviour.
-        float footerH = 30.f;
-        ImGui::BeginChild("##optlist", {bw, -footerH}, false);
+        // Content-sized choice list: ~46px per compact row, capped at the
+        // room left under the modal cap so the auto-resizing window fits the
+        // rows exactly (no empty space) and scrolls only when they overflow.
+        const float kOptRowH = 46.f;
+        float optMaxH = std::max(120.f, kHeightCap - 130.f);
+        float optWant = std::max(kOptRowH, sel.options.size() * kOptRowH);
+        float optH    = std::min(optMaxH, optWant);
+        if (m_debugLog)
+            m_dm.logEvent(std::string("[PROMPT SIZE] type=option rows=") +
+                std::to_string(sel.options.size()) +
+                " listH=" + std::to_string((int)optH) +
+                " scroll=" + (optWant > optMaxH ? "yes" : "no"));
+        ImGui::BeginChild("##optlist", {bw, optH}, false);
         for (int i = 0; i < (int)sel.options.size(); i++) {
             const EffectDesc* d = (i < (int)sel.chainEffects.size())
                                   ? &sel.chainEffects[i] : nullptr;
@@ -7482,6 +7561,11 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
         if (m_debugLog)
             ImGui::TextDisabled("Window: %s", DuelManager::timingName(sel.timing));
         ImGui::Spacing();
+        // Content-sized chain list — fits the rows, scrolls only when many.
+        const float kChRowH = 46.f;
+        float chMaxH = std::max(120.f, kHeightCap - 140.f);
+        float chWant = std::max(kChRowH, sel.cards.size() * kChRowH);
+        ImGui::BeginChild("##chlist", {bw, std::min(chMaxH, chWant)}, false);
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             auto& c = sel.cards[i];
             std::string nm = c.name.empty() ? ("#" + std::to_string(c.code)) : c.name;
@@ -7511,6 +7595,7 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
                 m_promptHoverFrame = ImGui::GetFrameCount();
             }
         }
+        ImGui::EndChild();
         // A forced chain must pick a link — no "Pass" option in that case.
         if (!sel.forced && ImGui::Button("Pass (no response)##chain", {bw, 26.f}))
             submitMpChoice(WaitType::SelectChain, -1);
@@ -7550,7 +7635,11 @@ void UI::drawSelectionPanel(int pw, int /*ph*/) {
         for (char& c : flt) c = (char)tolower((unsigned char)c);
 
         const bool fastSingle = (sel.min == 1 && sel.max == 1);
-        ImGui::BeginChild("##sclist", {bw, 260.f}, true);
+        // Content-sized card list — fits the candidates, scrolls when many.
+        const float kScRowH = 30.f;
+        float scMaxH = std::max(120.f, kHeightCap - 180.f);
+        float scWant = std::max(kScRowH, sel.cards.size() * kScRowH);
+        ImGui::BeginChild("##sclist", {bw, std::min(scMaxH, scWant)}, true);
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             const auto& c = sel.cards[i];
             CardInfo ci = m_db.getCard(c.code);
@@ -8173,27 +8262,21 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     const bool optionLike =
         sel.type == WaitType::SelectOption   ||
         sel.type == WaitType::SelectEffectYn;
-    float MW, MMax;
-    if (isViewer)        { MW = 440.f; MMax = 600.f; }
-    else if (listLike)   { MW = 480.f; MMax = 600.f; }
-    else if (optionLike) { MW = 460.f; MMax = 360.f; }   // compact trigger/option
-    else                 { MW = 400.f; MMax = 280.f; }   // yes/no
+    // ── Content-driven sizing ──────────────────────────────────────────────
+    // The window is AlwaysAutoResize: it grows to fit exactly the content,
+    // so a tiny Yes/No no longer renders inside a tall empty box. A WIDTH-
+    // LOCKED size constraint fixes the width to MW and caps the height at
+    // maxH; any list that could exceed maxH lives in a child sized to its
+    // own row count (see the viewer / option lists), so the window auto-fits
+    // below maxH and the child scrolls only when it actually overflows.
+    float MW, maxH;
+    if (isViewer)        { MW = 440.f; maxH = 600.f; }
+    else if (listLike)   { MW = 480.f; maxH = 600.f; }
+    else if (optionLike) { MW = 460.f; maxH = 440.f; }
+    else if (m_dm.isDone()) { MW = 440.f; maxH = 500.f; } // game over panel
+    else                 { MW = 400.f; maxH = 340.f; }   // yes/no
     if (MW > (float)screenW - 80.f) MW = (float)screenW - 80.f;
-    const float MH   = std::min((float)screenH - 120.f, MMax);
-    float mx, my;
-    if (isViewer) {
-        // Anchor to the right side (near the GY/BN/ED piles), just left of the
-        // card-info overlay, clamped on-screen. Vertically centred-ish.
-        const float infoW = ((float)screenW >= 1100.f) ? 330.f : 0.f;
-        mx = (float)screenW - infoW - MW - 28.f;
-        if (mx < 16.f) mx = 16.f;
-        my = 70.f;
-        if (my + MH > (float)screenH - 70.f) my = (float)screenH - MH - 70.f;
-        if (my < 60.f) my = 60.f;
-    } else {
-        mx = ((float)screenW - MW) * 0.5f;
-        my = ((float)screenH - MH) * 0.5f;
-    }
+    maxH = std::min((float)screenH - 100.f, maxH);
 
     // Dim the duel underneath ONLY for real decision modals — the viewer is a
     // browse panel and must keep the field fully visible/interactive.
@@ -8214,8 +8297,20 @@ void UI::drawCenteredModal(int screenW, int screenH) {
         ImGui::PopStyleColor(2);
     }
 
-    ImGui::SetNextWindowPos({mx, my});
-    ImGui::SetNextWindowSize({MW, MH});
+    // Positioning — decision modals centre via a {0.5,0.5} pivot so they stay
+    // centred at ANY auto-resized height; the viewer top-anchors to the right
+    // (near the GY/BN/ED piles) and grows downward.
+    if (isViewer) {
+        const float infoW = ((float)screenW >= 1100.f) ? 330.f : 0.f;
+        float mx = (float)screenW - infoW - MW - 28.f;
+        if (mx < 16.f) mx = 16.f;
+        ImGui::SetNextWindowPos({mx, 70.f}, ImGuiCond_Always, {0.f, 0.f});
+    } else {
+        ImGui::SetNextWindowPos({(float)screenW * 0.5f, (float)screenH * 0.5f},
+                                ImGuiCond_Always, {0.5f, 0.5f});
+    }
+    // Width locked to MW (min == max width); height free up to maxH.
+    ImGui::SetNextWindowSizeConstraints({MW, 0.f}, {MW, maxH});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.085f, 0.095f, 0.17f, 0.985f});
     ImGui::PushStyleColor(ImGuiCol_Border,   {0.55f, 0.60f, 0.92f, 0.85f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.6f);
@@ -8224,7 +8319,18 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     ImGui::Begin("##engineModal", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize  | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoSavedSettings);
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    // [PROMPT SIZE] — actual auto-sized result, debug-only.
+    if (m_debugLog) {
+        ImVec2 wsz = ImGui::GetWindowSize();
+        m_dm.logEvent(std::string("[PROMPT SIZE] type=") +
+            std::to_string((int)sel.type) +
+            " options=" + std::to_string((int)(sel.options.size() +
+                                               sel.cards.size())) +
+            " size=" + std::to_string((int)wsz.x) + "," +
+            std::to_string((int)wsz.y) +
+            " scroll=" + (wsz.y >= maxH - 1.f ? "yes" : "no"));
+    }
     // Gold accent hairline along the modal's top edge.
     {
         ImDrawList* mdl = ImGui::GetWindowDrawList();
@@ -8233,7 +8339,10 @@ void UI::drawCenteredModal(int screenW, int screenH) {
                            {wp.x + MW - 10.f, wp.y + 2.f},
                            IM_COL32(232, 182, 72, 200), 1.f);
     }
-    drawSelectionPanel((int)MW, (int)MH);
+    // Pass the height CAP as the panel's height hint so inner lists can size
+    // their scroll children against the available room (the window itself
+    // auto-resizes below this).
+    drawSelectionPanel((int)MW, (int)maxH);
     ImGui::End();
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(2);
