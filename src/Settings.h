@@ -37,6 +37,14 @@ struct Settings {
     bool   showLegalGlow     = true;
     bool   animationsEnabled = true;
 
+    // ── Animation presentation (Stage A) ─────────────────────────────────
+    bool   animBigSummons    = true;     // boss/large-monster centre entrance
+    bool   animPhaseBanners  = true;     // centre phase banner on phase change
+    bool   animScreenShake   = true;     // brief board jitter on big events
+    bool   animReduceMotion  = false;    // accessibility: short fades, no shake
+    float  animSpeed         = 1.0f;     // 0.5 / 1 / 2 / 0(=instant)
+    float  animPhaseDelay    = 0.45f;    // cosmetic hold between phases (s)
+
     // ── Logs ─────────────────────────────────────────────────────────────
     bool   logCollapsed      = true;     // collapsed by default — quiet UI
     int    selectedLogTab    = 0;        // 0 = Game, 1 = Debug
@@ -138,6 +146,12 @@ struct Settings {
         f << "showZoneLabels="    << (showZoneLabels    ? "1" : "0") << "\n";
         f << "showLegalGlow="     << (showLegalGlow     ? "1" : "0") << "\n";
         f << "animationsEnabled=" << (animationsEnabled ? "1" : "0") << "\n";
+        f << "animBigSummons="    << (animBigSummons    ? "1" : "0") << "\n";
+        f << "animPhaseBanners="  << (animPhaseBanners  ? "1" : "0") << "\n";
+        f << "animScreenShake="   << (animScreenShake   ? "1" : "0") << "\n";
+        f << "animReduceMotion="  << (animReduceMotion  ? "1" : "0") << "\n";
+        f << "animSpeed="         << animSpeed                       << "\n";
+        f << "animPhaseDelay="    << animPhaseDelay                  << "\n";
         f << "\n# Logs\n";
         f << "logCollapsed="      << (logCollapsed      ? "1" : "0") << "\n";
         f << "selectedLogTab="    << selectedLogTab                   << "\n";
@@ -180,6 +194,12 @@ private:
         else if (k == "showZoneLabels")    showZoneLabels    = boolFromStr(v);
         else if (k == "showLegalGlow")     showLegalGlow     = boolFromStr(v);
         else if (k == "animationsEnabled") animationsEnabled = boolFromStr(v);
+        else if (k == "animBigSummons")    animBigSummons    = boolFromStr(v);
+        else if (k == "animPhaseBanners")  animPhaseBanners  = boolFromStr(v);
+        else if (k == "animScreenShake")   animScreenShake   = boolFromStr(v);
+        else if (k == "animReduceMotion")  animReduceMotion  = boolFromStr(v);
+        else if (k == "animSpeed")         animSpeed         = floatFromStr(v, animSpeed);
+        else if (k == "animPhaseDelay")    animPhaseDelay    = floatFromStr(v, animPhaseDelay);
         else if (k == "logCollapsed")      logCollapsed      = boolFromStr(v);
         else if (k == "selectedLogTab")    selectedLogTab    = intFromStr(v, selectedLogTab);
         else if (k == "debugLog")          debugLog          = boolFromStr(v);

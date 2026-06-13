@@ -29,6 +29,10 @@ public:
     void loadSettings();
     void saveSettings();
     const edo::Settings& settings() const { return m_settings; }
+    // Mirror the persisted animation settings into the live AnimManager.
+    // Called from loadSettings() and after any animation-settings change so
+    // toggles/speed/reduce-motion take effect immediately.
+    void syncAnimConfig();
 
     // ── Toast notifications ──────────────────────────────────────────────
     // Pushes a non-blocking notification onto the top-right toast stack.
@@ -216,6 +220,21 @@ private:
     // One-shot transition state — used to play victory/defeat SFX exactly
     // once when the duel ends, instead of every frame.
     bool   m_endGameSfxFired = false;
+
+    // ── Phase banner / boss-summon animation state (Stage A) ──────────────
+    // Last phase value we showed a banner for. Works in offline / replay /
+    // MP-client because it reads currentField().phase (snapshot-backed for
+    // the client), so the banner plays on both peers without local ocgcore.
+    // 0xFFFF = uninitialised (no banner on the very first observed frame).
+    uint16_t m_animPrevPhase = 0xFFFF;
+    // Per-zone "boss already announced" guard so a big monster sitting in a
+    // zone doesn't re-trigger the centre entrance every frame it's present.
+    uint32_t m_bossPrevMZ[2][7] = {{0}};
+    bool     m_bossObsInited = false;
+    // Helper: classify the summon-type label + whether a card qualifies as a
+    // "boss" for the big-entrance animation. Defined in UI.cpp.
+    bool     isBossCard(const CardInfo& ci) const;
+    const char* summonTypeLabel(const CardInfo& ci, bool special) const;
 
     // Field-state delta observer — drives in-game SFX (draw / send_gy /
     // banish / damage / monster appear). Initialised on the first frame

@@ -88,6 +88,29 @@ static const char* phaseHuman(uint16_t ph) {
     }
 }
 
+// Uppercase phase label for the centre banner ("MAIN PHASE 1", "BATTLE
+// PHASE", …). Distinct from phaseHuman so the HUD pill / info lines keep
+// their title-case wording.
+static const char* phaseBannerText(uint16_t ph) {
+    switch (ph) {
+        case 0x01:  return "DRAW PHASE";
+        case 0x02:  return "STANDBY PHASE";
+        case 0x04:  return "MAIN PHASE 1";
+        case 0x08: case 0x10: case 0x20: case 0x40: case 0x80:
+                    return "BATTLE PHASE";
+        case 0x100: return "MAIN PHASE 2";
+        case 0x200: return "END PHASE";
+        default:    return "";
+    }
+}
+
+// True for monster card types that live in the Extra Deck (used to colour /
+// label the boss entrance as a Special Summon and pick the summon-type word).
+static bool isExtraDeckType(uint32_t type) {
+    return (type & (0x40u /*FUSION*/ | 0x2000u /*SYNCHRO*/ |
+                    0x800000u /*XYZ*/ | 0x4000000u /*LINK*/)) != 0;
+}
+
 // ─── Constructor ─────────────────────────────────────────────────────────────
 UI::UI(DuelManager& dm, CardDB& db, Renderer& rend, SnapshotManager& snap)
     : m_dm(dm), m_db(db), m_rend(rend), m_snap(snap)
@@ -2269,6 +2292,7 @@ void UI::loadSettings() {
     m_largePreview    = m_settings.largePreview;
     m_showZoneLabels  = m_settings.showZoneLabels;
     m_showLegalGlow   = m_settings.showLegalGlow;
+    syncAnimConfig();
     // Push audio settings into the live device. Safe even when audio failed
     // to open — AudioManager::setMuted/setVolume are no-ops in that case.
     gAudio().setMuted (m_settings.sfxMuted);
@@ -2310,6 +2334,50 @@ void UI::saveSettings() {
     m_settings.lastDeckP2        = m_deck1Path[0] ? m_deck1Path : "";
     if (!m_settings.save())
         m_dm.logEvent("[settings] WARN: could not write settings file");
+}
+
+void UI::syncAnimConfig() {
+    edo::AnimConfig c;
+    c.enabled      = m_settings.animationsEnabled;
+    c.bigSummons   = m_settings.animBigSummons;
+    c.phaseBanners = m_settings.animPhaseBanners;
+    c.screenShake  = m_settings.animScreenShake;
+    c.reduceMotion = m_settings.animReduceMotion;
+    c.speed        = m_settings.animSpeed;
+    c.phaseDelay   = m_settings.animPhaseDelay;
+    m_anim.setConfig(c);
+}
+
+// ── Boss / big-monster classifier (Stage A) ──────────────────────────────
+// A monster qualifies for the centre-screen entrance animation when it is
+// high-impact: Level ≥ 7, Rank ≥ 7, Link rating ≥ 4, ATK ≥ 2500, or any
+// Extra-Deck monster (Fusion / Synchro / Xyz / Link). Spells and Traps
+// never qualify.
+bool UI::isBossCard(const CardInfo& ci) const {
+    if (!(ci.type & TYPE_MONSTER)) return false;
+    if (isExtraDeckType(ci.type))  return true;
+    if (ci.type & TYPE_LINK) {
+        int rating = ci.def > 0 ? ci.def : (int)ci.level;
+        if (rating >= 4) return true;
+    } else if (ci.type & TYPE_XYZ) {
+        if ((int)ci.level >= 7) return true;     // Rank
+    } else {
+        if ((int)ci.level >= 7) return true;     // Level
+    }
+    if (ci.atk >= 2500) return true;
+    return false;
+}
+
+// Summon-type banner label for the boss entrance. We can't always know the
+// exact summon method from the snapshot, so we infer from the card type:
+// Extra-Deck monsters report their mechanic (FUSION / SYNCHRO / XYZ / LINK);
+// everything else is NORMAL or SPECIAL based on the caller's `special` flag.
+const char* UI::summonTypeLabel(const CardInfo& ci, bool special) const {
+    if (ci.type & TYPE_FUSION)  return "FUSION SUMMON";
+    if (ci.type & TYPE_SYNCHRO) return "SYNCHRO SUMMON";
+    if (ci.type & TYPE_XYZ)     return "XYZ SUMMON";
+    if (ci.type & TYPE_LINK)    return "LINK SUMMON";
+    return special ? "SPECIAL SUMMON" : "NORMAL SUMMON";
 }
 
 void UI::pushToast(const std::string& text, ImU32 color, double dur) {
@@ -3308,7 +3376,39 @@ void UI::drawLobby(int w, int h) {
         savedToggle("Large card preview",       &m_largePreview);
         savedToggle("Show zone labels",         &m_showZoneLabels);
         savedToggle("Show legal-action glow",   &m_showLegalGlow);
-        savedToggle("Animations enabled",       &m_settings.animationsEnabled);
+        ImGui::Separator();
+
+        // — Animations (Stage A) — every change re-syncs the live AnimManager.
+        UIStyle::SectionHeader("Animations");
+        auto animToggle = [this](const char* label, bool* val) {
+            if (ImGui::Checkbox(label, val)) { syncAnimConfig(); saveSettings(); }
+        };
+        animToggle("Enable animations",          &m_settings.animationsEnabled);
+        if (!m_settings.animationsEnabled) ImGui::BeginDisabled();
+        animToggle("Big monster summon animation", &m_settings.animBigSummons);
+        animToggle("Phase banners",              &m_settings.animPhaseBanners);
+        animToggle("Screen shake on big events", &m_settings.animScreenShake);
+        animToggle("Reduce motion (accessibility)", &m_settings.animReduceMotion);
+        // Animation speed — 0.5x / 1x / 2x / Instant segmented buttons.
+        ImGui::TextDisabled("Animation speed");
+        struct { const char* l; float v; } kSpeeds[] = {
+            {"0.5x", 0.5f}, {"1x", 1.0f}, {"2x", 2.0f}, {"Instant", 0.0f} };
+        for (int i = 0; i < 4; ++i) {
+            bool active = (m_settings.animSpeed == kSpeeds[i].v);
+            if (UIStyle::SegmentedButton(kSpeeds[i].l, active, true, {84.f, 26.f})) {
+                m_settings.animSpeed = kSpeeds[i].v;
+                syncAnimConfig(); saveSettings();
+            }
+            if (i < 3) ImGui::SameLine(0.f, 4.f);
+        }
+        // Phase delay slider — cosmetic hold between phases (ms).
+        int delayMs = (int)(m_settings.animPhaseDelay * 1000.f);
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::SliderInt("Phase delay (ms)", &delayMs, 0, 1000)) {
+            m_settings.animPhaseDelay = (float)delayMs / 1000.f;
+            syncAnimConfig(); saveSettings();
+        }
+        if (!m_settings.animationsEnabled) ImGui::EndDisabled();
         ImGui::Separator();
 
         // — Logs
@@ -3837,6 +3937,9 @@ void UI::drawDuel(int w, int h) {
                             m_anim.zoneFlash(tl, br, col, 0.45);
                             m_anim.ring(c, isNormal ? 42.f : 58.f,
                                         col, isNormal ? 0.55 : 0.70);
+                            // (Boss-entrance + phase banners live in the
+                            // mode-agnostic presentation observer below, so
+                            // they also play on the host-auth MP client.)
                             // Player-facing summon line — best-effort
                             // identification using the new code at this seq.
                             std::string nm = m_db.getCard(curMZ[p][z]).name;
@@ -3868,6 +3971,76 @@ void UI::drawDuel(int w, int h) {
             m_anim.clear();                // drop stale animations
             m_zoneRectsReady = false;
         }
+    }
+
+    // ── Presentation observer (mode-agnostic — offline / host / replay /
+    //    host-auth client) ─────────────────────────────────────────────────
+    // Reads currentField() (snapshot-backed on the client) so phase banners
+    // and boss entrances play on BOTH peers without the client needing a
+    // local ocgcore. Purely cosmetic — never touches engine or network state.
+    if (isDuelVisiblyRunning() && !m_dm.isDone()) {
+        const FieldState& pf = currentField();
+        // Current monster-zone occupancy (codes by seq) for the boss diff.
+        uint32_t pbMZ[2][7] = {{0}};
+        for (int p = 0; p < 2; ++p)
+            for (const CardState& cs : pf.monsters[p])
+                if (cs.seq < 7) pbMZ[p][cs.seq] = cs.code;
+
+        if (!m_bossObsInited) {
+            // Seed without firing — avoids a banner/boss burst on the first
+            // observed frame (duel start / snapshot arrival).
+            m_animPrevPhase = pf.phase;
+            for (int p = 0; p < 2; ++p)
+                for (int z = 0; z < 7; ++z) m_bossPrevMZ[p][z] = pbMZ[p][z];
+            m_bossObsInited = true;
+        } else {
+            // Phase banner — fire on any change of the displayed phase.
+            if (pf.phase != m_animPrevPhase && pf.phase != 0) {
+                const char* bannerTxt = phaseBannerText(pf.phase);
+                if (bannerTxt[0]) {
+                    // Banner colour: gold normally, orange in Battle Phase
+                    // (sub-steps 0x08..0x80).
+                    bool battle = (pf.phase & 0xFCu) != 0;
+                    ImU32 bcol = battle ? IM_COL32(255, 132, 80, 255)
+                                        : IM_COL32(232, 196, 110, 255);
+                    ImVec2 winSz = ImGui::GetIO().DisplaySize;
+                    m_anim.emitPhaseBanner(bannerTxt, winSz, bcol);
+                    // Optional phase SFX — only if the user has supplied a
+                    // phase.wav, so we never log a missing-asset warning.
+                    if (gAudio().isLoaded("phase")) gAudio().play("phase");
+                }
+                m_animPrevPhase = pf.phase;
+            }
+            // Boss entrance — a high-impact monster newly occupying a zone.
+            for (int p = 0; p < 2; ++p) {
+                for (int z = 0; z < 7; ++z) {
+                    uint32_t code = pbMZ[p][z];
+                    if (code != 0 && m_bossPrevMZ[p][z] != code) {
+                        CardInfo bci = m_db.getCard(code);
+                        if (isBossCard(bci) && m_zoneRectsReady) {
+                            ImVec2 tl = m_rectMZ_tl[p][z], br = m_rectMZ_br[p][z];
+                            ImVec2 c{ (tl.x+br.x)*0.5f, (tl.y+br.y)*0.5f };
+                            ImVec2 winSz = ImGui::GetIO().DisplaySize;
+                            // Infer special vs normal: Extra-Deck monster or a
+                            // monster appearing without a matching hand drop is
+                            // "special"; otherwise normal. Good enough for the
+                            // label/colour choice.
+                            bool special = isExtraDeckType(bci.type);
+                            ImU32 bcol = special ? IM_COL32(112,220,255,255)
+                                                 : IM_COL32(255,214,108,255);
+                            m_anim.emitBossSummon(m_rend.getCardTexture(code),
+                                winSz, c, summonTypeLabel(bci, special), bcol);
+                            m_anim.emitShake(8.f, 0.34);
+                        }
+                    }
+                }
+            }
+            for (int p = 0; p < 2; ++p)
+                for (int z = 0; z < 7; ++z) m_bossPrevMZ[p][z] = pbMZ[p][z];
+        }
+    } else if (m_bossObsInited && !isDuelVisiblyRunning()) {
+        m_bossObsInited = false;
+        m_animPrevPhase = 0xFFFF;
     }
 
     // ── Attack animation hook ─────────────────────────────────────────────
@@ -4259,12 +4432,22 @@ void UI::drawDuel(int w, int h) {
         ImGui::PopStyleColor(2);
     }       // closes if (m_logDrawerOpen)
 
+    // Screen shake — offset the whole field child (cards + hit-tests move
+    // together, so clicks stay aligned). Zero when no shake is active.
+    ImVec2 shake = m_anim.shakeOffset();
+    if (shake.x != 0.f || shake.y != 0.f)
+        ImGui::SetCursorPos({0.f + shake.x, TOP_H + shake.y});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.05f, 0.07f, 0.11f, 1.f});
     ImGui::BeginChild("##field_child", {FLD_W, MID_H}, false,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     drawField((int)FLD_W, (int)MID_H);
     ImGui::EndChild();
     ImGui::PopStyleColor();
+
+    // ── Overlay animations (phase banner + boss entrance) ───────────────────
+    // Foreground list so they sit above the field, info panel and HUD. The
+    // duel window is full-screen at (0,0), so the top-left origin is (0,0).
+    m_anim.renderTop(ImGui::GetForegroundDrawList(), {0.f, 0.f});
 
     // ── Right: FLOATING card-info overlay ───────────────────────────────────
     // Drawn as a separate glass window on top of the field's right margin.

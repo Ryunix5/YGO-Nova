@@ -21,8 +21,26 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cfloat>
 
 namespace edo {
+
+// ── Animation presentation config ────────────────────────────────────────────
+// Mirrors the user-facing settings (Settings.h anim* keys). The UI pushes
+// this into AnimManager::setConfig() whenever a setting changes. Emitters
+// consult it so disabling a category is a no-op at the source — nothing
+// queued, nothing rendered, zero cost.
+struct AnimConfig {
+    bool  enabled       = true;   // master switch — off = no animations at all
+    bool  bigSummons    = true;   // boss/large-monster centre entrance
+    bool  phaseBanners  = true;   // centre phase banner on phase change
+    bool  screenShake   = true;   // brief board jitter on major events
+    bool  reduceMotion  = false;  // accessibility: short fades, no shake/boss
+    float speed         = 1.0f;   // 0.5 / 1 / 2; <=0 treated as "instant"
+    // Phase presentation delay in seconds — purely cosmetic hold so phase
+    // changes feel intentional. NEVER gates the engine or networking.
+    float phaseDelay    = 0.45f;
+};
 
 struct Anim {
     enum Type {
@@ -31,7 +49,11 @@ struct Anim {
         Beam,         // line from a → b that fades
         LPFlash,      // rectangular flash on a player's LP panel
         DamageNum,    // floating "-NNN" number above origin
-        ZoneFlash     // rectangular flash on a zone (placement / send to GY)
+        ZoneFlash,    // rectangular flash on a zone (placement / send to GY)
+        // ── Stage A additions ─────────────────────────────────────────────
+        Banner,       // centre-screen phase banner (slide-in / hold / fade)
+        BossCard,     // enlarged card entrance with energy ring + type label
+        CardTrail     // a card-sized ghost gliding a → b (draw / send / banish)
     };
     Type     type   = Pulse;
     double   start  = 0.0;       // ImGui::GetTime() seconds when queued
@@ -41,14 +63,29 @@ struct Anim {
     ImU32    color  = IM_COL32_WHITE;
     float    radius = 24.f;
     int      ivalue = 0;
-    char     text[24] = {};
+    char     text[40] = {};      // banner / damage label (widened for banners)
+    void*    tex    = nullptr;   // card texture for BossCard / CardTrail
 };
 
 class AnimManager {
 public:
-    void clear()                  { m_items.clear(); }
+    void clear()                  { m_items.clear(); m_shakeStart = -1.0; }
     bool empty()         const    { return m_items.empty(); }
     size_t count()       const    { return m_items.size(); }
+
+    // ── Config ────────────────────────────────────────────────────────────
+    void setConfig(const AnimConfig& c) { m_cfg = c; }
+    const AnimConfig& config() const    { return m_cfg; }
+    // Scales a base duration by the user's speed setting. "Instant" (speed
+    // <= 0) collapses everything to a single frame so nothing lingers.
+    double sdur(double base) const {
+        if (!m_cfg.enabled) return 0.0;
+        float sp = m_cfg.speed;
+        if (sp <= 0.f) return 0.001;             // instant
+        double d = base / (double)sp;
+        if (m_cfg.reduceMotion) d *= 0.55;       // shorter fades
+        return d;
+    }
 
     // ── Convenience emitters ──────────────────────────────────────────────
     // Field-assigned construction avoids relying on the exact aggregate-
@@ -93,6 +130,66 @@ public:
         it.dur = dur; it.a = origin; it.color = col;
         std::snprintf(it.text, sizeof(it.text), "%s", text ? text : "");
         push(it);
+    }
+
+    // ── Stage A emitters ──────────────────────────────────────────────────
+    // Centre-screen phase banner. `screenSize` is the duel window size so
+    // the banner can centre itself. No-op when phase banners are disabled.
+    void emitPhaseBanner(const char* phaseName, ImVec2 screenSize,
+                         ImU32 col) {
+        if (!m_cfg.enabled || !m_cfg.phaseBanners) return;
+        if (!phaseName || !phaseName[0]) return;
+        Anim it; it.type = Anim::Banner; it.start = ImGui::GetTime();
+        // Total banner life = fade-in/out envelope (~0.55s) + the user's
+        // cosmetic phase-delay hold. This is the "small delay between
+        // phases" — purely a presentation hold; it NEVER blocks the engine
+        // or the network (the snapshot/phase has already advanced).
+        it.dur = 0.55 + (double)m_cfg.phaseDelay;
+        it.a = screenSize; it.color = col;
+        std::snprintf(it.text, sizeof(it.text), "%s", phaseName);
+        push(it);
+    }
+    // Big-monster / boss entrance. `tex` is the card texture (may be null —
+    // falls back to a glowing plate). `zoneRect` lets the card settle toward
+    // its destination near the end. No-op if big summons / motion are off.
+    void emitBossSummon(void* tex, ImVec2 screenSize, ImVec2 zoneCenter,
+                        const char* typeLabel, ImU32 col) {
+        if (!m_cfg.enabled || !m_cfg.bigSummons || m_cfg.reduceMotion) return;
+        Anim it; it.type = Anim::BossCard; it.start = ImGui::GetTime();
+        it.dur = 1.30; it.a = screenSize; it.b = zoneCenter;
+        it.color = col; it.tex = tex;
+        std::snprintf(it.text, sizeof(it.text), "%s",
+                      typeLabel ? typeLabel : "");
+        push(it);
+    }
+    // Card-sized ghost gliding from a → b (draw, send-to-GY, banish trail).
+    void cardTrail(ImVec2 from, ImVec2 to, void* tex, ImU32 col,
+                   double dur = 0.5) {
+        Anim it; it.type = Anim::CardTrail; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = from; it.b = to; it.color = col; it.tex = tex;
+        push(it);
+    }
+    // Trigger a brief decaying board jitter. Honoured by shakeOffset(),
+    // which drawDuel adds to the field child's origin so cards + hit-tests
+    // move together. No-op when shake / motion settings forbid it.
+    void emitShake(float magnitude = 7.f, double dur = 0.32) {
+        if (!m_cfg.enabled || !m_cfg.screenShake || m_cfg.reduceMotion) return;
+        m_shakeStart = ImGui::GetTime();
+        m_shakeDur   = dur / (m_cfg.speed > 0.f ? m_cfg.speed : 1.f);
+        m_shakeMag   = magnitude;
+    }
+    // Current decaying shake offset (zero when no shake active). Pseudo-
+    // random but deterministic per-frame via the clock, so it reads as a
+    // jitter rather than a smooth slide.
+    ImVec2 shakeOffset() const {
+        if (m_shakeStart < 0.0) return {0.f, 0.f};
+        double t = (ImGui::GetTime() - m_shakeStart) / m_shakeDur;
+        if (t >= 1.0 || t < 0.0) return {0.f, 0.f};
+        float decay = 1.f - (float)t;
+        float ph = (float)(ImGui::GetTime() * 53.0);
+        float ox = std::sin(ph * 1.7f) * m_shakeMag * decay;
+        float oy = std::cos(ph * 2.3f) * m_shakeMag * decay;
+        return {ox, oy};
     }
 
     // ── Per-frame render ──────────────────────────────────────────────────
@@ -147,8 +244,58 @@ public:
                 dl->AddText( p,                    col, it.text);
                 break;
             }
+            case Anim::CardTrail: {
+                // Ghost card gliding a → b with an ease-out path + fading
+                // trail dots behind it. Card aspect 421:614.
+                float e  = 1.f - (1.f - (float)t) * (1.f - (float)t);  // ease-out
+                ImVec2 c { it.a.x + (it.b.x - it.a.x) * e,
+                           it.a.y + (it.b.y - it.a.y) * e };
+                float cw = 26.f, ch = cw * (614.f / 421.f);
+                ImVec2 p0 { c.x - cw * 0.5f, c.y - ch * 0.5f };
+                ImVec2 p1 { c.x + cw * 0.5f, c.y + ch * 0.5f };
+                // Trailing dots.
+                for (int k = 1; k <= 3; ++k) {
+                    float tk = e - k * 0.06f; if (tk < 0.f) continue;
+                    ImVec2 tc { it.a.x + (it.b.x - it.a.x) * tk,
+                                it.a.y + (it.b.y - it.a.y) * tk };
+                    dl->AddCircleFilled(tc, 4.f - k,
+                        withAlpha(it.color, (unsigned)(120 * a / k)), 12);
+                }
+                if (it.tex) {
+                    dl->AddImageRounded((ImTextureID)it.tex, p0, p1,
+                        {0,0}, {1,1},
+                        withAlpha(IM_COL32_WHITE, (unsigned)(235 * a)), 3.f);
+                } else {
+                    dl->AddRectFilled(p0, p1,
+                        withAlpha(it.color, (unsigned)(200 * a)), 3.f);
+                }
+                dl->AddRect(p0, p1,
+                    withAlpha(it.color, (unsigned)(235 * a)), 3.f, 0, 1.5f);
+                break;
+            }
+            case Anim::Banner:
+            case Anim::BossCard:
+                // Overlay types — drawn by renderTop() on the foreground
+                // list so they sit above the info panel + zones. Skipped
+                // here, but still evicted by the t>=1 check above.
+                break;
             }
             ++i;
+        }
+    }
+
+    // ── Overlay render — banner + boss entrance on the foreground list ────
+    // Called by UI after the field paint with ImGui::GetForegroundDrawList()
+    // and the duel-window top-left origin. Does NOT evict (render() owns the
+    // lifetime); it only draws the still-alive Banner / BossCard items.
+    void renderTop(ImDrawList* dl, ImVec2 winTL) {
+        if (!dl) return;
+        const double now = ImGui::GetTime();
+        for (const Anim& it : m_items) {
+            double t = (it.dur > 0.0) ? (now - it.start) / it.dur : 1.0;
+            if (t < 0.0 || t >= 1.0) continue;
+            if (it.type == Anim::Banner)   drawBanner(dl, winTL, it, t);
+            else if (it.type == Anim::BossCard) drawBoss(dl, winTL, it, t);
         }
     }
 
@@ -164,8 +311,141 @@ private:
         if (a > 255) a = 255;
         return (col & 0x00FFFFFFu) | (a << 24);
     }
-    void push(const Anim& a) { m_items.push_back(a); cap(); }
+    // Single choke point: applies the speed / reduce-motion scaling to EVERY
+    // queued animation (existing emitters + new ones) so settings take effect
+    // without touching individual call sites. Master-disable drops the push.
+    void push(Anim a) {
+        if (!m_cfg.enabled) return;
+        float sp = m_cfg.speed;
+        if (sp <= 0.f)            a.dur = 0.001;          // instant
+        else {
+            a.dur /= (double)sp;
+            if (m_cfg.reduceMotion) a.dur *= 0.55;        // shorter fades
+        }
+        m_items.push_back(a); cap();
+    }
 
+    // ── Banner: centre phase plate, slide-in / hold / fade-out ────────────
+    void drawBanner(ImDrawList* dl, ImVec2 winTL, const Anim& it, double t) {
+        float W = it.a.x, H = it.a.y;
+        // Envelope: 0-.16 slide+fade in, .16-.66 hold, .66-1 fade out.
+        float alpha, slide;
+        if (t < 0.16)      { float k = (float)(t / 0.16); alpha = k; slide = (1.f - k) * 60.f; }
+        else if (t < 0.66) { alpha = 1.f; slide = 0.f; }
+        else               { float k = (float)((t - 0.66) / 0.34); alpha = 1.f - k; slide = -k * 40.f; }
+        if (alpha < 0.f) alpha = 0.f;
+        float cx = winTL.x + W * 0.5f + slide;
+        float cy = winTL.y + H * 0.42f;
+        const float bw = 460.f, bh = 64.f;
+        ImVec2 a { cx - bw * 0.5f, cy - bh * 0.5f };
+        ImVec2 b { cx + bw * 0.5f, cy + bh * 0.5f };
+        // Wide soft glow band behind the plate.
+        dl->AddRectFilled({winTL.x, a.y - 6.f}, {winTL.x + W, b.y + 6.f},
+            withAlpha(it.color, (unsigned)(26 * alpha)), 0.f);
+        // Plate: dark glass with a coloured gradient core.
+        dl->AddRectFilled(a, b, withAlpha(IM_COL32(10, 13, 24, 255),
+                          (unsigned)(220 * alpha)), 10.f);
+        dl->AddRectFilledMultiColor(
+            {a.x, a.y}, {b.x, b.y},
+            withAlpha(it.color, (unsigned)(38 * alpha)),
+            withAlpha(it.color, (unsigned)(10 * alpha)),
+            withAlpha(it.color, (unsigned)(10 * alpha)),
+            withAlpha(it.color, (unsigned)(38 * alpha)));
+        dl->AddRect(a, b, withAlpha(it.color, (unsigned)(235 * alpha)),
+                    10.f, 0, 1.8f);
+        // Accent bars left + right of the text.
+        dl->AddRectFilled({a.x + 14.f, cy - 1.f}, {a.x + 52.f, cy + 1.f},
+            withAlpha(it.color, (unsigned)(220 * alpha)), 1.f);
+        dl->AddRectFilled({b.x - 52.f, cy - 1.f}, {b.x - 14.f, cy + 1.f},
+            withAlpha(it.color, (unsigned)(220 * alpha)), 1.f);
+        // Big phase text, centred.
+        ImFont* font = ImGui::GetFont();
+        float fsz = 30.f;
+        ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, it.text);
+        ImVec2 tp { cx - ts.x * 0.5f, cy - ts.y * 0.5f };
+        dl->AddText(font, fsz, {tp.x + 2.f, tp.y + 2.f},
+            withAlpha(IM_COL32(0,0,0,255), (unsigned)(180 * alpha)), it.text);
+        dl->AddText(font, fsz, tp,
+            withAlpha(IM_COL32(248, 240, 220, 255),
+                      (unsigned)(255 * alpha)), it.text);
+    }
+
+    // ── BossCard: dim field + energy rings + enlarged card + type label ───
+    void drawBoss(ImDrawList* dl, ImVec2 winTL, const Anim& it, double t) {
+        float W = it.a.x, H = it.a.y;
+        // Envelope: 0-.18 rise+grow, .18-.62 hold, .62-1 settle toward zone.
+        float alpha, scale;
+        ImVec2 center { winTL.x + W * 0.5f, winTL.y + H * 0.46f };
+        if (t < 0.18)      { float k = (float)(t / 0.18); alpha = k; scale = 0.6f + 0.4f * k; }
+        else if (t < 0.62) { alpha = 1.f; scale = 1.0f; }
+        else {
+            float k = (float)((t - 0.62) / 0.38);
+            alpha = 1.f - k * 0.85f;
+            scale = 1.0f - 0.45f * k;
+            // Drift toward the destination zone as it shrinks.
+            center.x += (it.b.x - center.x) * k * 0.8f;
+            center.y += (it.b.y - center.y) * k * 0.8f;
+        }
+        if (alpha < 0.f) alpha = 0.f;
+        // Field dim.
+        dl->AddRectFilled({winTL.x, winTL.y}, {winTL.x + W, winTL.y + H},
+            withAlpha(IM_COL32(2, 4, 10, 255), (unsigned)(150 * alpha)), 0.f);
+        // Energy rings expanding behind the card.
+        for (int r = 0; r < 4; ++r) {
+            float rad = (70.f + r * 46.f) * (0.7f + 0.5f * (float)t);
+            dl->AddCircle(center, rad,
+                withAlpha(it.color, (unsigned)((90 - r * 18) * alpha)),
+                48, 2.2f);
+        }
+        // Radiating particle dots.
+        for (int p = 0; p < 16; ++p) {
+            float ang = (float)p / 16.f * 6.2831853f + (float)t * 1.4f;
+            float rr  = 120.f + 90.f * (float)t;
+            ImVec2 dp { center.x + std::cos(ang) * rr,
+                        center.y + std::sin(ang) * rr };
+            dl->AddCircleFilled(dp, 2.4f,
+                withAlpha(it.color, (unsigned)(180 * alpha)), 8);
+        }
+        // Enlarged card (aspect 421:614).
+        float ch = H * 0.52f * scale;
+        float cw = ch * (421.f / 614.f);
+        ImVec2 p0 { center.x - cw * 0.5f, center.y - ch * 0.5f };
+        ImVec2 p1 { center.x + cw * 0.5f, center.y + ch * 0.5f };
+        // Glow halo behind the card.
+        for (int g = 3; g >= 1; --g) {
+            float e = (float)g * 6.f;
+            dl->AddRectFilled({p0.x - e, p0.y - e}, {p1.x + e, p1.y + e},
+                withAlpha(it.color, (unsigned)((28 / g) * alpha)), 8.f + e);
+        }
+        dl->AddRectFilled({p0.x + 4.f, p0.y + 6.f}, {p1.x + 4.f, p1.y + 6.f},
+            withAlpha(IM_COL32(0,0,0,255), (unsigned)(150 * alpha)), 6.f);
+        if (it.tex)
+            dl->AddImageRounded((ImTextureID)it.tex, p0, p1, {0,0}, {1,1},
+                withAlpha(IM_COL32_WHITE, (unsigned)(255 * alpha)), 5.f);
+        else
+            dl->AddRectFilled(p0, p1,
+                withAlpha(IM_COL32(30, 40, 70, 255),
+                          (unsigned)(235 * alpha)), 5.f);
+        dl->AddRect(p0, p1, withAlpha(it.color, (unsigned)(245 * alpha)),
+                    5.f, 0, 2.4f);
+        // Summon-type label above the card.
+        if (it.text[0]) {
+            ImFont* font = ImGui::GetFont();
+            float fsz = 26.f;
+            ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, it.text);
+            ImVec2 tp { center.x - ts.x * 0.5f, p0.y - ts.y - 12.f };
+            dl->AddText(font, fsz, {tp.x + 2.f, tp.y + 2.f},
+                withAlpha(IM_COL32(0,0,0,255), (unsigned)(180 * alpha)),
+                it.text);
+            dl->AddText(font, fsz, tp,
+                withAlpha(it.color, (unsigned)(255 * alpha)), it.text);
+        }
+    }
+
+    AnimConfig        m_cfg;
+    double            m_shakeStart = -1.0;
+    double            m_shakeDur   = 0.3;
+    float             m_shakeMag   = 7.f;
     std::vector<Anim> m_items;
 };
 
