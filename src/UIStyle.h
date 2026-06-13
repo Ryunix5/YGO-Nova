@@ -50,6 +50,13 @@ extern ImFont* fSmall;   // ~13px metadata
 void  PushFont(ImFont* f);
 void  PopFont();
 
+// ── Global theme ─────────────────────────────────────────────────────────────
+// Writes the EdoPro+ palette into ImGui::GetStyle() so every RAW ImGui widget
+// (combos, inputs, checkboxes, sliders, scrollbars, popup modals, tooltips,
+// selectables, tabs) matches the custom-drawn chrome. Idempotent — call once
+// at startup (UI::draw applies it lazily on the first frame).
+void ApplyTheme();
+
 // ── Background / panel pieces (use ImDrawList directly) ─────────────────────
 // Fullscreen subtle gradient backdrop used by the lobby / deck builder / duel
 // background. Drawn to the foreground or background list depending on caller.
@@ -61,6 +68,29 @@ void DrawPanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
                float rounding = 0.f, bool shadow = true);
 // Sub-panel variant for inner sections (raised surface, lighter border).
 void DrawRaisedPanel(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding = 0.f);
+// Translucent "glass" surface: tinted gradient fill + top sheen + hairline
+// border. `tint` 0 uses the default glass colour. The duel HUD, overlays and
+// floating panels share this so the whole app reads as one material.
+void DrawGlassPanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
+                    float rounding = 0.f, ImU32 tint = 0);
+// Layered soft glow ring around a rect — state accents (active phase pill,
+// legal zone, primary button hover). `layers` controls spread (2-4 typical).
+void DrawGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color,
+              float rounding, int layers = 3);
+// Horizontal hairline divider with vertical padding, layout-aware.
+void DrawDivider(float padTop = 6.f, float padBot = 6.f);
+
+// ── Composite interactive pieces ─────────────────────────────────────────────
+// HUD pill — rounded chip-button used by phase bars and badge rows. Active
+// state fills gold with a soft glow; inactive is a dark glass chip.
+bool HudPill(const char* label, bool active, bool enabled,
+             ImVec2 sz = {0.f, 0.f});
+// Action card — a selectable row with a bright title and fully-wrapped
+// description underneath (prompt/effect/chain choices). Height adapts to the
+// wrapped text so long effect text is never cut off. Returns true on click;
+// *outHovered reports hover for preview wiring.
+bool ActionCard(const char* id, const char* title, const char* desc,
+                float width, bool* outHovered = nullptr);
 
 // ── Headings / text helpers ─────────────────────────────────────────────────
 void TitleText (const char* text);                  // big accent title

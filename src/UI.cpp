@@ -67,44 +67,10 @@ static const char* waitTypeHuman(uint32_t wt) {
 static bool PromptChoiceRow(const char* id, const std::string& title,
                             const std::string& desc, float width,
                             bool* outHovered = nullptr) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    const float padX = 12.f, padY = 9.f, gap = 4.f;
-    float innerW = width - 2.f * padX;
-    if (innerW < 60.f) innerW = 60.f;
-    ImVec2 tSz = ImGui::CalcTextSize(title.c_str(), nullptr, false, innerW);
-    ImVec2 dSz = desc.empty()
-        ? ImVec2{0.f, 0.f}
-        : ImGui::CalcTextSize(desc.c_str(), nullptr, false, innerW);
-    float h = padY * 2.f + tSz.y + (desc.empty() ? 0.f : (gap + dSz.y));
-    if (h < 40.f) h = 40.f;
-
-    bool clicked = ImGui::InvisibleButton(id, {width, h});
-    bool hov     = ImGui::IsItemHovered();
-    bool held    = ImGui::IsItemActive();
-    if (outHovered) *outHovered = hov;
-
-    ImU32 bg = held ? IM_COL32(62, 70, 116, 255)
-             : hov  ? IM_COL32(48, 56, 98, 255)
-                    : IM_COL32(30, 36, 64, 255);
-    ImU32 border = hov ? IM_COL32(255, 214, 108, 230)
-                       : IM_COL32(74, 88, 138, 190);
-    dl->AddRectFilled(pos, {pos.x + width, pos.y + h}, bg, 7.f);
-    dl->AddRect(pos, {pos.x + width, pos.y + h}, border, 7.f, 0,
-                hov ? 1.8f : 1.f);
-    // Subtle left accent bar so rows read as selectable cards.
-    dl->AddRectFilled({pos.x, pos.y + 6.f}, {pos.x + 3.f, pos.y + h - 6.f},
-                      hov ? IM_COL32(255, 214, 108, 255)
-                          : IM_COL32(110, 126, 180, 200), 2.f);
-    dl->AddText(nullptr, 0.f, {pos.x + padX, pos.y + padY},
-                IM_COL32(255, 232, 160, 255), title.c_str(), nullptr, innerW);
-    if (!desc.empty())
-        dl->AddText(nullptr, 0.f,
-                    {pos.x + padX, pos.y + padY + tSz.y + gap},
-                    IM_COL32(198, 206, 226, 255), desc.c_str(), nullptr,
-                    innerW);
-    ImGui::Dummy({1.f, 6.f});                 // inter-row gap
-    return clicked;
+    // Thin wrapper over the design-system ActionCard so every choice list
+    // in the app (effect options, chain picks, viewers) shares one look.
+    return UIStyle::ActionCard(id, title.c_str(), desc.c_str(),
+                               width, outHovered);
 }
 
 static const char* phaseHuman(uint16_t ph) {
@@ -2645,6 +2611,12 @@ void UI::finalizeReplay(const std::string& reason) {
 
 // ─── Top-level draw ───────────────────────────────────────────────────────────
 bool UI::draw(int winW, int winH) {
+    // Apply the EdoPro+ global theme once — skins every raw ImGui widget
+    // (combos, inputs, checkboxes, sliders, popups, scrollbars, tooltips)
+    // so the whole app shares the custom chrome's visual language.
+    static bool s_themeApplied = false;
+    if (!s_themeApplied) { UIStyle::ApplyTheme(); s_themeApplied = true; }
+
     // Drain any network messages BEFORE rendering this frame's screen.
     // EngineResponse arrivals may unblock the engine; handling them here
     // means drawDuel sees the freshest selection state.
@@ -3407,11 +3379,14 @@ void UI::drawLobby(int w, int h) {
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoSavedSettings)) {
 
-        ImGui::TextColored(COL_ACCENT, "Duel Setup");
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
+        ImGui::TextUnformatted("Duel Setup");
+        ImGui::PopStyleColor();
+        UIStyle::PopFont();
         ImGui::TextDisabled("Pick a deck for each side, then start the duel.");
-        ImGui::Dummy({1.f, 6.f});
-        ImGui::Separator();
-        ImGui::Dummy({1.f, 6.f});
+        UIStyle::DrawDivider(6.f, 6.f);
 
         auto deckPicker = [&](const char* title, const char* badge,
                               int& idx, char* pathBuf, size_t pathSz) {
@@ -3498,21 +3473,27 @@ void UI::drawLobby(int w, int h) {
 // duel paused or finished). When the field is "just sitting there", the
 // overlay is hidden and the field gets the full freed width.
 void UI::drawDuel(int w, int h) {
-    // Slim HUD chrome — every pixel trimmed here goes straight into the
-    // board (the field's zone size is height-limited on 16:9 screens).
-    const float TOP_H       = 50.f;
-    const float ACT_H       = 56.f;      // bottom strip: phase + Pass + status
-    const float BOT_H       = 28.f;      // Log/Tools drawer buttons
-    const float MID_H       = (float)h - TOP_H - ACT_H - BOT_H;
-    // Right card-info panel is a FLOATING OVERLAY: it reserves NO layout
-    // width and never participates in field geometry. The field spans the
-    // FULL window width and the arena centres on the true window centre —
-    // exactly like a real simulator. INFO_W only sizes the overlay (it
-    // collapses on very narrow windows to keep the board playable).
+    // ── computeDuelLayout — the duel screen's named rects ───────────────
+    // Exactly THREE layout bands plus floating overlays; nothing else may
+    // reserve width or height:
+    //   windowRect        = (0, 0, w, h)
+    //   topHudRect        = (0, 0, w, TOP_H)            turn/phase/badges
+    //   arenaRect         = (0, TOP_H, w, h - ACT_H)    field child, FULL w
+    //   bottomCommandRect = (0, h - ACT_H, w, h)        hints/Pass/phases
+    //   rightInfoPanelRect= floating glass overlay at (w-INFO_W-16, TOP_H+12)
+    //                       — reserves NO layout width, never shifts the
+    //                       arena. Collapses on narrow windows.
+    //   log / tools       = floating drawers toggled from the command bar;
+    //                       they reserve no layout space either.
+    //   visibleFieldRect / handRects / lpPanelRects are derived inside
+    //   drawField from the zone grid and cached in the m_rect* members.
+    // The old permanent bottom "testing bar" strip is GONE — its 28 px now
+    // belong to the arena, and Log/Tools live as ghost buttons in the
+    // command bar's right corner.
+    const float TOP_H       = 54.f;
+    const float ACT_H       = 56.f;
+    const float MID_H       = (float)h - TOP_H - ACT_H;     // arena height
     const float INFO_W      = ((float)w >= 1100.f) ? 330.f : 0.f;
-    // The permanent left log column is GONE — logs live in a floating
-    // drawer toggled from the bottom bar ("Log"). Centered modals float
-    // over the field when needed; they never reserve layout width either.
     const float FLD_W       = (float)w;
 
     // One-shot layout audit (re-logged when the geometry changes).
@@ -4061,65 +4042,20 @@ void UI::drawDuel(int w, int h) {
     // isDuelVisiblyRunning(), not m_dm.isRunning(), or the client's phase
     // bar would never highlight anything.
     bool phasesLive = isDuelVisiblyRunning() && !m_dm.isDone();
-    // Phase pills — centred over the field area. Custom-drawn so the active
-    // pill gets a gold fill + soft glow ring and inactive pills use the same
-    // glass-panel aesthetic as the rest of the HUD.
+    // Phase pills — centred over the field area, drawn with the design-
+    // system HudPill so the bar shares one look with every other chip row.
     const float pillW = 62.f, pillH = 28.f, pillGap = 5.f;
     const float pillRowW = 6.f * pillW + 5.f * pillGap;
     float pillX = (FLD_W - pillRowW) * 0.5f;
     if (pillX < 340.f) pillX = 340.f;
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 wp = ImGui::GetWindowPos();
-        float py = wp.y + (TOP_H - pillH) * 0.5f;
-        float px = wp.x + pillX;
-        for (int pi = 0; pi < 6; ++pi) {
-            auto& ph = kPhases[pi];
-            bool active = phasesLive && (f.phase == ph.ph);
-            ImVec2 a = {px + pi * (pillW + pillGap), py};
-            ImVec2 b = {a.x + pillW, a.y + pillH};
-            float  r = 7.f;
-            // Soft outer glow for active pill.
-            if (active) {
-                for (int g = 3; g >= 1; --g) {
-                    float exp = (float)g * 2.5f;
-                    dl->AddRectFilled({a.x - exp, a.y - exp},
-                                      {b.x + exp, b.y + exp},
-                                      IM_COL32(255, 210, 80, 22 - g * 5),
-                                      r + exp);
-                }
-            }
-            // Fill.
-            ImU32 fill = active ? IM_COL32(220, 174, 64, 255)
-                                : IM_COL32(20, 26, 44, 230);
-            dl->AddRectFilled(a, b, fill, r);
-            // Top highlight shimmer.
-            dl->AddRectFilledMultiColor(a, {b.x, a.y + pillH * 0.5f},
-                IM_COL32(255,255,255, active ? 38 : 16),
-                IM_COL32(255,255,255, active ? 38 : 16),
-                IM_COL32(255,255,255, 0), IM_COL32(255,255,255, 0));
-            // Border.
-            ImU32 bord = active ? IM_COL32(255, 230, 130, 240)
-                                : IM_COL32(72, 88, 132, 180);
-            dl->AddRect(a, b, bord, r, 0, active ? 1.6f : 1.f);
-            // Label text.
-            UIStyle::PushFont(UIStyle::fSmall);
-            ImVec2 ts = ImGui::CalcTextSize(ph.name);
-            ImU32 textCol = active ? IM_COL32(18, 12, 2, 255)
-                                   : IM_COL32(148, 160, 190, 255);
-            dl->AddText({a.x + (pillW - ts.x) * 0.5f,
-                         a.y + (pillH - ts.y) * 0.5f},
-                        textCol, ph.name);
-            UIStyle::PopFont();
-            // Gold underline dot for active.
-            if (active)
-                dl->AddRectFilled({a.x + pillW*0.3f, b.y + 3.f},
-                                  {a.x + pillW*0.7f, b.y + 5.f},
-                                  IM_COL32(255, 220, 100, 200), 1.f);
-        }
+    ImGui::SetCursorPos({pillX, (TOP_H - pillH) * 0.5f});
+    for (int pi = 0; pi < 6; ++pi) {
+        bool active = phasesLive && (f.phase == kPhases[pi].ph);
+        UIStyle::HudPill(kPhases[pi].name, active, true, {pillW, pillH});
+        if (pi < 5) ImGui::SameLine(0.f, pillGap);
     }
-    // Advance cursor past the pills so the SameLine / top-right buttons work.
-    ImGui::SetCursorPos({pillX + pillRowW + 4.f, (TOP_H - pillH) * 0.5f});
+    // Park the cursor after the pill row for the top-right button cluster.
+    ImGui::SameLine(0.f, 4.f);
 
     // ── Top-right button (Lobby in live, Exit Replay in playback) ─────────
     // Right-aligned. In replay mode the button needs to be interactive even
@@ -4133,7 +4069,7 @@ void UI::drawDuel(int w, int h) {
     ImGui::SameLine(topRightX < 0.f ? 0.f : topRightX, 0.f);
     if (m_replayMode) {
         ImGui::EndDisabled();
-        if (ImGui::Button("Exit Replay##back", {112.f, 28.f})) {
+        if (UIStyle::GhostButton("Exit Replay##back", {112.f, 28.f})) {
             stopReplayPlayback();
             m_screen = Screen::Replays;
             m_replayFiles = edo::Replay::list();
@@ -4143,7 +4079,7 @@ void UI::drawDuel(int w, int h) {
         }
         ImGui::BeginDisabled();        // restore matching state for outer
     } else {
-        if (ImGui::Button("Lobby##back", {72.f, 28.f})) {
+        if (UIStyle::GhostButton("Lobby##back", {72.f, 28.f})) {
             finalizeReplay("returned to lobby");
             m_dm.endDuel();
             m_screen = Screen::Lobby;
@@ -4372,21 +4308,29 @@ void UI::drawDuel(int w, int h) {
     drawBottomActionStrip(w, ACT_H);
     ImGui::EndChild();
 
-    // ── Bottom: Testing bar ───────────────────────────────────────────────────
-    ImGui::SetCursorPosY(TOP_H + MID_H + ACT_H);
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 wp = ImGui::GetWindowPos();
-        float by = wp.y + TOP_H + MID_H + ACT_H;
-        dl->AddRectFilled({wp.x, by}, {wp.x + w, by + BOT_H},
-                          IM_COL32(6, 8, 16, 255));
-        dl->AddLine({wp.x, by}, {wp.x + w, by},
-                    IM_COL32(40, 50, 90, 200));
+    // ── Floating Tools drawer ────────────────────────────────────────────
+    // Replaces the old permanent bottom testing strip. Opens from the
+    // "Tools" ghost button in the command bar; floats over the field's
+    // bottom-right corner and reserves no layout space. All debug/testing
+    // toggles live here, fully out of sight during normal play.
+    if (m_toolsDrawerOpen) {
+        const float TOOLS_W = 280.f;
+        ImGui::SetNextWindowPos({(float)w - TOOLS_W - 12.f,
+                                 TOP_H + MID_H - 392.f});
+        ImGui::SetNextWindowSize({TOOLS_W, 380.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.05f, 0.06f, 0.11f, 0.97f});
+        ImGui::PushStyleColor(ImGuiCol_Border,   {0.40f, 0.48f, 0.78f, 0.85f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.2f);
+        ImGui::Begin("##tools_drawer", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize  | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings);
+        drawTestingBar(w);
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
     }
-    ImGui::BeginChild("##testing_child", {(float)w, BOT_H}, false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    drawTestingBar(w);
-    ImGui::EndChild();
 
     ImGui::End();
 
@@ -4411,7 +4355,7 @@ void UI::drawDuel(int w, int h) {
         const float CTRL_W = 720.f;
         const float CTRL_H = 56.f;
         float cx = ((float)w - CTRL_W) * 0.5f;
-        float cy = (float)h - BOT_H - ACT_H - CTRL_H - 8.f;
+        float cy = (float)h - ACT_H - CTRL_H - 8.f;
         if (cy < (float)h * 0.55f) cy = (float)h * 0.55f;
         ImGui::SetNextWindowPos({cx, cy}, ImGuiCond_Always);
         ImGui::SetNextWindowSize({CTRL_W, CTRL_H}, ImGuiCond_Always);
@@ -5255,7 +5199,7 @@ void UI::drawField(int fw, int fh) {
     // Hand rows now nearly zone-height: hand cards are the main thing the
     // player reads and clicks, so they get real screen estate (the cards
     // themselves stay aspect-true inside the slot via fitCard).
-    const float HAND_FR     = 0.92f;
+    const float HAND_FR     = 0.96f;
 
     // Compact LP overlays — slightly generous so LP numbers are easy to read
     // and the health bar has a meaningful size.
@@ -5275,7 +5219,7 @@ void UI::drawField(int fw, int fh) {
     zW = zH * (421.f / 614.f);
     // Soft cap on the zone size — generous so large windows get a big,
     // readable board; the height limit clamps below this on most screens.
-    if (zW > 215.f) { zW = 215.f; zH = zW * (614.f / 421.f); }
+    if (zW > 232.f) { zW = 232.f; zH = zW * (614.f / 421.f); }
 
     float hH = zH * HAND_FR;
 
@@ -5987,18 +5931,26 @@ void UI::drawField(int fw, int fh) {
                     m_hoveredCard=c.code;
                     setInfoCtx(c.player, (uint8_t)c.loc, c.seq, c.pos);
                     // Hover lift — re-draw the card slightly larger and
-                    // raised with a shadow so the hand feels tactile.
+                    // raised with a shadow so the hand feels tactile. The
+                    // outline + glow colour reflects the card's state:
+                    // magenta = chain candidate, gold = legal action,
+                    // cyan = plain hover (local-player accent).
                     if (tex) {
-                        float lw = (hbr.x - hp.x) * 0.05f;
-                        float lh = (hbr.y - hp.y) * 0.05f;
-                        ImVec2 la = {hp.x - lw,  hp.y - lh - 7.f};
-                        ImVec2 lb = {hbr.x + lw, hbr.y + lh - 7.f};
-                        dl->AddRectFilled({la.x + 3.f, la.y + 5.f},
-                                          {lb.x + 3.f, lb.y + 5.f},
-                                          IM_COL32(0, 0, 0, 150), 5.f);
+                        float lw = (hbr.x - hp.x) * 0.06f;
+                        float lh = (hbr.y - hp.y) * 0.06f;
+                        ImVec2 la = {hp.x - lw,  hp.y - lh - 9.f};
+                        ImVec2 lb = {hbr.x + lw, hbr.y + lh - 9.f};
+                        ImU32 stateCol =
+                            hChainHere ? IM_COL32(255, 120, 240, 235)
+                          : hasLegalActionFor(c.player, (uint8_t)c.loc, c.seq)
+                                       ? IM_COL32(255, 206, 100, 235)
+                                       : IM_COL32(140, 215, 255, 235);
+                        UIStyle::DrawGlow(dl, la, lb, stateCol, 5.f, 3);
+                        dl->AddRectFilled({la.x + 3.f, la.y + 6.f},
+                                          {lb.x + 3.f, lb.y + 6.f},
+                                          IM_COL32(0, 0, 0, 160), 5.f);
                         dl->AddImage((ImTextureID)tex, la, lb);
-                        dl->AddRect(la, lb, IM_COL32(180,210,255,235),
-                                    5.f, 0, 2.f);
+                        dl->AddRect(la, lb, stateCol, 5.f, 0, 2.f);
                     } else {
                         dl->AddRect(hp,hbr,IM_COL32(180,210,255,230),5.f,0,2.f);
                     }
@@ -7226,7 +7178,27 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
         }
     }
 
-    // ── Right-aligned phase buttons ──────────────────────────────────────────
+    // ── Right corner: Log / Tools ghost buttons (always present) ────────────
+    // The permanent dev strip is gone; these two small ghosts are the only
+    // trace of it in normal play. Phase buttons sit to their left.
+    const float kGhostW  = 52.f;
+    const float kGhostRsv = 2.f * (kGhostW + 4.f) + 8.f;
+    {
+        float winW = ImGui::GetWindowContentRegionMax().x;
+        ImGui::SameLine(winW - kGhostRsv, 0.f);
+        ImGui::SetCursorPosY(10.f);
+        if (UIStyle::GhostButton(m_logDrawerOpen ? "Log *##logbtn"
+                                                 : "Log##logbtn",
+                                 {kGhostW, 30.f}))
+            m_logDrawerOpen = !m_logDrawerOpen;
+        ImGui::SameLine(0.f, 4.f);
+        if (UIStyle::GhostButton(m_toolsDrawerOpen ? "Tools*##tools"
+                                                   : "Tools##tools",
+                                 {kGhostW, 30.f}))
+            m_toolsDrawerOpen = !m_toolsDrawerOpen;
+    }
+
+    // ── Right-aligned phase buttons (left of the ghost corner) ──────────────
     const float kBtnW = 136.f;
     int nBtn = 0;
     if (inIdle   && sel.toBP) ++nBtn;
@@ -7234,8 +7206,9 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
     if ((inIdle || inBattle) && sel.toEP) ++nBtn;
     if (nBtn > 0) {
         float winW = ImGui::GetWindowContentRegionMax().x;
-        float rightX = winW - 8.f - nBtn * (kBtnW + 6.f);
+        float rightX = winW - kGhostRsv - 10.f - nBtn * (kBtnW + 6.f);
         ImGui::SameLine(rightX < 0.f ? 0.f : rightX, 0.f);
+        ImGui::SetCursorPosY(10.f);
         if (inIdle && sel.toBP) {
             if (UIStyle::SecondaryButton("Battle Phase##bp", {kBtnW, 36.f}))
                 submitIdleCmd(6, 0, "Battle Phase");
@@ -7525,6 +7498,28 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     float mx = ((float)screenW - MW) * 0.5f;
     float my = ((float)screenH - MH) * 0.5f;
 
+    // Dim the duel underneath so the modal reads as the only live surface.
+    // A fullscreen pass-through window submitted just BEFORE the modal —
+    // renders above the field (later submission) but below the modal.
+    // NoInputs keeps field interactivity identical to the previous build;
+    // the dim is purely visual.
+    {
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({(float)screenW, (float)screenH});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.f, 0.f, 0.f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_Border,   {0.f, 0.f, 0.f, 0.f});
+        ImGui::Begin("##modal_dim", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize  | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoInputs  | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
+        UIStyle::DrawModalBackdrop(ImGui::GetWindowDrawList(),
+                                   {0.f, 0.f},
+                                   {(float)screenW, (float)screenH});
+        ImGui::End();
+        ImGui::PopStyleColor(2);
+    }
+
     ImGui::SetNextWindowPos({mx, my});
     ImGui::SetNextWindowSize({MW, MH});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.085f, 0.095f, 0.17f, 0.985f});
@@ -7536,6 +7531,14 @@ void UI::drawCenteredModal(int screenW, int screenH) {
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize  | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoSavedSettings);
+    // Gold accent hairline along the modal's top edge.
+    {
+        ImDrawList* mdl = ImGui::GetWindowDrawList();
+        ImVec2 wp = ImGui::GetWindowPos();
+        mdl->AddRectFilled({wp.x + 10.f, wp.y},
+                           {wp.x + MW - 10.f, wp.y + 2.f},
+                           IM_COL32(232, 182, 72, 200), 1.f);
+    }
     drawSelectionPanel((int)MW, (int)MH);
     ImGui::End();
     ImGui::PopStyleVar(3);
@@ -7585,8 +7588,8 @@ void UI::drawCardInfoPanel(int w, int /*h*/) {
     uint32_t code = m_hoveredCard ? m_hoveredCard
                                   : (m_selCode ? m_selCode : 0u);
     if (code == 0) {
-        ImGui::TextColored(COL_ACCENT, "Card Info");
-        ImGui::Separator();
+        UIStyle::Heading("Card Info");
+        UIStyle::DrawDivider(2.f, 6.f);
         // A hovered prompt option without a source card (system/hint
         // option) still gets its full text shown here.
         if ((ImGui::GetFrameCount() - m_promptHoverFrame) <= 2 &&
@@ -7600,10 +7603,23 @@ void UI::drawCardInfoPanel(int w, int /*h*/) {
             ImGui::TextWrapped("%s", m_promptHoverText.c_str());
             ImGui::PopTextWrapPos();
         } else {
-            ImGui::Dummy({1.f, 14.f});
-            ImGui::PushTextWrapPos(pad + bw);
-            ImGui::TextDisabled("Hover a card to view details.");
-            ImGui::PopTextWrapPos();
+            // Empty state — a faint card-silhouette placeholder so the
+            // panel reads as intentional, not broken.
+            float phH = 180.f, phW = phH * (421.f / 614.f);
+            float phx = pad + (bw - phW) * 0.5f;
+            ImGui::Dummy({1.f, 24.f});
+            ImGui::SetCursorPosX(phx);
+            ImVec2 tl = ImGui::GetCursorScreenPos();
+            ImDrawList* pdl = ImGui::GetWindowDrawList();
+            pdl->AddRect(tl, {tl.x + phW, tl.y + phH},
+                         IM_COL32(70, 86, 130, 110), 6.f, 0, 1.2f);
+            pdl->AddLine({tl.x + phW * 0.30f, tl.y + phH * 0.5f},
+                         {tl.x + phW * 0.70f, tl.y + phH * 0.5f},
+                         IM_COL32(70, 86, 130, 90), 1.f);
+            ImGui::Dummy({1.f, phH + 14.f});
+            ImVec2 hs = ImGui::CalcTextSize("Hover a card to view details");
+            ImGui::SetCursorPosX(pad + (bw - hs.x) * 0.5f);
+            ImGui::TextDisabled("Hover a card to view details");
         }
         ImGui::EndGroup();
         return;
@@ -7619,30 +7635,37 @@ void UI::drawCardInfoPanel(int w, int /*h*/) {
     }
 
     // ── Card art (fixed box so the panel never reflows) ───────────────
-    // Framed: soft drop shadow + hairline border so the art reads as a
-    // mounted card, consistent with the modernized field tiles.
+    // Mounted-card frame: soft ambient glow + drop shadow + double border.
     {
-        const float imgH = 220.f;
+        const float imgH = 226.f;
         const float imgW = imgH * (421.f / 614.f);
         float ix = pad + (bw - imgW) * 0.5f;
         ImGui::SetCursorPosX(ix);
         ImVec2 tl = ImGui::GetCursorScreenPos();
         ImVec2 brI = {tl.x + imgW, tl.y + imgH};
         ImDrawList* pdl = ImGui::GetWindowDrawList();
-        pdl->AddRectFilled({tl.x + 3.f, tl.y + 4.f},
-                           {brI.x + 3.f, brI.y + 4.f},
-                           IM_COL32(0, 0, 0, 120), 4.f);
+        UIStyle::DrawGlow(pdl, tl, brI, IM_COL32(90, 130, 220, 130), 4.f, 2);
+        pdl->AddRectFilled({tl.x + 3.f, tl.y + 5.f},
+                           {brI.x + 3.f, brI.y + 5.f},
+                           IM_COL32(0, 0, 0, 140), 4.f);
         void* tex = m_rend.getCardTexture(code);
         if (tex) ImGui::Image((ImTextureID)tex, {imgW, imgH});
         else     ImGui::Dummy({imgW, imgH});
-        pdl->AddRect(tl, brI, IM_COL32(104, 122, 172, 190), 3.f, 0, 1.2f);
-        ImGui::Dummy({1.f, 4.f});
+        pdl->AddRect(tl, brI, IM_COL32(118, 138, 190, 220), 3.f, 0, 1.4f);
+        pdl->AddRect({tl.x - 1.5f, tl.y - 1.5f}, {brI.x + 1.5f, brI.y + 1.5f},
+                     IM_COL32(60, 74, 116, 130), 4.f, 0, 1.f);
+        ImGui::Dummy({1.f, 6.f});
     }
 
-    // ── Name ──────────────────────────────────────────────────────────
+    // ── Name (header font, gold) ──────────────────────────────────────
+    UIStyle::PushFont(UIStyle::fHeader);
+    ImGui::PushStyleColor(ImGuiCol_Text,
+        ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
     ImGui::PushTextWrapPos(pad + bw);
-    ImGui::TextColored(COL_ACCENT, "%s", ci.name.c_str());
+    ImGui::TextWrapped("%s", ci.name.c_str());
     ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    UIStyle::PopFont();
 
     // ── Type line ─────────────────────────────────────────────────────
     if (ci.type & TYPE_MONSTER) {
@@ -7676,11 +7699,18 @@ void UI::drawCardInfoPanel(int w, int /*h*/) {
             snprintf(lvl, sizeof(lvl), "Lv %u", ci.level);
         ImGui::TextDisabled("%s%s%s", ar.c_str(),
                             ar.empty() ? "" : "  ·  ", lvl);
-        // ATK/DEF.
-        if (ci.type & TYPE_LINK)
-            ImGui::Text("ATK %d", ci.atk);
-        else
-            ImGui::Text("ATK %d / DEF %d", ci.atk, ci.def);
+        // ATK/DEF — chip row so the numbers read at a glance.
+        {
+            char atkChip[24];
+            snprintf(atkChip, sizeof(atkChip), "ATK %d", ci.atk);
+            UIStyle::StatusChip(atkChip, IM_COL32(255, 150, 100, 230));
+            if (!(ci.type & TYPE_LINK)) {
+                char defChip[24];
+                snprintf(defChip, sizeof(defChip), "DEF %d", ci.def);
+                ImGui::SameLine(0.f, 6.f);
+                UIStyle::StatusChip(defChip, IM_COL32(120, 180, 255, 230));
+            }
+        }
     } else if (ci.type & TYPE_SPELL) {
         const char* sub =
             (ci.type & 0x10000)  ? "Spell — Quick-Play" :
@@ -7718,7 +7748,7 @@ void UI::drawCardInfoPanel(int w, int /*h*/) {
                                 (int)m_infoCon + 1, locName, posName);
     }
     ImGui::TextDisabled("#%u", (unsigned)code);
-    ImGui::Separator();
+    UIStyle::DrawDivider(4.f, 6.f);
 
     // ── Effect text — wraps inside a scroll area; the panel itself never
     //    resizes with text length. While the player hovers a prompt
@@ -7827,56 +7857,37 @@ void UI::drawCompactPreviewOverlay(int screenW, float topH) {
 }
 
 void UI::drawTestingBar(int /*w*/) {
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.f);
-    ImGui::SetCursorPosX(8.f);
+    // ── Tools drawer CONTENT (vertical) ─────────────────────────────────
+    // Hosted in the floating "##tools_drawer" window opened from the
+    // command bar's Tools ghost button. Everything here is dev/debug
+    // surface — invisible during normal play.
+    ImGui::TextColored(COL_ACCENT, "Tools");
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50.f);
+    if (ImGui::SmallButton("Close##toolsdrawer")) m_toolsDrawerOpen = false;
+    UIStyle::DrawDivider(2.f, 6.f);
 
-    // ── Compact gameplay bar: Log + Tools, dev toggles collapsed ────────
-    // Normal play shows just two small buttons; the debug/testing toggles
-    // only appear when the Tools drawer is expanded. This keeps the duel
-    // screen from reading like a dev console.
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.f);
-    if (ImGui::Button(m_logDrawerOpen ? "Log *##logbtn" : "Log##logbtn",
-                      {64.f, 24.f}))
-        m_logDrawerOpen = !m_logDrawerOpen;
-    ImGui::SameLine(0.f, 8.f);
-    if (ImGui::Button(m_toolsDrawerOpen ? "Tools <##tools" : "Tools >##tools",
-                      {72.f, 24.f}))
-        m_toolsDrawerOpen = !m_toolsDrawerOpen;
-    ImGui::PopStyleVar();
-    if (!m_toolsDrawerOpen) return;
+    UIStyle::Subtle("Visual");
+    ImGui::Checkbox("Names on field", &m_showFieldNames);
+    ImGui::Checkbox("Large preview",  &m_largePreview);
+    ImGui::Checkbox("Zone labels",    &m_showZoneLabels);
+    ImGui::Checkbox("Legal glow",     &m_showLegalGlow);
+    ImGui::Checkbox("Layout guides",  &m_showLayoutGuides);
 
-    ImGui::SameLine(0.f, 18.f);
+    UIStyle::DrawDivider(6.f, 6.f);
+    UIStyle::Subtle("Debug");
+    if (ImGui::Checkbox("Debug Log", &m_debugLog))
+        m_dm.setDebugMessages(m_debugLog);
     bool wasEnabled = m_snap.isEnabled();
     ImGui::Checkbox("Testing Mode", &m_testingMode);
     if (m_testingMode != wasEnabled)
         m_snap.setEnabled(m_testingMode);
-
-    // Verbose ocgcore message/response logging into the log drawer.
-    ImGui::SameLine(0.f, 14.f);
-    if (ImGui::Checkbox("Debug Log", &m_debugLog))
-        m_dm.setDebugMessages(m_debugLog);
-
-    // Stage C: small name strip overlaid on each face-up card. Off by default
-    // so the field stays clean; flip on if you want a name-on-card view.
-    ImGui::SameLine(0.f, 14.f);
-    ImGui::Checkbox("Names on field", &m_showFieldNames);
-    ImGui::SameLine(0.f, 10.f);
-    ImGui::Checkbox("Large preview", &m_largePreview);
-    ImGui::SameLine(0.f, 10.f);
-    ImGui::Checkbox("Zone labels",  &m_showZoneLabels);
-    ImGui::SameLine(0.f, 10.f);
-    ImGui::Checkbox("Legal glow",   &m_showLegalGlow);
-    ImGui::SameLine(0.f, 10.f);
-    ImGui::Checkbox("Layout guides", &m_showLayoutGuides);
-    // SFX mute toggle — AudioManager treats this as a global gate.
-    ImGui::SameLine(0.f, 10.f);
     bool sfxMuted = gAudio().muted();
     if (ImGui::Checkbox("Mute SFX", &sfxMuted))
         gAudio().setMuted(sfxMuted);
 
+    UIStyle::DrawDivider(6.f, 6.f);
     // Restart the duel with a freshly randomised seed (startDuel re-seeds).
-    ImGui::SameLine(0.f, 14.f);
-    if (ImGui::Button("Restart Duel (new seed)") &&
+    if (UIStyle::DangerButton("Restart Duel (new seed)", {-1.f, 30.f}) &&
         m_deck0Path[0] && m_deck1Path[0]) {
         Deck d0 = loadYdk(m_deck0Path);
         Deck d1 = loadYdk(m_deck1Path);
@@ -7886,14 +7897,12 @@ void UI::drawTestingBar(int /*w*/) {
 
     if (!m_testingMode) return;
 
-    ImGui::SameLine(0.f, 16.f);
+    UIStyle::DrawDivider(6.f, 6.f);
+    UIStyle::Subtle("Snapshots");
     if (ImGui::Button("Rewind") && m_snap.count() > 0)
         m_snap.rewind();
-
     ImGui::SameLine(0.f, 8.f);
     ImGui::TextDisabled("%d snapshots", m_snap.count());
-
-    ImGui::SameLine(0.f, 16.f);
     auto& snaps = m_snap.snapshots();
     for (int i = 0; i < (int)snaps.size(); i++) {
         char lbl[32];
@@ -7903,7 +7912,7 @@ void UI::drawTestingBar(int /*w*/) {
         if (ImGui::Button(lbl, {36.f, 22.f}))
             m_snap.jumpTo(i);
         if (cur) ImGui::PopStyleColor();
-        ImGui::SameLine(0.f, 2.f);
+        if ((i + 1) % 5 != 0) ImGui::SameLine(0.f, 2.f);
     }
 }
 
@@ -9099,26 +9108,24 @@ void UI::drawMultiplayer(int w, int h) {
         ImGui::PopStyleColor(2);
     }
 
-    // ── Foundation-only banner ──────────────────────────────────────────
+    // ── How-it-works banner ─────────────────────────────────────────────
     {
         ImGui::SetNextWindowPos({(float)w * 0.5f - 360.f, BAR_H + 10.f});
-        ImGui::SetNextWindowSize({720.f, 60.f});
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.12f, 0.10f, 0.20f, 0.95f});
-        ImGui::PushStyleColor(ImGuiCol_Border,   {0.55f, 0.55f, 0.95f, 0.9f});
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.4f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+        ImGui::SetNextWindowSize({720.f, 64.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.07f, 0.09f, 0.16f, 0.96f});
+        ImGui::PushStyleColor(ImGuiCol_Border,   {0.40f, 0.48f, 0.78f, 0.85f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.2f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.f);
         ImGui::Begin("##mp_banner", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoSavedSettings);
         if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-        ImGui::TextColored({0.85f, 0.78f, 1.f, 1.f},
-            "LAN Multiplayer");
+        ImGui::TextColored({1.f, 0.86f, 0.45f, 1.f}, "Play over LAN");
         if (UIStyle::fHeader) ImGui::PopFont();
         ImGui::TextDisabled(
-            "Real TCP/WinSock sockets. Host listens on the chosen port, "
-            "Join connects to the LAN IP. Both peers run the same seeded "
-            "ocgcore duel; player responses stream over the wire.");
+            "One player hosts, the other joins with the host's IP. "
+            "Pick a deck, both press Ready, and the host starts the duel.");
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);

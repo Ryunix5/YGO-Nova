@@ -58,6 +58,77 @@ ImFont* fSmall  = nullptr;
 void PushFont(ImFont* f) { if (f) ImGui::PushFont(f); }
 void PopFont()           {        ImGui::PopFont(); }
 
+// ── Global theme ─────────────────────────────────────────────────────────────
+// One write into ImGuiStyle covers every raw widget the custom helpers don't
+// reach: combos, text inputs, checkboxes, sliders, scrollbars, selectables,
+// popup modals, tooltips. Without this the Settings/Audio/Assets popups and
+// the deck-builder inputs kept the stock ImGui grey-blue look and the app
+// read as two different products.
+void ApplyTheme() {
+    ImGuiStyle& s = ImGui::GetStyle();
+    auto V4 = [](ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); };
+
+    // Metrics — consistent rounding + breathing room.
+    s.WindowRounding    = 10.f;
+    s.ChildRounding     = 8.f;
+    s.PopupRounding     = 10.f;
+    s.FrameRounding     = 7.f;
+    s.GrabRounding      = 6.f;
+    s.TabRounding       = 6.f;
+    s.ScrollbarRounding = 8.f;
+    s.ScrollbarSize     = 12.f;
+    s.WindowBorderSize  = 1.f;
+    s.PopupBorderSize   = 1.f;
+    s.FrameBorderSize   = 0.f;
+    s.FramePadding      = {10.f, 7.f};
+    s.ItemSpacing       = {8.f, 6.f};
+    s.ItemInnerSpacing  = {6.f, 4.f};
+    s.WindowPadding     = {14.f, 12.f};
+
+    ImVec4* c = s.Colors;
+    c[ImGuiCol_Text]                 = V4(gC.textHi);
+    c[ImGuiCol_TextDisabled]         = V4(gC.textLo);
+    c[ImGuiCol_WindowBg]             = V4(gC.bgPanel);
+    c[ImGuiCol_ChildBg]              = {0.f, 0.f, 0.f, 0.f};
+    c[ImGuiCol_PopupBg]              = V4(gC.bgPopup);
+    c[ImGuiCol_Border]               = V4(gC.borderSoft);
+    c[ImGuiCol_BorderShadow]         = {0.f, 0.f, 0.f, 0.f};
+    c[ImGuiCol_FrameBg]              = V4(IM_COL32( 22,  29,  48, 255));
+    c[ImGuiCol_FrameBgHovered]       = V4(IM_COL32( 30,  40,  66, 255));
+    c[ImGuiCol_FrameBgActive]        = V4(IM_COL32( 38,  50,  82, 255));
+    c[ImGuiCol_TitleBg]              = V4(IM_COL32( 12,  16,  28, 255));
+    c[ImGuiCol_TitleBgActive]        = V4(IM_COL32( 18,  24,  40, 255));
+    c[ImGuiCol_TitleBgCollapsed]     = V4(IM_COL32( 12,  16,  28, 200));
+    c[ImGuiCol_MenuBarBg]            = V4(IM_COL32( 14,  18,  32, 255));
+    c[ImGuiCol_ScrollbarBg]          = V4(IM_COL32( 10,  13,  24, 160));
+    c[ImGuiCol_ScrollbarGrab]        = V4(IM_COL32( 52,  66, 104, 200));
+    c[ImGuiCol_ScrollbarGrabHovered] = V4(IM_COL32( 70,  88, 136, 230));
+    c[ImGuiCol_ScrollbarGrabActive]  = V4(IM_COL32( 92, 114, 170, 255));
+    c[ImGuiCol_CheckMark]            = V4(gC.accentHi);
+    c[ImGuiCol_SliderGrab]           = V4(gC.accent);
+    c[ImGuiCol_SliderGrabActive]     = V4(gC.accentHi);
+    c[ImGuiCol_Button]               = V4(IM_COL32( 30,  42,  70, 255));
+    c[ImGuiCol_ButtonHovered]        = V4(IM_COL32( 40,  55,  88, 255));
+    c[ImGuiCol_ButtonActive]         = V4(IM_COL32( 48,  64, 100, 255));
+    c[ImGuiCol_Header]               = V4(IM_COL32( 34,  46,  78, 220));
+    c[ImGuiCol_HeaderHovered]        = V4(IM_COL32( 44,  58,  96, 235));
+    c[ImGuiCol_HeaderActive]         = V4(IM_COL32( 54,  70, 112, 255));
+    c[ImGuiCol_Separator]            = V4(gC.borderSoft);
+    c[ImGuiCol_SeparatorHovered]     = V4(gC.border);
+    c[ImGuiCol_SeparatorActive]      = V4(gC.accent);
+    c[ImGuiCol_ResizeGrip]           = V4(IM_COL32( 52,  66, 104, 120));
+    c[ImGuiCol_ResizeGripHovered]    = V4(IM_COL32( 70,  88, 136, 180));
+    c[ImGuiCol_ResizeGripActive]     = V4(gC.accent);
+    c[ImGuiCol_Tab]                  = V4(IM_COL32( 22,  29,  48, 255));
+    c[ImGuiCol_TabHovered]           = V4(IM_COL32( 40,  55,  88, 255));
+    c[ImGuiCol_TabActive]            = V4(IM_COL32( 38,  50,  82, 255));
+    c[ImGuiCol_TabDimmed]            = V4(IM_COL32( 18,  24,  40, 255));
+    c[ImGuiCol_TabDimmedSelected]    = V4(IM_COL32( 28,  37,  60, 255));
+    c[ImGuiCol_TextSelectedBg]       = V4(IM_COL32( 60,  90, 160, 110));
+    c[ImGuiCol_NavCursor]            = V4(gC.accent);
+    c[ImGuiCol_ModalWindowDimBg]     = {0.02f, 0.03f, 0.06f, 0.62f};
+}
+
 // ── Panels ───────────────────────────────────────────────────────────────────
 void DrawAppBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
     // Vertical gradient navy → almost black + a soft warm centre vignette so
@@ -101,6 +172,51 @@ void DrawRaisedPanel(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding) {
     if (rounding <= 0.f) rounding = gM.radS;
     dl->AddRectFilled(a, b, gC.bgRaised, rounding);
     dl->AddRect(a, b, gC.borderSoft, rounding, 0, 1.f);
+}
+
+void DrawGlassPanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
+                    float rounding, ImU32 tint) {
+    if (rounding <= 0.f) rounding = gM.radM;
+    if (tint == 0) tint = gC.bgGlass;
+    // Soft drop shadow so the glass reads as floating.
+    for (int i = 3; i >= 1; --i) {
+        float e = (float)i * 1.6f;
+        dl->AddRectFilled({a.x - e, a.y - e + e * 0.6f},
+                          {b.x + e, b.y + e},
+                          IM_COL32(0, 0, 0, 26), rounding + e);
+    }
+    dl->AddRectFilled(a, b, tint, rounding);
+    // Top sheen — the "glass" cue.
+    float h = b.y - a.y;
+    dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.30f},
+        IM_COL32(255, 255, 255, 16), IM_COL32(255, 255, 255, 16),
+        IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
+    dl->AddRect(a, b, gC.border, rounding, 0, 1.2f);
+    // Inner hairline for depth.
+    dl->AddRect({a.x + 1.5f, a.y + 1.5f}, {b.x - 1.5f, b.y - 1.5f},
+                IM_COL32(255, 255, 255, 14), rounding - 1.f, 0, 1.f);
+}
+
+void DrawGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color,
+              float rounding, int layers) {
+    if (layers < 1) layers = 1;
+    int baseA = (int)(color >> 24) & 0xFF;
+    for (int i = layers; i >= 1; --i) {
+        float e = (float)i * 2.6f;
+        int alpha = baseA / (i * 3 + 2);
+        ImU32 c = (color & 0x00FFFFFF) | ((ImU32)alpha << 24);
+        dl->AddRectFilled({a.x - e, a.y - e}, {b.x + e, b.y + e},
+                          c, rounding + e);
+    }
+}
+
+void DrawDivider(float padTop, float padBot) {
+    ImGui::Dummy({1.f, padTop});
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float w = ImGui::GetContentRegionAvail().x;
+    dl->AddLine(p, {p.x + w, p.y}, gC.borderSoft, 1.f);
+    ImGui::Dummy({1.f, padBot + 1.f});
 }
 
 // ── Heading / text helpers ──────────────────────────────────────────────────
@@ -294,6 +410,87 @@ bool SegmentedButton(const char* label, bool active, bool enabled, ImVec2 sz) {
     PopFont();
     if (!enabled) ImGui::EndDisabled();
     return enabled && clicked;
+}
+
+bool HudPill(const char* label, bool active, bool enabled, ImVec2 sz) {
+    const char* vis = visibleLabel(label);
+    PushFont(fSmall);
+    ImVec2 ts = ImGui::CalcTextSize(vis);
+    PopFont();
+    if (sz.x <= 0.f) sz.x = ts.x + 26.f;
+    if (sz.y <= 0.f) sz.y = 28.f;
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImVec2 b = {a.x + sz.x, a.y + sz.y};
+    float  r = sz.y * 0.30f;
+    if (!enabled) ImGui::BeginDisabled();
+    ImGui::InvisibleButton(label, sz);
+    bool hovered = ImGui::IsItemHovered();
+    bool clicked = ImGui::IsItemClicked();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (active) DrawGlow(dl, a, b, gC.glowGold, r, 3);
+    ImU32 fill = active  ? gC.accent
+              : hovered ? IM_COL32(36, 46, 74, 240)
+                        : IM_COL32(20, 26, 44, 230);
+    dl->AddRectFilled(a, b, fill, r);
+    dl->AddRectFilledMultiColor(a, {b.x, a.y + sz.y * 0.5f},
+        IM_COL32(255,255,255, active ? 38 : 16),
+        IM_COL32(255,255,255, active ? 38 : 16),
+        IM_COL32(255,255,255, 0), IM_COL32(255,255,255, 0));
+    dl->AddRect(a, b,
+                active  ? gC.accentHi
+              : hovered ? gC.border
+                        : IM_COL32(72, 88, 132, 180),
+                r, 0, active ? 1.6f : 1.f);
+    PushFont(fSmall);
+    ImVec2 lts = ImGui::CalcTextSize(vis);
+    dl->AddText({a.x + (sz.x - lts.x) * 0.5f, a.y + (sz.y - lts.y) * 0.5f},
+                active  ? gC.accentText
+              : enabled ? gC.textMd
+                        : gC.textMuted, vis);
+    PopFont();
+    if (!enabled) ImGui::EndDisabled();
+    return enabled && clicked;
+}
+
+bool ActionCard(const char* id, const char* title, const char* desc,
+                float width, bool* outHovered) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float padX = 12.f, padY = 9.f, gap = 4.f;
+    float innerW = width - 2.f * padX;
+    if (innerW < 60.f) innerW = 60.f;
+    bool hasDesc = desc && desc[0];
+    ImVec2 tSz = ImGui::CalcTextSize(title, nullptr, false, innerW);
+    ImVec2 dSz = hasDesc
+        ? ImGui::CalcTextSize(desc, nullptr, false, innerW)
+        : ImVec2{0.f, 0.f};
+    float h = padY * 2.f + tSz.y + (hasDesc ? (gap + dSz.y) : 0.f);
+    if (h < 40.f) h = 40.f;
+
+    bool clicked = ImGui::InvisibleButton(id, {width, h});
+    bool hov     = ImGui::IsItemHovered();
+    bool held    = ImGui::IsItemActive();
+    if (outHovered) *outHovered = hov;
+
+    ImVec2 br = {pos.x + width, pos.y + h};
+    if (hov) DrawGlow(dl, pos, br, gC.glowGold, 7.f, 2);
+    ImU32 bg = held ? IM_COL32(62, 70, 116, 255)
+             : hov  ? IM_COL32(48, 56, 98, 255)
+                    : IM_COL32(30, 36, 64, 255);
+    ImU32 border = hov ? gC.accentHi : IM_COL32(74, 88, 138, 190);
+    dl->AddRectFilled(pos, br, bg, 7.f);
+    dl->AddRect(pos, br, border, 7.f, 0, hov ? 1.8f : 1.f);
+    // Left accent bar so rows read as selectable action cards.
+    dl->AddRectFilled({pos.x, pos.y + 6.f}, {pos.x + 3.f, pos.y + h - 6.f},
+                      hov ? gC.accentHi : IM_COL32(110, 126, 180, 200), 2.f);
+    dl->AddText(nullptr, 0.f, {pos.x + padX, pos.y + padY},
+                IM_COL32(255, 232, 160, 255), title, nullptr, innerW);
+    if (hasDesc)
+        dl->AddText(nullptr, 0.f,
+                    {pos.x + padX, pos.y + padY + tSz.y + gap},
+                    IM_COL32(198, 206, 226, 255), desc, nullptr, innerW);
+    ImGui::Dummy({1.f, 6.f});                 // inter-row gap
+    return clicked;
 }
 
 } // namespace UIStyle
