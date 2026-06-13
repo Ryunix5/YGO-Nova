@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cmath>
+#include <cctype>
 #include <chrono>
 #include <random>
 
@@ -176,6 +177,70 @@ void UI::sendMpReady(bool r) {
     m_net.send(m);
     m_dm.logEvent(std::string("[MULTI SEND] Ready=") +
                   (r ? "yes" : "no"));
+}
+
+// ── Online relay helpers (Stage C) ────────────────────────────────────────
+// Persist the identity/relay fields, then open the relay connection. Creating
+// makes us the authoritative host; joining makes us the guest. The room-
+// handshake responses (RoomCreated / RoomJoined / RoomPeerJoined) arrive via
+// handleNetMessage, which then drives mpKickoffHandshake().
+void UI::startRelayCreate() {
+    if (!m_net.isOffline()) return;
+    m_settings.mpDisplayName = m_mpNameBuf[0] ? m_mpNameBuf : "Player";
+    m_settings.mpHostIP      = m_mpRelayAddrBuf[0] ? m_mpRelayAddrBuf : "127.0.0.1";
+    m_settings.mpMode        = "online";
+    saveSettings();
+    m_mpRoomError.clear();
+    m_mpRoomCode.clear();
+    m_mpRoomActive      = false;
+    m_mpHandshakeSent   = false;
+    m_mpRelayConnecting = true;
+    if (!m_net.joinRelay(m_settings.mpHostIP, m_mpRelayPortBuf,
+                         m_settings.mpDisplayName, /*createRoom*/true, "")) {
+        m_mpRelayConnecting = false;
+        pushToast("Could not start relay connection",
+                  IM_COL32(232, 110, 100, 255), 3.0);
+    }
+}
+
+void UI::startRelayJoin() {
+    if (!m_net.isOffline()) return;
+    // Normalise the typed room code (uppercase, trim spaces).
+    std::string code;
+    for (char* p = m_mpRoomCodeBuf; *p; ++p)
+        if (*p != ' ') code += (char)toupper((unsigned char)*p);
+    if (code.empty()) {
+        pushToast("Enter a room code to join",
+                  IM_COL32(232, 182, 72, 255), 2.4);
+        return;
+    }
+    m_settings.mpDisplayName = m_mpNameBuf[0] ? m_mpNameBuf : "Player";
+    m_settings.mpHostIP      = m_mpRelayAddrBuf[0] ? m_mpRelayAddrBuf : "127.0.0.1";
+    m_settings.mpMode        = "online";
+    saveSettings();
+    m_mpRoomError.clear();
+    m_mpRoomCode        = code;
+    m_mpRoomActive      = false;
+    m_mpHandshakeSent   = false;
+    m_mpRelayConnecting = true;
+    if (!m_net.joinRelay(m_settings.mpHostIP, m_mpRelayPortBuf,
+                         m_settings.mpDisplayName, /*createRoom*/false, code)) {
+        m_mpRelayConnecting = false;
+        pushToast("Could not start relay connection",
+                  IM_COL32(232, 110, 100, 255), 3.0);
+    }
+}
+
+// Kick off the existing Hello/deck/ready handshake once the room is formed.
+// Sending our Hello makes the peer's Hello handler reply with their deck +
+// ready state; we reply in kind, reaching the same pre-duel state as LAN.
+// Guarded so it runs exactly once per session.
+void UI::mpKickoffHandshake() {
+    if (m_mpHandshakeSent) return;
+    m_mpHandshakeSent = true;
+    sendMpHello();
+    if (m_mpDeckIdx >= 0) sendMpDeckInfo();
+    if (m_mpReady)        sendMpReady(true);
 }
 
 void UI::sendMpStartDuel() {
@@ -1929,6 +1994,74 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
     case edo::NetMsgType::Error: {
         std::string txt = r.str();
         m_dm.logEvent("[MULTI ERROR] " + txt);
+        break;
+    }
+    // ── Relay / room control (online play) ───────────────────────────────
+    case edo::NetMsgType::RoomCreated: {
+        // We are the host; the server allocated a room code. Surface it so
+        // the player can share it. The guest's arrival comes later as
+        // RoomPeerJoined, which kicks off the Hello/deck handshake.
+        m_mpRoomCode       = r.str();
+        m_mpRoomActive     = true;
+        m_mpRelayConnecting = false;
+        m_mpRoomError.clear();
+        m_dm.logEvent("[ONLINE] room created, code=" + m_mpRoomCode);
+        pushToast("Room created: " + m_mpRoomCode,
+                  IM_COL32(110, 220, 140, 255), 3.0);
+        break;
+    }
+    case edo::NetMsgType::RoomJoined: {
+        // We are the guest; we're in the room. isHost should be 0. The host
+        // name rides along so the lobby can show the peer immediately.
+        uint8_t  isHost   = r.u8();
+        std::string hostNm = r.str();
+        (void)isHost;
+        m_mpRoomActive      = true;
+        m_mpRelayConnecting = false;
+        m_mpRoomError.clear();
+        if (!hostNm.empty()) m_net.setPeerName(hostNm);
+        m_dm.logEvent("[ONLINE] joined room, host=" + hostNm);
+        pushToast("Joined room — host: " +
+                  (hostNm.empty() ? std::string("(host)") : hostNm),
+                  IM_COL32(110, 220, 140, 255), 3.0);
+        // Guest drives the handshake now that the room is formed.
+        mpKickoffHandshake();
+        break;
+    }
+    case edo::NetMsgType::RoomPeerJoined: {
+        // Host side: the guest has arrived. Start the existing Hello/deck/
+        // ready handshake (relayed through the server to the guest).
+        std::string guestNm = r.str();
+        if (!guestNm.empty()) m_net.setPeerName(guestNm);
+        m_dm.logEvent("[ONLINE] guest joined: " + guestNm);
+        pushToast(std::string("Opponent joined: ") +
+                  (guestNm.empty() ? std::string("guest") : guestNm),
+                  IM_COL32(110, 220, 140, 255), 3.0);
+        mpKickoffHandshake();
+        break;
+    }
+    case edo::NetMsgType::RoomError: {
+        std::string msg = r.str();
+        m_mpRoomError       = msg;
+        m_mpRelayConnecting = false;
+        m_dm.logEvent("[ONLINE] room error: " + msg);
+        pushToast("Online: " + msg, IM_COL32(232, 110, 100, 255), 4.0);
+        // A failed create/join leaves the relay socket up but useless —
+        // drop it so the user can retry cleanly.
+        m_net.disconnect("room error");
+        m_mpRoomActive = false;
+        break;
+    }
+    case edo::NetMsgType::RoomClosed: {
+        std::string reason = r.str();
+        m_dm.logEvent("[ONLINE] room closed: " + reason);
+        pushToast("Opponent left: " + reason,
+                  IM_COL32(232, 110, 100, 255), 4.0);
+        // If we were mid-duel this trips the same Connection Lost path as a
+        // LAN disconnect; otherwise we just fall back to the lobby state.
+        m_mpRemoteDeckRcvd = false;
+        m_mpRemoteReady    = false;
+        m_mpHandshakeSent  = false;
         break;
     }
     }
@@ -9304,11 +9437,14 @@ void UI::drawMultiplayer(int w, int h) {
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoSavedSettings);
         if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-        ImGui::TextColored({1.f, 0.86f, 0.45f, 1.f}, "Play over LAN");
+        ImGui::TextColored({1.f, 0.86f, 0.45f, 1.f},
+            m_mpTransport == 0 ? "LAN Multiplayer" : "Online Multiplayer");
         if (UIStyle::fHeader) ImGui::PopFont();
-        ImGui::TextDisabled(
-            "One player hosts, the other joins with the host's IP. "
-            "Pick a deck, both press Ready, and the host starts the duel.");
+        ImGui::TextDisabled(m_mpTransport == 0
+            ? "Same network: one player hosts, the other joins by IP. "
+              "Pick a deck, both press Ready, then the host starts the duel."
+            : "Over the internet: start the relay server, one player creates "
+              "a room and shares the code, the other joins it.");
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
@@ -9337,24 +9473,131 @@ void UI::drawMultiplayer(int w, int h) {
         }
         ImGui::Dummy({1.f, 8.f});
 
-        UIStyle::SectionHeader("Connection");
-        ImGui::Text("Host IP / address");
-        ImGui::SetNextItemWidth(-1.f);
-        if (ImGui::InputText("##mpip", m_mpIPBuf, sizeof(m_mpIPBuf))) {
-            m_settings.mpHostIP = m_mpIPBuf;
-            saveSettings();
-        }
-        ImGui::Text("Port");
-        ImGui::SetNextItemWidth(140.f);
-        if (ImGui::InputInt("##mpport", &m_mpPortBuf)) {
-            if (m_mpPortBuf < 1)     m_mpPortBuf = 1;
-            if (m_mpPortBuf > 65535) m_mpPortBuf = 65535;
-            m_settings.mpPort = m_mpPortBuf;
-            saveSettings();
+        // ── Transport selector: LAN (direct) vs Online (relay) ──────────
+        // Seed the relay buffers from persisted settings on first view.
+        if (m_mpRelayAddrBuf[0] == '\0')
+            strncpy(m_mpRelayAddrBuf, m_settings.mpHostIP.c_str(),
+                    sizeof(m_mpRelayAddrBuf) - 1);
+        UIStyle::SectionHeader("Mode");
+        bool lockTransport = !m_net.isOffline();   // can't switch mid-session
+        if (lockTransport) ImGui::BeginDisabled();
+        if (UIStyle::SegmentedButton("LAN (direct)", m_mpTransport == 0,
+                                     true, {150.f, 28.f}))
+            m_mpTransport = 0;
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::SegmentedButton("Online (relay)", m_mpTransport == 1,
+                                     true, {150.f, 28.f}))
+            m_mpTransport = 1;
+        if (lockTransport) ImGui::EndDisabled();
+        ImGui::TextDisabled(m_mpTransport == 0
+            ? "Same network — one player hosts, the other joins by IP."
+            : "Over the internet — both players connect to a relay server.");
+        ImGui::Dummy({1.f, 10.f});
+
+        if (m_mpTransport == 0) {
+            // ── LAN direct connection ───────────────────────────────────
+            UIStyle::SectionHeader("Connection");
+            ImGui::Text("Host IP / address");
+            ImGui::SetNextItemWidth(-1.f);
+            if (ImGui::InputText("##mpip", m_mpIPBuf, sizeof(m_mpIPBuf))) {
+                m_settings.mpHostIP = m_mpIPBuf;
+                saveSettings();
+            }
+            ImGui::Text("Port");
+            ImGui::SetNextItemWidth(140.f);
+            if (ImGui::InputInt("##mpport", &m_mpPortBuf)) {
+                if (m_mpPortBuf < 1)     m_mpPortBuf = 1;
+                if (m_mpPortBuf > 65535) m_mpPortBuf = 65535;
+                m_settings.mpPort = m_mpPortBuf;
+                saveSettings();
+            }
+            ImGui::Dummy({1.f, 10.f});
+            if (m_net.isOffline()) {
+                if (UIStyle::PrimaryButton("Host Game", {-1.f, 36.f})) {
+                    if (m_net.host(m_mpPortBuf, m_mpNameBuf)) {
+                        m_settings.mpMode = "host";
+                        saveSettings();
+                        pushToast("Listening on port " +
+                                  std::to_string(m_mpPortBuf),
+                                  IM_COL32(180, 220, 255, 255), 2.4);
+                        m_dm.logEvent("[MULTI HOST] port=" +
+                                      std::to_string(m_mpPortBuf));
+                        m_mpRemoteDeckRcvd = false;
+                        m_mpRemoteReady    = false;
+                    }
+                }
+                ImGui::Dummy({1.f, 6.f});
+                if (UIStyle::SecondaryButton("Join Game", {-1.f, 34.f})) {
+                    if (m_net.joinHost(m_mpIPBuf, m_mpPortBuf, m_mpNameBuf)) {
+                        m_settings.mpMode = "client";
+                        saveSettings();
+                        pushToast(std::string("Connecting to ") + m_mpIPBuf,
+                                  IM_COL32(180, 220, 255, 255), 2.4);
+                        m_dm.logEvent("[MULTI JOIN] " +
+                                      std::string(m_mpIPBuf) + ":" +
+                                      std::to_string(m_mpPortBuf));
+                        m_mpRemoteDeckRcvd = false;
+                        m_mpRemoteReady    = false;
+                    }
+                }
+            }
+        } else {
+            // ── Online relay room ───────────────────────────────────────
+            UIStyle::SectionHeader("Relay server");
+            ImGui::Text("Server address");
+            ImGui::SetNextItemWidth(-1.f);
+            if (ImGui::InputText("##mprelay", m_mpRelayAddrBuf,
+                                 sizeof(m_mpRelayAddrBuf))) {
+                m_settings.mpHostIP = m_mpRelayAddrBuf;
+                saveSettings();
+            }
+            ImGui::Text("Port");
+            ImGui::SetNextItemWidth(140.f);
+            ImGui::InputInt("##mprelayport", &m_mpRelayPortBuf);
+            if (m_mpRelayPortBuf < 1)     m_mpRelayPortBuf = 1;
+            if (m_mpRelayPortBuf > 65535) m_mpRelayPortBuf = 65535;
+            ImGui::Dummy({1.f, 10.f});
+
+            if (m_net.isOffline()) {
+                if (UIStyle::PrimaryButton("Create Room", {-1.f, 36.f}))
+                    startRelayCreate();
+                ImGui::Dummy({1.f, 8.f});
+                ImGui::Text("Room code to join");
+                ImGui::SetNextItemWidth(-1.f);
+                // Uppercase-as-you-type for room codes.
+                ImGui::InputText("##mproom", m_mpRoomCodeBuf,
+                                 sizeof(m_mpRoomCodeBuf),
+                                 ImGuiInputTextFlags_CharsUppercase |
+                                 ImGuiInputTextFlags_CharsNoBlank);
+                ImGui::Dummy({1.f, 4.f});
+                if (UIStyle::SecondaryButton("Join Room", {-1.f, 34.f}))
+                    startRelayJoin();
+            } else if (m_mpRoomActive && !m_mpRoomCode.empty()) {
+                // Show the active room code prominently + a copy button.
+                UIStyle::SectionHeader("Room");
+                if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImGui::ColorConvertU32ToFloat4(C.accentHi));
+                ImGui::Text("Code:  %s", m_mpRoomCode.c_str());
+                ImGui::PopStyleColor();
+                if (UIStyle::fHeader) ImGui::PopFont();
+                if (UIStyle::SecondaryButton("Copy room code", {-1.f, 30.f})) {
+                    ImGui::SetClipboardText(m_mpRoomCode.c_str());
+                    pushToast("Room code copied",
+                              IM_COL32(180, 220, 255, 255), 1.8);
+                }
+                ImGui::TextDisabled("Share this code with your opponent.");
+            } else if (m_mpRelayConnecting) {
+                ImGui::TextDisabled("Connecting to relay...");
+            }
+            if (!m_mpRoomError.empty()) {
+                ImGui::TextColored({1.f, 0.55f, 0.55f, 1.f},
+                    "%s", m_mpRoomError.c_str());
+            }
         }
         ImGui::Dummy({1.f, 12.f});
 
-        // Mode label / state chip.
+        // ── Status (shared by both transports) ──────────────────────────
         UIStyle::SectionHeader("Status");
         const char* modeStr =
             m_net.isHost()    ? "HOST"   :
@@ -9371,51 +9614,27 @@ void UI::drawMultiplayer(int w, int h) {
             m_net.state() == edo::NetState::InDuel       ? "in duel"      :
                                                             "error";
         UIStyle::StatusChip(stateStr, C.textMd);
+        if (m_mpTransport == 1 && !m_net.isOffline())
+            UIStyle::StatusChip("ONLINE", C.glowCyan);
         if (!m_net.lastError().empty()) {
             ImGui::TextColored({1.f, 0.55f, 0.55f, 1.f},
                 "Last error: %s", m_net.lastError().c_str());
         }
         ImGui::Dummy({1.f, 12.f});
 
-        // Action buttons — only one set is enabled depending on mode.
-        if (m_net.isOffline()) {
-            if (UIStyle::PrimaryButton("Host Game", {-1.f, 36.f})) {
-                if (m_net.host(m_mpPortBuf, m_mpNameBuf)) {
-                    m_settings.mpMode = "host";
-                    saveSettings();
-                    pushToast(
-                        "Listening on port " +
-                        std::to_string(m_mpPortBuf),
-                        IM_COL32(180, 220, 255, 255), 2.4);
-                    m_dm.logEvent("[MULTI HOST] port=" +
-                                  std::to_string(m_mpPortBuf));
-                    m_mpRemoteDeckRcvd = false;
-                    m_mpRemoteReady    = false;
-                }
-            }
-            ImGui::Dummy({1.f, 6.f});
-            if (UIStyle::SecondaryButton("Join Game", {-1.f, 34.f})) {
-                if (m_net.joinHost(m_mpIPBuf, m_mpPortBuf, m_mpNameBuf)) {
-                    m_settings.mpMode = "client";
-                    saveSettings();
-                    pushToast(
-                        std::string("Connecting to ") + m_mpIPBuf,
-                        IM_COL32(180, 220, 255, 255), 2.4);
-                    m_dm.logEvent("[MULTI JOIN] " +
-                                  std::string(m_mpIPBuf) + ":" +
-                                  std::to_string(m_mpPortBuf));
-                    m_mpRemoteDeckRcvd = false;
-                    m_mpRemoteReady    = false;
-                }
-            }
-        } else {
+        // ── Disconnect (shared) ─────────────────────────────────────────
+        if (!m_net.isOffline()) {
             if (UIStyle::DangerButton("Disconnect", {-1.f, 34.f})) {
                 m_net.disconnect("user requested");
                 m_settings.mpMode = "offline";
                 saveSettings();
-                m_mpReady = false;
+                m_mpReady          = false;
                 m_mpRemoteDeckRcvd = false;
                 m_mpRemoteReady    = false;
+                m_mpRoomActive     = false;
+                m_mpRelayConnecting= false;
+                m_mpHandshakeSent  = false;
+                m_mpRoomCode.clear();
                 pushToast("Disconnected",
                           IM_COL32(232, 110, 100, 255), 2.0);
             }

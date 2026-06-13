@@ -156,6 +156,32 @@ bool NetSession::joinHost(const std::string& addr, int port,
     return true;
 }
 
+bool NetSession::joinRelay(const std::string& serverAddr, int port,
+                           const std::string& displayName,
+                           bool createRoom, const std::string& roomCode) {
+    if (mode() != NetMode::Offline) return false;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_displayName = displayName;
+        m_lastError.clear();
+        m_inbox.clear();
+        m_outbox.clear();
+        m_stats = NetStats{};
+        m_peer  = NetPeer{};
+        m_peer.addr = serverAddr + ":" + std::to_string(port) +
+                      (createRoom ? "  (relay host)" : "  (relay guest)");
+    }
+    // The room creator behaves as the authoritative HOST; the joiner as the
+    // CLIENT. This makes localPlayerIndex() / host-auth routing identical to
+    // LAN — only the transport differs.
+    m_mode  = createRoom ? NetMode::Host : NetMode::Client;
+    m_state = NetState::Connecting;
+    m_stop  = false;
+    m_worker = std::thread(&NetSession::runRelayWorker, this,
+                           serverAddr, port, createRoom, roomCode);
+    return true;
+}
+
 void NetSession::disconnect(const std::string& reason) {
     if (mode() == NetMode::Offline && !m_worker.joinable()) return;
     // Try to send a polite disconnect packet first — best effort.
@@ -514,6 +540,64 @@ void NetSession::runClientWorker(std::string addr, int port) {
     std::string nm; { std::lock_guard<std::mutex> lk(m_mtx); nm = m_displayName; }
     putStr(h.payload, nm);
     writeMessage(h);
+    m_state = NetState::Connected;
+    recvLoop();
+    closeSocket();
+    if (!m_stop && state() != NetState::Error)
+        m_state = NetState::Disconnected;
+}
+
+// ── Worker: relay (online) ─────────────────────────────────────────────────
+// Connects out to the relay server exactly like the LAN client, but instead
+// of auto-sending Hello it sends the room-control message (CreateRoom /
+// JoinRoom). The room handshake responses (RoomCreated / RoomJoined /
+// RoomPeerJoined / RoomError) arrive through the normal inbox and are handled
+// by the UI, which then drives the existing Hello/deck/ready handshake over
+// the relayed channel.
+void NetSession::runRelayWorker(std::string addr, int port, bool createRoom,
+                                std::string roomCode) {
+    socket_t s = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (s == kInvalidSocket) {
+        setError("socket() failed");
+        m_state = NetState::Error;
+        return;
+    }
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    dst.sin_port   = htons((uint16_t)port);
+#ifdef _WIN32
+    if (InetPtonA(AF_INET, addr.c_str(), &dst.sin_addr) != 1) {
+        setError("invalid relay address: " + addr);
+        closeSock(s); m_state = NetState::Error; return;
+    }
+#else
+    if (inet_pton(AF_INET, addr.c_str(), &dst.sin_addr) != 1) {
+        setError("invalid relay address: " + addr);
+        closeSock(s); m_state = NetState::Error; return;
+    }
+#endif
+    if (::connect(s, (sockaddr*)&dst, sizeof(dst)) != 0) {
+        setError("relay connect failed (err " +
+                 std::to_string(netLastError()) + ")");
+        closeSock(s); m_state = NetState::Error; return;
+    }
+    m_clientSock = (intptr_t)s;
+    m_state = NetState::Handshaking;
+    // Room-control message. Name + (for join) room code. The server replies
+    // RoomCreated / RoomJoined / RoomError, which the UI handles.
+    std::string nm; { std::lock_guard<std::mutex> lk(m_mtx); nm = m_displayName; }
+    NetMessage ctl;
+    if (createRoom) {
+        ctl.type = NetMsgType::CreateRoom;
+        putStr(ctl.payload, nm);
+    } else {
+        ctl.type = NetMsgType::JoinRoom;
+        putStr(ctl.payload, nm);
+        putStr(ctl.payload, roomCode);
+    }
+    writeMessage(ctl);
+    // "Connected" = the relay socket is up. Room formation + the gameplay
+    // handshake proceed through the inbox; the UI tracks room state.
     m_state = NetState::Connected;
     recvLoop();
     closeSocket();

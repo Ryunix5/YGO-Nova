@@ -352,6 +352,25 @@ private:
     char        m_mpNameBuf[64]  = {};
     char        m_mpIPBuf[64]    = {};
     int         m_mpPortBuf      = 7878;
+
+    // ── Online relay (Stage B/C) ────────────────────────────────────────
+    // The Multiplayer screen has two transports: LAN (direct host/join) and
+    // Online (both peers connect out to a relay server). 0 = LAN, 1 = Online.
+    int         m_mpTransport      = 0;
+    char        m_mpRelayAddrBuf[64] = {};   // relay server IP/host
+    int         m_mpRelayPortBuf     = 7879;
+    char        m_mpRoomCodeBuf[16]  = {};   // code typed when joining
+    // Room state once connected to the relay.
+    std::string m_mpRoomCode;                // our active room code
+    bool        m_mpRoomActive       = false; // room formed (created/joined)
+    bool        m_mpRelayConnecting  = false; // socket up, awaiting room reply
+    std::string m_mpRoomError;               // last friendly room error
+    // Drives the room-handshake kickoff exactly once when the peer appears.
+    bool        m_mpHandshakeSent    = false;
+    // Helpers for the online flow.
+    void startRelayCreate();
+    void startRelayJoin();
+    void mpKickoffHandshake();               // send Hello/Deck/Ready once
     int         m_mpDeckIdx      = -1;   // chosen .ydk for our seat
     bool        m_mpReady        = false;
     // Mirror of the remote peer's state, populated from Hello / DeckInfo

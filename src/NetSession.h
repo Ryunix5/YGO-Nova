@@ -79,7 +79,21 @@ enum class NetMsgType : uint32_t {
     PromptSnapshot  = 13, // host → client: "engine is awaiting client choice"
     ClientChoice    = 14, // client → host: chosen option for a PromptSnapshot
     GameEvent       = 15, // host → client: optional fx hint (summon/attack/…)
-    SyncError       = 16  // either direction: hard-fault notice, pause the duel
+    SyncError       = 16, // either direction: hard-fault notice, pause the duel
+
+    // ── Relay / room control (online play, types 101+) ───────────────────
+    // These travel between a peer and the RELAY SERVER only — they are NOT
+    // gameplay. The server consumes them; everything else it forwards
+    // verbatim to the room peer, so the host-authoritative protocol above
+    // is unchanged whether the transport is a direct LAN socket or the
+    // relay. Numbers MUST match tools/relay_server.py.
+    CreateRoom      = 101, // peer → server: { name }            (room creator)
+    RoomCreated     = 102, // server → peer: { roomCode }
+    JoinRoom        = 103, // peer → server: { name, roomCode }
+    RoomJoined      = 104, // server → peer: { u8 isHost, peerName }
+    RoomPeerJoined  = 105, // server → host: { guestName }
+    RoomError       = 106, // server → peer: { message }
+    RoomClosed      = 107  // server → peer: { reason } (peer left / closed)
 };
 
 struct NetMessage {
@@ -113,6 +127,19 @@ public:
     bool host(int port, const std::string& displayName);
     bool joinHost(const std::string& addr, int port,
                   const std::string& displayName);
+    // Online relay connection. BOTH peers connect OUT to the relay server
+    // (solving NAT/port-forwarding). `createRoom` true → this peer is the
+    // host (mode becomes Host, localPlayerIndex 0) and the server allocates
+    // a room code; false → this peer joins `roomCode` as the guest (mode
+    // Client, index 1). The worker sends the room-control message then runs
+    // the SAME recv loop as LAN — every gameplay frame flows through the
+    // existing inbox/outbox, so host-authoritative play is identical to LAN.
+    // Unlike the LAN workers, the relay worker does NOT auto-send Hello; the
+    // UI drives the Hello/deck handshake once the room is formed (on
+    // RoomPeerJoined for the host, RoomJoined for the guest).
+    bool joinRelay(const std::string& serverAddr, int port,
+                   const std::string& displayName,
+                   bool createRoom, const std::string& roomCode);
     void disconnect(const std::string& reason = "user requested");
 
     // Lightweight per-frame pump — promotes the worker's state changes
@@ -152,6 +179,11 @@ private:
     // Worker entry points.
     void runHostWorker(int port);
     void runClientWorker(std::string addr, int port);
+    // Relay worker — connects to the relay server, sends CreateRoom/JoinRoom,
+    // then enters the shared recv loop. `createRoom` decides which control
+    // message is sent; `roomCode` is only used when joining.
+    void runRelayWorker(std::string addr, int port, bool createRoom,
+                        std::string roomCode);
     void recvLoop();                   // shared inner loop once connected
     void writeOutbox();                // flush pending outgoing messages
     void closeSocket();
