@@ -10473,6 +10473,84 @@ void UI::drawMultiplayer(int w, int h) {
                 ImGui::Dummy({1.f, 4.f});
                 if (UIStyle::SecondaryButton("Join Room", {-1.f, 34.f}))
                     startRelayJoin();
+
+                // ── Open-room browser ───────────────────────────────────
+                UIStyle::DrawDivider(10.f, 6.f);
+                UIStyle::SectionHeader("Open rooms");
+                auto rlStatus = m_net.roomListStatus();
+                bool querying =
+                    (rlStatus == edo::NetSession::RoomListStatus::Querying);
+                if (querying) ImGui::BeginDisabled();
+                if (UIStyle::GhostButton(querying ? "Refreshing…##rl"
+                                                  : "Browse / Refresh##rl",
+                                         {-1.f, 30.f})) {
+                    std::string addr = m_mpRelayAddrBuf[0] ? m_mpRelayAddrBuf
+                                                           : "127.0.0.1";
+                    m_net.requestRoomList(addr, m_mpRelayPortBuf,
+                                          m_mpNameBuf[0] ? m_mpNameBuf : "Player");
+                }
+                if (querying) ImGui::EndDisabled();
+
+                if (rlStatus == edo::NetSession::RoomListStatus::Error) {
+                    ImGui::TextColored({1.f, 0.6f, 0.6f, 1.f}, "%s",
+                        m_net.roomListError().c_str());
+                } else if (rlStatus == edo::NetSession::RoomListStatus::Ready) {
+                    auto rooms = m_net.roomList();
+                    if (rooms.empty()) {
+                        ImGui::Dummy({1.f, 4.f});
+                        UIStyle::EmptyState(120.f, "No open rooms",
+                            "Create one above, or refresh");
+                    } else {
+                        ImGui::TextDisabled("%d room%s", (int)rooms.size(),
+                            rooms.size() == 1 ? "" : "s");
+                        ImGui::BeginChild("##roomlist", {-1.f,
+                            std::min(260.f, 14.f + rooms.size() * 58.f)}, false);
+                        for (size_t i = 0; i < rooms.size(); ++i) {
+                            const edo::RoomInfo& rm = rooms[i];
+                            ImGui::PushID((int)i);
+                            ImVec2 rp = ImGui::GetCursorScreenPos();
+                            float rw = ImGui::GetContentRegionAvail().x;
+                            float rh = 52.f;
+                            ImDrawList* dl = ImGui::GetWindowDrawList();
+                            UIStyle::DrawGlassPanel(dl, rp, {rp.x + rw, rp.y + rh},
+                                                    7.f, 0);
+                            // Host + code.
+                            UIStyle::PushFont(UIStyle::fHeader);
+                            dl->AddText({rp.x + 12.f, rp.y + 7.f}, C.textHi,
+                                        rm.hostName.empty() ? "Host"
+                                                            : rm.hostName.c_str());
+                            UIStyle::PopFont();
+                            char sub[80];
+                            const char* stTxt = rm.state == 0 ? "waiting"
+                                              : rm.state == 1 ? "ready"
+                                                              : "in duel";
+                            snprintf(sub, sizeof(sub), "Code %s   ·   %d/2   ·   %s",
+                                     rm.code.c_str(), rm.players, stTxt);
+                            UIStyle::PushFont(UIStyle::fSmall);
+                            dl->AddText({rp.x + 12.f, rp.y + 30.f}, C.textLo, sub);
+                            UIStyle::PopFont();
+                            // Join button on the right (joinable only).
+                            ImGui::SetCursorScreenPos({rp.x + rw - 86.f,
+                                                       rp.y + 12.f});
+                            bool joinable = rm.joinable();
+                            if (!joinable) ImGui::BeginDisabled();
+                            if (UIStyle::SecondaryButton(
+                                    joinable ? "Join##rj" : "Full##rj",
+                                    {76.f, 28.f})) {
+                                strncpy(m_mpRoomCodeBuf, rm.code.c_str(),
+                                        sizeof(m_mpRoomCodeBuf) - 1);
+                                m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf)-1] = '\0';
+                                startRelayJoin();
+                            }
+                            if (!joinable) ImGui::EndDisabled();
+                            ImGui::SetCursorScreenPos({rp.x, rp.y + rh + 6.f});
+                            ImGui::PopID();
+                        }
+                        ImGui::EndChild();
+                    }
+                } else if (!querying) {
+                    ImGui::TextDisabled("Browse to see rooms on this server.");
+                }
             } else if (m_mpRoomActive && !m_mpRoomCode.empty()) {
                 // Show the active room code prominently + a copy button.
                 UIStyle::SectionHeader("Room");

@@ -29,6 +29,7 @@ T_CREATE_ROOM, T_ROOM_CREATED   = 101, 102
 T_JOIN_ROOM,   T_ROOM_JOINED    = 103, 104
 T_ROOM_PEER_JOIN                = 105
 T_ROOM_ERROR                    = 106
+T_LIST_ROOMS,  T_ROOM_LIST      = 108, 109
 T_CHAT = 6           # an existing gameplay type we use as a relay probe
 
 
@@ -139,6 +140,25 @@ def main():
         msg, _ = rstr(p, 0)
         print(f"[PASS] bad room code rejected: '{msg}'")
         bad.close()
+
+        # ── ListRooms returns the open room ──────────────────────────────
+        browser = connect(args.host, args.port)
+        browser.sendall(frame(T_LIST_ROOMS))
+        t, p = read_frame(browser)
+        assert t == T_ROOM_LIST, f"expected RoomList, got {t}"
+        (count,) = struct.unpack_from("<I", p, 0)
+        off = 4
+        found = False
+        for _ in range(count):
+            rc, off = rstr(p, off)
+            hn, off = rstr(p, off)
+            players = p[off]; state = p[off + 1]; off += 2
+            if rc == code:
+                found = True
+                print(f"[PASS] room listed: code={rc} host={hn} "
+                      f"players={players} state={state}")
+        assert found, f"created room {code} not in RoomList"
+        browser.close()
 
         print("\nALL CHECKS PASSED")
     except Exception as e:

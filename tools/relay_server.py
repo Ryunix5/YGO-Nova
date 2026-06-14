@@ -58,8 +58,15 @@ T_ROOM_JOINED     = 104
 T_ROOM_PEER_JOIN  = 105
 T_ROOM_ERROR      = 106
 T_ROOM_CLOSED     = 107
+T_LIST_ROOMS      = 108   # client -> server: request the open-room list
+T_ROOM_LIST       = 109   # server -> client: [u32 N][ code, host, u8 players, u8 state ]*
 
-CONTROL_TYPES = {T_CREATE_ROOM, T_JOIN_ROOM}
+CONTROL_TYPES = {T_CREATE_ROOM, T_JOIN_ROOM, T_LIST_ROOMS}
+
+# Room state codes sent in the room list.
+STATE_WAITING  = 0   # has a host, no guest — joinable
+STATE_READY    = 1   # both present, not started
+STATE_IN_DUEL  = 2
 
 # Room-code alphabet excludes ambiguous glyphs (0/O, 1/I) so codes read aloud
 # cleanly. 5 chars → ~28 million combinations, plenty for casual play.
@@ -78,6 +85,10 @@ def pack_frame(msg_type: int, payload: bytes = b"") -> bytes:
 def put_str(s: str) -> bytes:
     b = s.encode("utf-8")
     return struct.pack("<I", len(b)) + b
+
+
+def put_u8(v: int) -> bytes:
+    return struct.pack("<B", v & 0xFF)
 
 
 def read_str(payload: bytes, off: int):
@@ -143,7 +154,15 @@ class Room:
         self.host = None          # Conn
         self.guest = None         # Conn
         self.created = time.time()
-        self.state = "waiting"    # waiting | ready | in_duel | closed
+        self.started = False      # set once a StartDuel frame is relayed
+
+    def state_code(self):
+        if self.host and self.guest:
+            return STATE_IN_DUEL if self.started else STATE_READY
+        return STATE_WAITING
+
+    def players(self):
+        return (1 if self.host else 0) + (1 if self.guest else 0)
 
     def peer_of(self, conn):
         if conn is self.host:
@@ -235,6 +254,20 @@ class RelayServer:
         self.log(f"room {code}: guest '{conn.name}' joined "
                  f"(host '{host_name}')")
 
+    def handle_list(self, conn):
+        # Snapshot the rooms that have a host (browsable). Waiting rooms come
+        # first so the joinable ones are at the top of the client's list.
+        with self.lock:
+            rooms = [r for r in self.rooms.values() if r.host is not None]
+        rooms.sort(key=lambda r: (r.state_code(), r.created))
+        body = struct.pack("<I", len(rooms))
+        for r in rooms:
+            host_name = r.host.name if r.host else "?"
+            body += put_str(r.code) + put_str(host_name)
+            body += put_u8(r.players()) + put_u8(r.state_code())
+        conn.send(T_ROOM_LIST, body)
+        self.vlog(f"room list -> {conn.addr}: {len(rooms)} room(s)")
+
     # ── Connection lifecycle ─────────────────────────────────────────────
     def serve_conn(self, conn):
         sock = conn.sock
@@ -263,6 +296,9 @@ class RelayServer:
                     else:
                         self.handle_join(conn, payload)
                     continue
+                if mtype == T_LIST_ROOMS:
+                    self.handle_list(conn)
+                    continue
                 # Anything else = gameplay frame → forward to the peer.
                 self.forward_raw(conn, mtype, payload)
         except (ConnectionError, OSError, ValueError) as e:
@@ -274,6 +310,11 @@ class RelayServer:
         room = conn.room
         if room is None:
             return
+        # A StartDuel frame (gameplay type 4) flips the room to "in duel" so
+        # the room list shows it as non-joinable.
+        if msg_type == 4 and not room.started:
+            room.started = True
+            self.log(f"room {room.code}: duel started")
         peer = room.peer_of(conn)
         if peer is None:
             # Peer not present (left / not joined yet). Silently drop — the

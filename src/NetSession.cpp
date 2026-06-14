@@ -86,7 +86,11 @@ static void wsaCleanupOnce() {
 
 // ── ctor / dtor ──────────────────────────────────────────────────────────────
 NetSession::NetSession()  { wsaStartupOnce(); }
-NetSession::~NetSession() { disconnect("session destroyed"); wsaCleanupOnce(); }
+NetSession::~NetSession() {
+    disconnect("session destroyed");
+    if (m_lobbyThread.joinable()) m_lobbyThread.join();
+    wsaCleanupOnce();
+}
 
 // ── State / accessor helpers ─────────────────────────────────────────────────
 NetPeer     NetSession::peer()        const {
@@ -603,6 +607,121 @@ void NetSession::runRelayWorker(std::string addr, int port, bool createRoom,
     closeSocket();
     if (!m_stop && state() != NetState::Error)
         m_state = NetState::Disconnected;
+}
+
+// ── Online room browser ────────────────────────────────────────────────────
+std::vector<RoomInfo> NetSession::roomList() const {
+    std::lock_guard<std::mutex> lk(m_lobbyMtx);
+    return m_roomList;
+}
+std::string NetSession::roomListError() const {
+    std::lock_guard<std::mutex> lk(m_lobbyMtx);
+    return m_roomListError;
+}
+
+void NetSession::requestRoomList(const std::string& serverAddr, int port,
+                                 const std::string& displayName) {
+    // Ignore if a query is already in flight; otherwise join the finished
+    // thread (instant) and start a fresh one.
+    if (m_roomListStatus.load() == (int)RoomListStatus::Querying) return;
+    if (m_lobbyThread.joinable()) m_lobbyThread.join();
+    { std::lock_guard<std::mutex> lk(m_lobbyMtx); m_roomListError.clear(); }
+    m_roomListStatus = (int)RoomListStatus::Querying;
+    m_lobbyThread = std::thread(&NetSession::runRoomListQuery, this,
+                                serverAddr, port, displayName);
+}
+
+void NetSession::runRoomListQuery(std::string addr, int port,
+                                  std::string displayName) {
+    (void)displayName;   // server does not require a name to list rooms
+    auto fail = [&](const std::string& msg) {
+        std::lock_guard<std::mutex> lk(m_lobbyMtx);
+        m_roomListError = msg;
+        m_roomListStatus = (int)RoomListStatus::Error;
+    };
+    socket_t s = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (s == kInvalidSocket) { fail("socket() failed"); return; }
+    sockaddr_in dst{};
+    dst.sin_family = AF_INET;
+    dst.sin_port   = htons((uint16_t)port);
+#ifdef _WIN32
+    if (InetPtonA(AF_INET, addr.c_str(), &dst.sin_addr) != 1) {
+        closeSock(s); fail("invalid relay address: " + addr); return;
+    }
+    DWORD to = 4000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof(to));
+#else
+    if (inet_pton(AF_INET, addr.c_str(), &dst.sin_addr) != 1) {
+        closeSock(s); fail("invalid relay address: " + addr); return;
+    }
+    struct timeval to{4, 0};
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
+#endif
+    if (::connect(s, (sockaddr*)&dst, sizeof(dst)) != 0) {
+        closeSock(s); fail("could not reach relay server"); return;
+    }
+    // Send a ListRooms frame (empty payload).
+    uint8_t hdr[16];
+    auto put32 = [&](uint8_t* b, uint32_t v) {
+        b[0]=(uint8_t)(v&0xff); b[1]=(uint8_t)((v>>8)&0xff);
+        b[2]=(uint8_t)((v>>16)&0xff); b[3]=(uint8_t)((v>>24)&0xff);
+    };
+    put32(hdr,    kNetMagic);
+    put32(hdr+4,  kNetProtocolVersion);
+    put32(hdr+8,  (uint32_t)NetMsgType::ListRooms);
+    put32(hdr+12, 0);
+    if (sendN(s, hdr, 16) != 16) { closeSock(s); fail("send failed"); return; }
+
+    auto recvAll = [&](void* buf, int n) -> bool {
+        char* p = (char*)buf; int left = n;
+        while (left > 0) {
+            int got = recvN(s, p, left);
+            if (got <= 0) return false;
+            p += got; left -= got;
+        }
+        return true;
+    };
+    // Read frames until a RoomList arrives (skip any stray frame), bounded.
+    for (int tries = 0; tries < 8; ++tries) {
+        uint8_t h[16];
+        if (!recvAll(h, 16)) { closeSock(s); fail("no response from relay"); return; }
+        uint32_t magic = (uint32_t)h[0]|((uint32_t)h[1]<<8)|((uint32_t)h[2]<<16)|((uint32_t)h[3]<<24);
+        uint32_t ver   = (uint32_t)h[4]|((uint32_t)h[5]<<8)|((uint32_t)h[6]<<16)|((uint32_t)h[7]<<24);
+        uint32_t type  = (uint32_t)h[8]|((uint32_t)h[9]<<8)|((uint32_t)h[10]<<16)|((uint32_t)h[11]<<24);
+        uint32_t plen  = (uint32_t)h[12]|((uint32_t)h[13]<<8)|((uint32_t)h[14]<<16)|((uint32_t)h[15]<<24);
+        if (magic != kNetMagic || ver != kNetProtocolVersion ||
+            plen > 4u*1024u*1024u) {
+            closeSock(s); fail("bad reply from relay (version mismatch?)"); return;
+        }
+        std::vector<uint8_t> payload(plen);
+        if (plen && !recvAll(payload.data(), plen)) {
+            closeSock(s); fail("short reply from relay"); return;
+        }
+        if (type == (uint32_t)NetMsgType::RoomList) {
+            NetReader r(payload);
+            uint32_t n = r.u32();
+            std::vector<RoomInfo> out;
+            for (uint32_t i = 0; i < n && r.ok; ++i) {
+                RoomInfo ri;
+                ri.code     = r.str();
+                ri.hostName = r.str();
+                ri.players  = r.u8();
+                ri.state    = r.u8();
+                if (r.ok) out.push_back(std::move(ri));
+            }
+            {
+                std::lock_guard<std::mutex> lk(m_lobbyMtx);
+                m_roomList = std::move(out);
+                m_roomListError.clear();
+            }
+            m_roomListStatus = (int)RoomListStatus::Ready;
+            closeSock(s);
+            return;
+        }
+        // Some other frame — ignore and keep reading.
+    }
+    closeSock(s);
+    fail("relay did not return a room list");
 }
 
 } // namespace edo

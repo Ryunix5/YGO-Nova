@@ -93,7 +93,19 @@ enum class NetMsgType : uint32_t {
     RoomJoined      = 104, // server → peer: { u8 isHost, peerName }
     RoomPeerJoined  = 105, // server → host: { guestName }
     RoomError       = 106, // server → peer: { message }
-    RoomClosed      = 107  // server → peer: { reason } (peer left / closed)
+    RoomClosed      = 107, // server → peer: { reason } (peer left / closed)
+    ListRooms       = 108, // peer → server: request the open-room list
+    RoomList        = 109  // server → peer: { u32 N, [code, host, u8 players, u8 state]* }
+};
+
+// One entry in the relay's open-room list (room browser). `state`: 0 waiting
+// (joinable), 1 ready, 2 in duel.
+struct RoomInfo {
+    std::string code;
+    std::string hostName;
+    int         players = 0;
+    int         state   = 0;
+    bool joinable() const { return state == 0; }
 };
 
 struct NetMessage {
@@ -142,6 +154,22 @@ public:
                    bool createRoom, const std::string& roomCode);
     void disconnect(const std::string& reason = "user requested");
 
+    // ── Online room browser ────────────────────────────────────────────
+    // Fetch the relay's open-room list WITHOUT joining/creating a room. Runs
+    // on a short-lived throwaway connection on its own thread so it never
+    // disturbs the main session or blocks the UI. The result is polled via
+    // roomListStatus()/roomList(). Joining a listed room still goes through
+    // joinRelay(createRoom=false, code) so the host/client mode model is
+    // unchanged. Safe to call only when offline (not mid-session).
+    enum class RoomListStatus { Idle = 0, Querying, Ready, Error };
+    void requestRoomList(const std::string& serverAddr, int port,
+                         const std::string& displayName);
+    RoomListStatus        roomListStatus() const {
+        return (RoomListStatus)m_roomListStatus.load();
+    }
+    std::vector<RoomInfo> roomList()      const;
+    std::string           roomListError() const;
+
     // Lightweight per-frame pump — promotes the worker's state changes
     // to the UI thread (currently just returns whether any messages are
     // available). The worker pushes directly into the inbox.
@@ -184,6 +212,9 @@ private:
     // message is sent; `roomCode` is only used when joining.
     void runRelayWorker(std::string addr, int port, bool createRoom,
                         std::string roomCode);
+    // Room-browser query worker — connects, sends ListRooms, parses one
+    // RoomList reply, stores it, then closes. Independent of the main socket.
+    void runRoomListQuery(std::string addr, int port, std::string displayName);
     void recvLoop();                   // shared inner loop once connected
     void writeOutbox();                // flush pending outgoing messages
     void closeSocket();
@@ -215,6 +246,13 @@ private:
     std::string            m_lastError;
 
     std::thread            m_worker;
+
+    // ── Room-browser query state (independent of the main session) ──────
+    std::thread            m_lobbyThread;
+    mutable std::mutex     m_lobbyMtx;
+    std::vector<RoomInfo>  m_roomList;
+    std::string            m_roomListError;
+    std::atomic<int>       m_roomListStatus{0};   // RoomListStatus
 };
 
 // ── Wire-format helpers — small endian-safe encoders ──────────────────
