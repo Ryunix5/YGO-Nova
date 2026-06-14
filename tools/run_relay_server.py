@@ -54,12 +54,25 @@ def main():
     print("=" * 60)
     print()
 
+    # Run the server IN-PROCESS. The previous os.execv() approach broke when
+    # sys.executable lived under a path with a space (e.g. "C:\Program Files\
+    # Python312\python.exe") — Windows re-parsed it and the launch failed with
+    # "C:\Program: can't open file ...". Importing + calling main() avoids any
+    # path/exec quirk entirely.
     here = os.path.dirname(os.path.abspath(__file__))
-    server = os.path.join(here, "relay_server.py")
-    argv = [sys.executable, server, "--port", str(args.port)]
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import relay_server
+    except ImportError as e:
+        print(f"[error] could not import relay_server.py: {e}")
+        print(f"[error] expected it next to this script in: {here}")
+        sys.exit(1)
+    # Hand argv to relay_server's argparse, then run its server loop here.
+    sys.argv = ["relay_server.py", "--port", str(args.port)]
     if args.verbose:
-        argv.append("--verbose")
-    os.execv(sys.executable, argv)
+        sys.argv.append("--verbose")
+    relay_server.main()
 
 
 if __name__ == "__main__":
