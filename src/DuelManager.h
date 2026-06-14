@@ -260,6 +260,23 @@ public:
     // Duel result (valid once isDone()): winner() is 0/1, or -1/2 for a draw.
     int  winReason() const { return m_winReason; }
     static const char* winReasonText(int reason);
+
+    // Surrender — end the duel immediately with `losingPlayer` (0/1) as the
+    // loser. ocgcore has no surrender call, so this resolves the result at
+    // the manager level: the duel stops and the Game-Over panel shows the
+    // winner. A rematch starts a fresh engine, so leaving ocgcore parked
+    // mid-state is fine. Safe to call any time the duel is running.
+    void forfeit(int losingPlayer) {
+        if (!m_running && !m_done && m_duel == nullptr) return;
+        m_winner    = (losingPlayer == 0) ? 1 : 0;
+        m_winReason = 4;                 // surrender
+        m_done      = true;
+        m_running   = false;
+        addLog("Player " + std::to_string(losingPlayer + 1) +
+               " surrendered — Player " + std::to_string(m_winner + 1) +
+               " wins.");
+        queryField();
+    }
     // Human-readable name for a timing context (used by the log and UI).
     static const char* timingName(TimingContext t);
 

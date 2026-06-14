@@ -4832,6 +4832,30 @@ void UI::drawDuel(int w, int h) {
             ImGui::End();
             return;
         }
+        // Surrender — concede the running duel (offline for now). Confirmed
+        // via a modal so it can't be mis-clicked. MP surrender follows.
+        if (m_net.isOffline() && isDuelVisiblyRunning() && !m_dm.isDone()) {
+            ImGui::SameLine(0.f, 8.f);
+            if (UIStyle::GhostButton("Surrender##sr", {96.f, 28.f}))
+                ImGui::OpenPopup("Surrender?##srpop");
+        }
+        // Confirm popup (positioned centrally; auto-sizes to content).
+        ImGui::SetNextWindowPos({(float)w * 0.5f, (float)h * 0.5f},
+                                ImGuiCond_Always, {0.5f, 0.5f});
+        if (ImGui::BeginPopupModal("Surrender?##srpop", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+            ImGui::TextUnformatted("Concede this duel? Your opponent wins.");
+            ImGui::Dummy({1.f, 8.f});
+            if (UIStyle::DangerButton("Surrender", {150.f, 32.f})) {
+                m_dm.forfeit(m_net.localPlayerIndex());   // 0 offline
+                gAudio().play("defeat");
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine(0.f, 8.f);
+            if (UIStyle::GhostButton("Cancel##sr", {110.f, 32.f}))
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
     }
 
     if (m_dm.isDone()) {
@@ -7335,28 +7359,30 @@ void UI::drawSelectionPanel(int pw, int ph) {
                           IM_COL32(232, 110, 100, 255), 2.6);
             }
         }
-        if (ImGui::Button("Return to Lobby", {bw, 30.f})) {
-            finalizeReplay("return to lobby");
-            m_dm.endDuel();
-            m_screen = Screen::Lobby;
-            m_anim.clear();
-            m_zoneRectsReady = false;
-        }
+        ImGui::Spacing();
+        // Rematch — replay the SAME decks with a fresh seed (offline). The
+        // primary action so a quick re-duel is one click.
         if (m_deck0Path[0] && m_deck1Path[0] &&
-            ImGui::Button("Restart Duel", {bw, 30.f})) {
-            // Finalize the OLD replay (if not already saved) before
-            // starting a new one with fresh metadata.
-            finalizeReplay("restart duel");
+            UIStyle::PrimaryButton("Rematch", {bw, 34.f})) {
+            finalizeReplay("rematch");
             Deck d0 = loadYdk(m_deck0Path);
             Deck d1 = loadYdk(m_deck1Path);
             if (m_dm.startDuel(d0, d1)) {
                 beginReplayRecording(m_deck0Path, m_deck1Path);
                 captureTestingRoot();
+                gAudio().play("duel_start");
             }
             m_anim.clear();
-            m_zoneRectsReady = false;
-            m_sfxObsInited   = false;
+            m_zoneRectsReady  = false;
+            m_sfxObsInited    = false;
             m_endGameSfxFired = false;
+        }
+        if (UIStyle::GhostButton("Return to Lobby", {bw, 30.f})) {
+            finalizeReplay("return to lobby");
+            m_dm.endDuel();
+            m_screen = Screen::Lobby;
+            m_anim.clear();
+            m_zoneRectsReady = false;
         }
         return;
     }
