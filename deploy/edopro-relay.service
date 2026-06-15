@@ -1,0 +1,33 @@
+# systemd unit for the EdoPro+ relay on a Linux VPS.
+#
+# Install:
+#   sudo mkdir -p /opt/edopro-relay
+#   sudo cp tools/relay_server.py /opt/edopro-relay/
+#   sudo cp deploy/edopro-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now edopro-relay
+#   sudo systemctl status edopro-relay      # check it's running
+#   journalctl -u edopro-relay -f           # live logs
+#
+[Unit]
+Description=EdoPro+ online relay server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/edopro-relay
+ExecStart=/usr/bin/python3 /opt/edopro-relay/relay_server.py
+Environment=EDOPRO_RELAY_PORT=7879
+Restart=on-failure
+RestartSec=3
+
+# Run as an isolated, unprivileged transient user with a hardened sandbox.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

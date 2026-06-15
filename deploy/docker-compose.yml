@@ -1,0 +1,16 @@
+# One-command relay host:  docker compose -f deploy/docker-compose.yml up -d
+# (run from the repo root so the build context resolves).
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: edopro-relay:latest
+    container_name: edopro-relay
+    restart: unless-stopped
+    ports:
+      - "7879:7879"
+    environment:
+      EDOPRO_RELAY_PORT: "7879"
+      # Uncomment for connection + relay-count logging:
+      # EDOPRO_RELAY_VERBOSE: "1"

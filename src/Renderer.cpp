@@ -107,9 +107,15 @@ void Renderer::init() {
         printf("[Renderer] procedural card back enabled\n");
     }
     m_unknownTex = generateFallbackTexture(60, 40, 80);   // purple — unknown card
+
+    // Background card-art downloader (online releases ship without the ~9k
+    // images; they are fetched + cached on first view).
+    m_fetcher.setEnabled(m_downloadImages);
+    m_fetcher.start();
 }
 
 void Renderer::shutdown() {
+    m_fetcher.stop();
     for (auto& [code, tex] : m_cardTextures) {
         GLuint id = (GLuint)(uintptr_t)tex;
         glDeleteTextures(1, &id);
@@ -124,18 +130,37 @@ void* Renderer::getCardTexture(uint32_t code) {
     auto it = m_cardTextures.find(code);
     if (it != m_cardTextures.end()) return it->second;
 
-    // Try to load from assets/cards/{code}.jpg
-    std::string path = "assets/cards/" + std::to_string(code) + ".jpg";
-    void* tex = loadTexture(path);
-    if (!tex) {
-        // Try .png
-        path = "assets/cards/" + std::to_string(code) + ".png";
-        tex = loadTexture(path);
-    }
-    if (!tex) tex = m_unknownTex;
+    const std::string jpg = "assets/cards/" + std::to_string(code) + ".jpg";
 
-    m_cardTextures[code] = tex;
-    return tex;
+    // While a download for this code is in flight, show the placeholder
+    // without re-probing the disk every frame.
+    if (m_downloadImages &&
+        m_fetcher.state(code) == edo::ImageFetcher::State::InFlight)
+        return m_unknownTex;
+
+    // Try local files (bundled art, or a previously cached download).
+    void* tex = loadTexture(jpg);
+    if (!tex)
+        tex = loadTexture("assets/cards/" + std::to_string(code) + ".png");
+    if (tex) { m_cardTextures[code] = tex; return tex; }
+
+    // Not on disk. Kick off an on-demand download and show the placeholder.
+    // CRUCIAL: do NOT cache the placeholder while a fetch could still land —
+    // the next frame re-checks disk once the download completes.
+    if (m_downloadImages) {
+        switch (m_fetcher.state(code)) {
+            case edo::ImageFetcher::State::None:
+                m_fetcher.request(code, jpg);
+                return m_unknownTex;                  // uncached — retry later
+            case edo::ImageFetcher::State::InFlight:
+                return m_unknownTex;                  // uncached — retry later
+            default:                                  // Done(missing) / Failed
+                break;                                // give up below
+        }
+    }
+
+    m_cardTextures[code] = m_unknownTex;   // cache the fallback — stop retrying
+    return m_unknownTex;
 }
 
 void* Renderer::loadTexture(const std::string& path) {

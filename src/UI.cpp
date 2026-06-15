@@ -6,6 +6,7 @@
 #include "UI.h"
 #include "UIStyle.h"
 #include "AudioManager.h"
+#include "Version.h"
 #include "imgui.h"
 #include <filesystem>
 #include <fstream>
@@ -344,6 +345,10 @@ void UI::sendMpStartDuel() {
                   std::to_string(p1.main.size()) + ")  engineP1=" +
                   (p2.name.empty() ? "(remote)" : p2.name) + " (main " +
                   std::to_string(p2.main.size()) + ")");
+    // Multiplayer uses the net-mode seat (host = 0). Clear any leftover offline
+    // coin-toss seat override so localPlayerIndex() falls back to the role.
+    m_dm.setHumanSeat(0);
+    m_net.clearSeatOverride();
     if (m_dm.startDuel(p1, p2, 8000, 5, 1)) {
         m_mpInDuel = true;
         m_screen   = Screen::Duel;
@@ -444,6 +449,11 @@ void UI::resetMpResponseState() {
     m_mpLastSnapshotSeq    = 0;
     m_mpAwaitingHostUpdate = false;
     m_mpLastDuelStateKey   = 0;
+    // Game-over propagation latches.
+    m_mpGameOverSent = false;
+    m_mpRemoteDone   = false;
+    m_mpRemoteWinner = -1;
+    m_mpRemoteReason = -1;
 }
 
 // ── Source-of-truth helpers ───────────────────────────────────────────
@@ -1749,6 +1759,68 @@ void UI::handleSyncError(const edo::NetMessage& m) {
               IM_COL32(232, 110, 100, 255), 4.0);
 }
 
+// Host → client, sent exactly once when the host's authoritative engine ends.
+// The client never runs an ocgcore, so without this it would never learn the
+// duel is over. winner is the engine seat (0/1, else a draw); reason is a
+// DuelManager win-reason code (see winReasonText).
+void UI::sendGameOver(int winner, int reason) {
+    if (!m_mpHostAuth || !m_net.isHost()) return;
+    edo::NetMessage m; m.type = edo::NetMsgType::GameOver;
+    edo::putU32(m.payload, (uint32_t)(int32_t)winner);
+    edo::putU32(m.payload, (uint32_t)(int32_t)reason);
+    m_net.send(m);
+    m_dm.logEvent("[MP GAMEOVER SEND] winner=" + std::to_string(winner) +
+                  "  reason=" + std::to_string(reason));
+}
+
+void UI::handleGameOver(const edo::NetMessage& m) {
+    // Client-only: the host's GameOver lets us show the end screen even though
+    // our local DuelManager never ran. (Host ignores its own — it already
+    // knows via m_dm.isDone().)
+    if (!m_mpHostAuth || !m_net.isClient()) return;
+    edo::NetReader r(m.payload);
+    m_mpRemoteWinner = (int)(int32_t)r.u32();
+    m_mpRemoteReason = (int)(int32_t)r.u32();
+    m_mpRemoteDone   = true;
+    const int me  = m_net.localPlayerIndex();
+    const bool won = (m_mpRemoteWinner == me);
+    const char* txt = (m_mpRemoteWinner != 0 && m_mpRemoteWinner != 1)
+                          ? "Duel ended in a draw"
+                          : (won ? "You win!" : "You lose");
+    pushToast(txt, won ? IM_COL32(110, 220, 140, 255)
+                       : IM_COL32(232, 110, 100, 255), 4.0);
+    pushGameLog(txt, IM_COL32(232, 196, 110, 255));
+    m_dm.logEvent("[MP GAMEOVER RECV] winner=" +
+                  std::to_string(m_mpRemoteWinner) + "  reason=" +
+                  std::to_string(m_mpRemoteReason) + "  localSeat=" +
+                  std::to_string(me));
+}
+
+// Client → host. The client has no authoritative engine, so it can't end the
+// duel itself — it tells the host which seat is conceding and the host forfeits
+// that seat. The resulting GameOver flows back to the client normally.
+void UI::sendSurrender() {
+    if (!m_mpHostAuth || !m_net.isClient()) return;
+    edo::NetMessage m; m.type = edo::NetMsgType::Surrender;
+    edo::putU32(m.payload, (uint32_t)(int32_t)m_net.localPlayerIndex());
+    m_net.send(m);
+    m_dm.logEvent("[MP SURRENDER SEND] seat=" +
+                  std::to_string(m_net.localPlayerIndex()));
+    pushToast("You surrendered", IM_COL32(232, 110, 100, 255), 3.0);
+}
+
+void UI::handleSurrender(const edo::NetMessage& m) {
+    // Host-only: a client conceded. Forfeit its seat on the authoritative
+    // engine; the per-frame pump then ships GameOver to the client.
+    if (!m_mpHostAuth || !m_net.isHost()) return;
+    edo::NetReader r(m.payload);
+    int seat = (int)(int32_t)r.u32();
+    if (seat != 0 && seat != 1) seat = 1;   // defensive: clients are seat 1
+    m_dm.logEvent("[MP SURRENDER RECV] seat=" + std::to_string(seat));
+    m_dm.forfeit(seat);
+    pushToast("Opponent surrendered", IM_COL32(110, 220, 140, 255), 3.0);
+}
+
 void UI::handleNetMessage(const edo::NetMessage& m) {
     edo::NetReader r(m.payload);
     switch (m.type) {
@@ -1856,6 +1928,10 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
         finalizeReplay("entering multiplayer (client)");
         if (m_dm.isRunning()) m_dm.endDuel();
         resetMpResponseState();
+        // Client seat comes from net mode (Client = 1). Clear any leftover
+        // offline coin-toss seat override.
+        m_dm.setHumanSeat(0);
+        m_net.clearSeatOverride();
         if (m_mpHostAuth) {
             // Host-authoritative: the client renders entirely from
             // snapshots. We do NOT start a local ocgcore — that was the
@@ -1991,6 +2067,8 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
     case edo::NetMsgType::ClientChoice:    handleClientChoice(m); break;
     case edo::NetMsgType::GameEvent:       /* Stage 3 fx hints */    break;
     case edo::NetMsgType::SyncError:       handleSyncError(m); break;
+    case edo::NetMsgType::GameOver:        handleGameOver(m); break;
+    case edo::NetMsgType::Surrender:       handleSurrender(m); break;
     case edo::NetMsgType::Error: {
         std::string txt = r.str();
         m_dm.logEvent("[MULTI ERROR] " + txt);
@@ -2091,6 +2169,13 @@ void UI::pumpMultiplayer() {
         if (m_net.isHost() && m_mpInDuel) {
             buildAndSendFieldSnapshot();
             buildAndSendPromptSnapshotIfRemote("frame");
+            // The authoritative engine ended — push a final board state then
+            // tell the client once so it can render the Game Over panel (its
+            // own DuelManager never runs in host-auth mode).
+            if (m_dm.isDone() && !m_mpGameOverSent) {
+                sendGameOver(m_dm.winner(), m_dm.winReason());
+                m_mpGameOverSent = true;
+            }
         }
         // Per-frame state log for the client — fires only once per
         // state transition (key dedup inside the helper).
@@ -2433,6 +2518,11 @@ void UI::loadSettings() {
     m_largePreview    = m_settings.largePreview;
     m_showZoneLabels  = m_settings.showZoneLabels;
     m_showLegalGlow   = m_settings.showLegalGlow;
+    // Push the on-demand card-art download preference into the renderer.
+    m_rend.setImageDownload(m_settings.downloadCardImages);
+    // Kick off the in-app update check (no-op unless a repo was baked in).
+    m_update.setEnabled(m_settings.checkForUpdates);
+    m_update.start(edo::kAppVersion, edo::kUpdateRepo);
     syncAnimConfig();
     // Push audio settings into the live device. Safe even when audio failed
     // to open — AudioManager::setMuted/setVolume are no-ops in that case.
@@ -2697,6 +2787,13 @@ void UI::pushToast(const std::string& text, ImU32 color, double dur) {
                        m_toasts.begin() + (m_toasts.size() - 16));
 }
 
+void UI::openExternalUrl(const std::string& url) {
+    if (url.empty()) return;
+    edo::openUrl(url);
+    pushToast("Opening download page in your browser…",
+              IM_COL32(180, 220, 255, 255), 2.4);
+}
+
 void UI::pushGameLog(const std::string& text, ImU32 color) {
     GameLogLine g;
     g.text  = text;
@@ -2798,26 +2895,27 @@ bool UI::testingRewindAvailable() const {
     return m_net.isOffline() && !m_replayMode && m_timeline.hasRoot();
 }
 
-void UI::captureTestingRoot() {
+void UI::captureTestingRoot(const std::string& team0Path,
+                            const std::string& team1Path) {
     // Offline only. The seed is now canonical (startDuel consumed it).
     if (!m_net.isOffline()) { m_timeline.clear(); return; }
     edo::TestingRoot root;
     root.seed      = m_dm.duelSeed();
-    root.deck0     = loadYdk(m_deck0Path);
-    root.deck1     = loadYdk(m_deck1Path);
+    root.deck0     = loadYdk(team0Path);
+    root.deck1     = loadYdk(team1Path);
     root.lp        = 8000;
     root.handCount = 5;
     root.drawCount = 1;
-    auto baseName = [](const char* p) {
-        std::string s = p ? p : "";
+    auto baseName = [](const std::string& p) {
+        std::string s = p;
         auto sl = s.find_last_of("/\\");
         if (sl != std::string::npos) s = s.substr(sl + 1);
         if (s.size() > 4 && s.substr(s.size() - 4) == ".ydk")
             s = s.substr(0, s.size() - 4);
         return s.empty() ? std::string("Deck") : s;
     };
-    root.deck0Name = baseName(m_deck0Path);
-    root.deck1Name = baseName(m_deck1Path);
+    root.deck0Name = baseName(team0Path);
+    root.deck1Name = baseName(team1Path);
     m_timeline.beginDuel(root);
     m_testingLastRestore.clear();
     m_dm.logEvent("[TESTING START] seed=" + std::to_string(root.seed) +
@@ -2825,6 +2923,63 @@ void UI::captureTestingRoot() {
                   std::to_string(root.deck0.main.size()) + ")" +
                   " p2Deck=" + root.deck1Name + "(" +
                   std::to_string(root.deck1.main.size()) + ")");
+}
+
+// Start an offline duel with a coin toss for who takes the first turn.
+//
+// ocgcore has no "first player" knob — team 0 ALWAYS moves first. So the toss
+// is realised by deck order: the deck registered as team 0 goes first. The
+// human always controls the P1 deck; when the toss says the human goes second
+// we register the opponent's deck as team 0 and tell the rest of the app the
+// human now sits in seat 1 (m_humanSeat / seat override). Replay + Testing Mode
+// capture the REGISTERED order, so deterministic rebuilds reproduce the toss.
+bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
+                                      const std::string& p2Path,
+                                      int lp, int handCount, int drawCount) {
+    bool humanFirst = true;
+    if (m_settings.coinTossEnabled) {
+        std::random_device rd;
+        humanFirst = (rd() & 1u) == 0u;
+    }
+    // Team 0 = first turn. Human owns the P1 deck regardless of order.
+    const std::string& t0 = humanFirst ? p1Path : p2Path;
+    const std::string& t1 = humanFirst ? p2Path : p1Path;
+    const int humanSeat   = humanFirst ? 0 : 1;
+
+    Deck d0 = loadYdk(t0);
+    Deck d1 = loadYdk(t1);
+    m_dm.setHumanSeat(humanSeat);
+    m_net.setSeatOverride(humanSeat);
+    if (!m_dm.startDuel(d0, d1, lp, handCount, drawCount)) {
+        // Engine refused — restore neutral seat so nothing downstream is skewed.
+        m_dm.setHumanSeat(0);
+        m_net.clearSeatOverride();
+        return false;
+    }
+    m_snap.clear();
+    // Replay + testing capture the registered (toss) order so playback and
+    // rewind reproduce the exact same opening.
+    beginReplayRecording(t0, t1);
+    captureTestingRoot(t0, t1);
+
+    // Coin-result banner + log. The toast is the quiet record; when enabled the
+    // big phase-banner gives it presence at duel start.
+    if (m_settings.coinTossEnabled) {
+        const char* msg = humanFirst ? "Coin toss — you go first!"
+                                      : "Coin toss — opponent goes first";
+        ImU32 col = humanFirst ? IM_COL32(110, 220, 140, 255)
+                               : IM_COL32(255, 200, 90, 255);
+        pushToast(msg, col, 3.2);
+        pushGameLog(msg, IM_COL32(232, 196, 110, 255));
+        m_anim.emitPhaseBanner(humanFirst ? "COIN TOSS — YOU GO FIRST"
+                                          : "COIN TOSS — OPPONENT FIRST",
+                               ImGui::GetIO().DisplaySize, col);
+    }
+    m_dm.logEvent(std::string("[COIN TOSS] first=") +
+                  (humanFirst ? "P1(you)" : "P2(opp)") +
+                  " humanSeat=" + std::to_string(humanSeat) +
+                  " team0Deck=" + t0);
+    return true;
 }
 
 // Build a short label for the response about to be recorded, from the live
@@ -3036,6 +3191,11 @@ void UI::startReplayPlayback(const std::string& path) {
     // Force the engine seed so the deck shuffle + every randomised choice
     // matches the original duel byte-for-byte. setForcedSeed is one-shot.
     m_dm.setForcedSeed(r.seed);
+    // Replay is recorded in REGISTERED (toss) order: deck1 = team 0 = the
+    // player who went first, shown at the bottom. Clear any leftover offline
+    // coin-toss seat override so the perspective is neutral seat 0.
+    m_dm.setHumanSeat(0);
+    m_net.clearSeatOverride();
     // During replay, BOTH players' prompts must come through the UI/feeder
     // so the recorded byte stream lands in order. localMode would route P2
     // prompts through the auto-AI, skipping recorded P2 responses and
@@ -3359,8 +3519,11 @@ void UI::drawLobby(int w, int h) {
         bg->AddConvexPolyFilled(outer, 4, IM_COL32(40, 56, 92, 220));
         bg->AddPolyline(outer, 4, C.accent, ImDrawFlags_Closed, 1.4f);
         bg->AddConvexPolyFilled(inner, 4, IM_COL32(255, 210, 120, 230));
-        // Text column.
-        bg->AddText({a.x + 86.f, a.y + 14.f}, C.textHi,  "EdoPro+");
+        // Text column — app name + version, role, tagline.
+        char titleBuf[48];
+        snprintf(titleBuf, sizeof(titleBuf), "%s  v%s",
+                 edo::kAppName, edo::kAppVersion);
+        bg->AddText({a.x + 86.f, a.y + 14.f}, C.textHi,  titleBuf);
         bg->AddText({a.x + 86.f, a.y + 36.f}, C.textLo,  "Local Profile");
         bg->AddText({a.x + 86.f, a.y + 58.f}, C.textMuted,
                     "Modern Yu-Gi-Oh duel simulator");
@@ -3391,10 +3554,13 @@ void UI::drawLobby(int w, int h) {
             m_assetsPopupOpen = true;
             gAudio().play("click");
         }
-        ImGui::SameLine(0.f, 4.f);
-        if (UIStyle::GhostButton("Debug",  {84.f, 36.f})) {
-            m_debugPopupOpen = true;
-            gAudio().play("click");
+        // Debug panel is a developer-only surface — hidden for release.
+        if (m_settings.developerMode) {
+            ImGui::SameLine(0.f, 4.f);
+            if (UIStyle::GhostButton("Debug",  {84.f, 36.f})) {
+                m_debugPopupOpen = true;
+                gAudio().play("click");
+            }
         }
         ImGui::SameLine(0.f, 4.f);
         if (UIStyle::GhostButton("Settings", {96.f, 36.f})) {
@@ -3410,6 +3576,34 @@ void UI::drawLobby(int w, int h) {
             g_quit = true;
             return;
         }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
+    }
+
+    // ── Update notice (top-centre) — newer release found on GitHub ──────────
+    if (m_update.updateAvailable() && !m_updateDismissed) {
+        std::string ver = m_update.latestVersion();
+        std::string label = "Update available: v" + ver;
+        ImGui::SetNextWindowPos({W * 0.5f, 16.f}, ImGuiCond_Always, {0.5f, 0.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(28, 24, 14, 235));
+        ImGui::PushStyleColor(ImGuiCol_Border,   C.accent);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{12.f, 8.f});
+        ImGui::Begin("##update_notice", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(C.accentHi));
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.f, 12.f);
+        if (UIStyle::PrimaryButton("Download", {110.f, 28.f})) {
+            openExternalUrl(m_update.releaseUrl());
+        }
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Later##upd", {64.f, 28.f}))
+            m_updateDismissed = true;
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
@@ -3467,7 +3661,23 @@ void UI::drawLobby(int w, int h) {
             }
             return clk;
         };
-        if (navItem("DUEL", "Start a new offline duel", true)) {
+        // Primary entry point — the live online lobby. Jumps straight to the
+        // Multiplayer screen with the Online (relay) tab active and forces an
+        // immediate room-list refresh so the list is warm on arrival.
+        if (navItem("ONLINE ROOMS", "Browse and join live online rooms", true)) {
+            gAudio().play("click");
+            strncpy(m_mpNameBuf, m_settings.mpDisplayName.c_str(),
+                    sizeof(m_mpNameBuf) - 1);
+            m_mpNameBuf[sizeof(m_mpNameBuf) - 1] = '\0';
+            strncpy(m_mpRelayAddrBuf, m_settings.mpHostIP.c_str(),
+                    sizeof(m_mpRelayAddrBuf) - 1);
+            m_mpRelayAddrBuf[sizeof(m_mpRelayAddrBuf) - 1] = '\0';
+            m_mpTransport        = 1;     // Online (relay) tab
+            m_lobbyNextRefreshAt = 0.0;   // refresh the lobby immediately
+            m_screen             = Screen::Multiplayer;
+        }
+        // Single-player practice duel (the offline duel we have).
+        if (navItem("TESTING", "Single-player practice duel", false)) {
             gAudio().play("click");
             m_duelSetupOpen = true;
         }
@@ -3485,13 +3695,15 @@ void UI::drawLobby(int w, int h) {
                 m_viewerReplayValid = m_viewerReplay.load(m_replayFiles[0]);
             m_screen = Screen::Replays;
         }
-        if (navItem("MULTIPLAYER", "LAN match against another player", false)) {
+        if (navItem("LAN MULTIPLAYER", "Direct match on your local network",
+                    false)) {
             gAudio().play("click");
             strncpy(m_mpNameBuf, m_settings.mpDisplayName.c_str(),
                     sizeof(m_mpNameBuf) - 1);
             strncpy(m_mpIPBuf,   m_settings.mpHostIP.c_str(),
                     sizeof(m_mpIPBuf)   - 1);
-            m_mpPortBuf = m_settings.mpPort;
+            m_mpPortBuf  = m_settings.mpPort;
+            m_mpTransport = 0;     // LAN (direct) tab
             m_screen = Screen::Multiplayer;
         }
         if (navItem("QUIT", "Exit the application", false)) {
@@ -3969,13 +4181,18 @@ void UI::drawLobby(int w, int h) {
         }
         ImGui::Separator();
 
-        // — Logs
-        UIStyle::SectionHeader("Logs");
-        if (ImGui::Checkbox("Debug Log (verbose engine traces)", &m_debugLog)) {
-            m_dm.setDebugMessages(m_debugLog);
-            saveSettings();
+        // — Developer / Logs
+        UIStyle::SectionHeader("Developer");
+        savedToggle("Developer mode (unlocks dev tools + Debug panel)",
+                    &m_settings.developerMode);
+        if (m_settings.developerMode) {
+            if (ImGui::Checkbox("Debug Log (verbose engine traces)",
+                                &m_debugLog)) {
+                m_dm.setDebugMessages(m_debugLog);
+                saveSettings();
+            }
+            savedToggle("Verbose internal messages", &m_settings.verboseLog);
         }
-        savedToggle("Verbose internal messages", &m_settings.verboseLog);
         savedToggle("Collapse log panel by default", &m_logCollapsed);
         ImGui::Separator();
 
@@ -3985,6 +4202,18 @@ void UI::drawLobby(int w, int h) {
         savedToggle("Show click-first hints",      &m_settings.clickFirstHints);
         savedToggle("Compact prompts (full text in side panel)",
                     &m_settings.compactPrompts);
+        savedToggle("Coin toss decides who goes first (offline)",
+                    &m_settings.coinTossEnabled);
+        if (ImGui::Checkbox("Download missing card art on demand",
+                            &m_settings.downloadCardImages)) {
+            m_rend.setImageDownload(m_settings.downloadCardImages);
+            saveSettings();
+        }
+        if (ImGui::Checkbox("Check for updates on launch",
+                            &m_settings.checkForUpdates)) {
+            m_update.setEnabled(m_settings.checkForUpdates);
+            saveSettings();
+        }
         ImGui::Separator();
 
         // — Replays
@@ -4099,17 +4328,12 @@ void UI::drawLobby(int w, int h) {
         // Primary "Start Duel" — gold gradient button via UIStyle.
         if (!canStart) ImGui::BeginDisabled();
         if (UIStyle::PrimaryButton("Start Duel", {280.f, 42.f})) {
-            Deck d0 = loadYdk(m_deck0Path);
-            Deck d1 = loadYdk(m_deck1Path);
-            if (m_dm.startDuel(d0, d1)) {
-                m_snap.clear();
+            // Coin toss decides who takes the first turn; the helper registers
+            // the decks in toss order and wires replay + testing capture.
+            if (startOfflineDuelWithCoinToss(m_deck0Path, m_deck1Path,
+                                             8000, 5, 1)) {
                 m_screen = Screen::Duel;
                 gAudio().play("duel_start");
-                // Begin recording the replay AFTER startDuel populates the
-                // canonical seed so the metadata matches the live duel.
-                beginReplayRecording(m_deck0Path, m_deck1Path);
-                // Capture the deterministic root for Testing Mode rewind.
-                captureTestingRoot();
             } else {
                 gAudio().play("error");
             }
@@ -4811,7 +5035,17 @@ void UI::drawDuel(int w, int h) {
     // BeginDisabled call). We use ImGui::IsItemHovered + IsMouseClicked
     // style isn't necessary because EndDisabled / BeginDisabled is the
     // sanctioned ImGui idiom for "let one widget through" mid-scope.
-    float topRightX = ImGui::GetWindowContentRegionMax().x - 120.f;
+    // Surrender is now available online too (host forfeits its own engine;
+    // client asks the host to). The top-right cluster width must account for
+    // BOTH the Lobby and Surrender buttons or Surrender clips off the edge.
+    const bool showSurrender = !m_replayMode && isDuelVisiblyRunning() &&
+                               !m_dm.isDone() &&
+                               (m_net.isOffline() || m_mpInDuel);
+    const float kLobbyW = 72.f, kSurrW = 96.f, kBtnGap = 8.f, kEdgePad = 6.f;
+    const float clusterW = m_replayMode
+        ? 112.f
+        : kLobbyW + (showSurrender ? kBtnGap + kSurrW : 0.f);
+    float topRightX = ImGui::GetWindowContentRegionMax().x - clusterW - kEdgePad;
     ImGui::SameLine(topRightX < 0.f ? 0.f : topRightX, 0.f);
     if (m_replayMode) {
         ImGui::EndDisabled();
@@ -4825,18 +5059,25 @@ void UI::drawDuel(int w, int h) {
         }
         ImGui::BeginDisabled();        // restore matching state for outer
     } else {
-        if (UIStyle::GhostButton("Lobby##back", {72.f, 28.f})) {
+        if (UIStyle::GhostButton("Lobby##back", {kLobbyW, 28.f})) {
             finalizeReplay("returned to lobby");
+            // Online: tear the MP session down so latches don't leak.
+            if (!m_net.isOffline()) {
+                m_mpInDuel = false;
+                m_dm.setSuppressAutoResolve(false);
+                resetMpResponseState();
+                m_net.disconnect("returned to lobby");
+            }
             m_dm.endDuel();
             m_screen = Screen::Lobby;
             ImGui::End();
             return;
         }
-        // Surrender — concede the running duel (offline for now). Confirmed
-        // via a modal so it can't be mis-clicked. MP surrender follows.
-        if (m_net.isOffline() && isDuelVisiblyRunning() && !m_dm.isDone()) {
-            ImGui::SameLine(0.f, 8.f);
-            if (UIStyle::GhostButton("Surrender##sr", {96.f, 28.f}))
+        // Surrender — concede the running duel. Confirmed via a modal so it
+        // can't be mis-clicked.
+        if (showSurrender) {
+            ImGui::SameLine(0.f, kBtnGap);
+            if (UIStyle::GhostButton("Surrender##sr", {kSurrW, 28.f}))
                 ImGui::OpenPopup("Surrender?##srpop");
         }
         // Confirm popup (positioned centrally; auto-sizes to content).
@@ -4847,7 +5088,16 @@ void UI::drawDuel(int w, int h) {
             ImGui::TextUnformatted("Concede this duel? Your opponent wins.");
             ImGui::Dummy({1.f, 8.f});
             if (UIStyle::DangerButton("Surrender", {150.f, 32.f})) {
-                m_dm.forfeit(m_net.localPlayerIndex());   // 0 offline
+                const int me = m_net.localPlayerIndex();
+                if (m_net.isOffline() || m_net.isHost()) {
+                    // We own the authoritative engine — forfeit directly. In
+                    // host-auth MP the per-frame pump then ships GameOver.
+                    m_dm.forfeit(me);
+                } else {
+                    // Host-auth client: no local engine — ask the host to
+                    // forfeit our seat; GameOver comes back over the wire.
+                    sendSurrender();
+                }
                 gAudio().play("defeat");
                 ImGui::CloseCurrentPopup();
             }
@@ -6175,11 +6425,12 @@ void UI::drawField(int fw, int fh) {
     // (info leak) and never see their own cards. The mapping lives ONLY
     // in drawField; engine player ownership (selection.player, prompt
     // gating, network response routing) is unchanged.
-    int botP = 0, topP = 1;
-    if (m_mpInDuel && !m_net.isOffline()) {
-        botP = m_net.localPlayerIndex();
-        topP = botP ^ 1;
-    }
+    // Bottom seat = the local human's engine seat. In MP that's
+    // localPlayerIndex(); offline it's normally 0, but a coin toss can set a
+    // seat override (the local player going SECOND controls engine player 1),
+    // which localPlayerIndex() reflects — so this is correct in every mode.
+    int botP = m_net.localPlayerIndex();
+    int topP = botP ^ 1;
     // One-shot debug log on the first frame after a duel starts so the
     // hand-render mapping is auditable from the Debug Log.
     static int s_lastBotP = -1, s_lastTopP = -1;
@@ -6376,8 +6627,7 @@ void UI::drawField(int fw, int fh) {
     auto drawLpPanel = [&](int pl, ImVec2 pos) {
         const float W = LP_W, H = LP_H;
         ImVec2 br = {pos.x + W, pos.y + H};
-        bool isLocal = (m_mpInDuel && !m_net.isOffline())
-                       ? (pl == m_net.localPlayerIndex()) : (pl == 0);
+        bool isLocal = (pl == m_net.localPlayerIndex());
         // P1 = cool blue, P2 = warm red.
         ImU32 sideFill = (pl == 0)
             ? IM_COL32( 18,  30,  52, 210)
@@ -7322,21 +7572,34 @@ void UI::drawSelectionPanel(int pw, int ph) {
     // ── Game Over ────────────────────────────────────────────────────────────
     // The duel has ended. Show a frozen-board Game Over panel rather than the
     // misleading "No duel in progress" while the duel screen is still open.
-    if (m_dm.isDone()) {
-        int w = m_dm.winner();
+    // On a host-authoritative client the local engine never runs, so the duel
+    // ends only when the host's GameOver lands (m_mpRemoteDone). Either source
+    // shows the panel.
+    const bool clientView =
+        m_mpHostAuth && m_net.isClient() && m_mpRemoteDone && !m_dm.isDone();
+    if (m_dm.isDone() || clientView) {
+        const int  w      = clientView ? m_mpRemoteWinner : m_dm.winner();
+        const int  reason = clientView ? m_mpRemoteReason : m_dm.winReason();
+        const int  me     = m_net.localPlayerIndex();
+        const bool isMp   = !m_net.isOffline();
         ImGui::TextColored({1.f, 0.85f, 0.25f, 1.f}, "Duel Ended");
         ImGui::Spacing();
-        if (w == 0)      ImGui::TextColored(COL_P1, "Player 1 (you) win!");
-        else if (w == 1) ImGui::TextColored(COL_P2, "Player 2 wins.");
-        else             ImGui::Text("The duel was a draw.");
-        const char* reason = DuelManager::winReasonText(m_dm.winReason());
-        if (reason && reason[0])
-            ImGui::TextWrapped("Reason: %s", reason);
+        // Result is shown from the LOCAL player's seat (offline coin toss can
+        // seat the human at 1; online the client is seat 1).
+        if (w == 0 || w == 1) {
+            const bool youWon = (w == me);
+            ImGui::TextColored(youWon ? COL_P1 : COL_P2,
+                               youWon ? "You win!" : "You lose.");
+        } else {
+            ImGui::Text("The duel was a draw.");
+        }
+        const char* reasonTxt = DuelManager::winReasonText(reason);
+        if (reasonTxt && reasonTxt[0])
+            ImGui::TextWrapped("Reason: %s", reasonTxt);
         ImGui::Spacing();
-        // Manual Save Replay — useful both when Auto-save is off AND when
-        // the user wants an extra copy with a renamed filename. Writes
-        // immediately to assets/replays/<suggested>.json.
-        if (ImGui::Button("Save Replay", {bw, 30.f})) {
+        // Manual Save Replay — only when a local engine actually recorded the
+        // duel (host / offline). A host-auth client has no replay to save.
+        if (!clientView && ImGui::Button("Save Replay", {bw, 30.f})) {
             // Make sure the replay carries the final metadata before write.
             if (m_replayRecording) {
                 auto& dm = m_dm;      // replay records the local engine
@@ -7360,26 +7623,33 @@ void UI::drawSelectionPanel(int pw, int ph) {
             }
         }
         ImGui::Spacing();
-        // Rematch — replay the SAME decks with a fresh seed (offline). The
-        // primary action so a quick re-duel is one click.
-        if (m_deck0Path[0] && m_deck1Path[0] &&
+        // Rematch — offline only (online rematch is a separate feature that
+        // needs a RematchRequest/Accept handshake). Replays the SAME decks
+        // with a fresh seed + coin toss.
+        if (!isMp && m_deck0Path[0] && m_deck1Path[0] &&
             UIStyle::PrimaryButton("Rematch", {bw, 34.f})) {
             finalizeReplay("rematch");
-            Deck d0 = loadYdk(m_deck0Path);
-            Deck d1 = loadYdk(m_deck1Path);
-            if (m_dm.startDuel(d0, d1)) {
-                beginReplayRecording(m_deck0Path, m_deck1Path);
-                captureTestingRoot();
-                gAudio().play("duel_start");
-            }
+            // Reset observers BEFORE the toss so the coin banner survives.
             m_anim.clear();
             m_zoneRectsReady  = false;
             m_sfxObsInited    = false;
             m_endGameSfxFired = false;
+            // Fresh coin toss each rematch — re-decides who goes first.
+            if (startOfflineDuelWithCoinToss(m_deck0Path, m_deck1Path,
+                                             8000, 5, 1))
+                gAudio().play("duel_start");
         }
         if (UIStyle::GhostButton("Return to Lobby", {bw, 30.f})) {
             finalizeReplay("return to lobby");
-            m_dm.endDuel();
+            if (m_dm.isRunning()) m_dm.endDuel();
+            // Online: tear the session down so we don't leak MP latches into
+            // the next duel.
+            if (isMp) {
+                m_mpInDuel = false;
+                m_dm.setSuppressAutoResolve(false);
+                resetMpResponseState();
+                m_net.disconnect("returned to lobby");
+            }
             m_screen = Screen::Lobby;
             m_anim.clear();
             m_zoneRectsReady = false;
@@ -9002,35 +9272,39 @@ void UI::drawTestingBar(int /*w*/) {
     ImGui::Checkbox("Large preview",  &m_largePreview);
     ImGui::Checkbox("Zone labels",    &m_showZoneLabels);
     ImGui::Checkbox("Legal glow",     &m_showLegalGlow);
-    ImGui::Checkbox("Layout guides",  &m_showLayoutGuides);
 
     UIStyle::DrawDivider(6.f, 6.f);
-    UIStyle::Subtle("Debug");
-    if (ImGui::Checkbox("Debug Log", &m_debugLog))
-        m_dm.setDebugMessages(m_debugLog);
-    if (ImGui::Checkbox("Testing Mode (rewind)", &m_testingMode)) {
-        m_snap.setEnabled(m_testingMode);
-        m_timeline.setEnabled(m_testingMode);
-    }
+    UIStyle::Subtle("Audio");
     bool sfxMuted = gAudio().muted();
     if (ImGui::Checkbox("Mute SFX", &sfxMuted))
         gAudio().setMuted(sfxMuted);
 
-    UIStyle::DrawDivider(6.f, 6.f);
-    // Restart the duel with a freshly randomised seed (startDuel re-seeds).
-    if (UIStyle::DangerButton("Restart Duel (new seed)", {-1.f, 30.f}) &&
-        m_deck0Path[0] && m_deck1Path[0]) {
-        Deck d0 = loadYdk(m_deck0Path);
-        Deck d1 = loadYdk(m_deck1Path);
-        m_dm.startDuel(d0, d1);
-        beginReplayRecording(m_deck0Path, m_deck1Path);
-        captureTestingRoot();
-        m_viewerLoc = 0;
+    // Restart with a freshly randomised seed — offline practice only.
+    if (m_net.isOffline()) {
+        UIStyle::DrawDivider(6.f, 6.f);
+        if (UIStyle::DangerButton("Restart Duel (new seed)", {-1.f, 30.f}) &&
+            m_deck0Path[0] && m_deck1Path[0]) {
+            finalizeReplay("restart");
+            startOfflineDuelWithCoinToss(m_deck0Path, m_deck1Path, 8000, 5, 1);
+            m_viewerLoc = 0;
+        }
     }
 
-    if (m_testingMode) {
+    // ── Developer-only tools (hidden for release) ────────────────────────
+    if (m_settings.developerMode) {
         UIStyle::DrawDivider(6.f, 6.f);
-        drawTestingTimeline();
+        UIStyle::Subtle("Developer");
+        ImGui::Checkbox("Layout guides", &m_showLayoutGuides);
+        if (ImGui::Checkbox("Debug Log", &m_debugLog))
+            m_dm.setDebugMessages(m_debugLog);
+        if (ImGui::Checkbox("Testing Mode (rewind)", &m_testingMode)) {
+            m_snap.setEnabled(m_testingMode);
+            m_timeline.setEnabled(m_testingMode);
+        }
+        if (m_testingMode) {
+            UIStyle::DrawDivider(6.f, 6.f);
+            drawTestingTimeline();
+        }
     }
 }
 
@@ -10486,96 +10760,169 @@ void UI::drawMultiplayer(int w, int h) {
             ImGui::Dummy({1.f, 10.f});
 
             if (m_net.isOffline()) {
-                if (UIStyle::PrimaryButton("Create Room", {-1.f, 36.f}))
-                    startRelayCreate();
-                ImGui::Dummy({1.f, 8.f});
-                ImGui::Text("Room code to join");
-                ImGui::SetNextItemWidth(-1.f);
-                // Uppercase-as-you-type for room codes.
-                ImGui::InputText("##mproom", m_mpRoomCodeBuf,
-                                 sizeof(m_mpRoomCodeBuf),
-                                 ImGuiInputTextFlags_CharsUppercase |
-                                 ImGuiInputTextFlags_CharsNoBlank);
-                ImGui::Dummy({1.f, 4.f});
-                if (UIStyle::SecondaryButton("Join Room", {-1.f, 34.f}))
-                    startRelayJoin();
-
-                // ── Open-room browser ───────────────────────────────────
-                UIStyle::DrawDivider(10.f, 6.f);
-                UIStyle::SectionHeader("Open rooms");
+                // ── Online lobby ─────────────────────────────────────────
+                // Auto-refreshing list of open rooms + quick actions, so the
+                // Online tab behaves like a live lobby instead of a one-shot
+                // search box.
+                const double now = ImGui::GetTime();
                 auto rlStatus = m_net.roomListStatus();
-                bool querying =
+                const bool querying =
                     (rlStatus == edo::NetSession::RoomListStatus::Querying);
-                if (querying) ImGui::BeginDisabled();
-                if (UIStyle::GhostButton(querying ? "Refreshing…##rl"
-                                                  : "Browse / Refresh##rl",
-                                         {-1.f, 30.f})) {
+                auto doRefresh = [&]{
                     std::string addr = m_mpRelayAddrBuf[0] ? m_mpRelayAddrBuf
                                                            : "127.0.0.1";
                     m_net.requestRoomList(addr, m_mpRelayPortBuf,
                                           m_mpNameBuf[0] ? m_mpNameBuf : "Player");
-                }
-                if (querying) ImGui::EndDisabled();
+                    m_lobbyLastRefreshAt = now;
+                    m_lobbyNextRefreshAt = now + 4.0;
+                };
+                // Initial load on entry + keep fresh while we sit here.
+                if (m_lobbyAutoRefresh && !querying && now >= m_lobbyNextRefreshAt)
+                    doRefresh();
 
+                auto rooms = m_net.roomList();
+                auto firstOpen = [&]() -> const edo::RoomInfo* {
+                    for (const auto& r : rooms) if (r.joinable()) return &r;
+                    return nullptr;
+                };
+                auto joinCode = [&](const std::string& code){
+                    strncpy(m_mpRoomCodeBuf, code.c_str(),
+                            sizeof(m_mpRoomCodeBuf) - 1);
+                    m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
+                    startRelayJoin();
+                };
+
+                // ── Quick actions: Quick Match + Create Room ─────────────
+                float colW = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
+                if (UIStyle::PrimaryButton("Quick Match", {colW, 38.f})) {
+                    // Join the first open room, or host a fresh one if none.
+                    if (const edo::RoomInfo* pick = firstOpen())
+                        joinCode(pick->code);
+                    else
+                        startRelayCreate();
+                }
+                ImGui::SameLine(0.f, 8.f);
+                if (UIStyle::SecondaryButton("Create Room", {colW, 38.f}))
+                    startRelayCreate();
+
+                // ── Join by code ─────────────────────────────────────────
+                ImGui::Dummy({1.f, 8.f});
+                ImGui::SetNextItemWidth(-92.f);
+                bool codeEnter = ImGui::InputTextWithHint("##mproom",
+                                 "ENTER ROOM CODE", m_mpRoomCodeBuf,
+                                 sizeof(m_mpRoomCodeBuf),
+                                 ImGuiInputTextFlags_CharsUppercase |
+                                 ImGuiInputTextFlags_CharsNoBlank |
+                                 ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine(0.f, 6.f);
+                {
+                    bool canJoin = m_mpRoomCodeBuf[0] != '\0';
+                    if (!canJoin) ImGui::BeginDisabled();
+                    if (UIStyle::SecondaryButton("Join##bycode", {86.f, 30.f}) ||
+                        (codeEnter && canJoin))
+                        startRelayJoin();
+                    if (!canJoin) ImGui::EndDisabled();
+                }
+
+                // ── Lobby header: count (left) + auto/refresh (right) ────
+                UIStyle::DrawDivider(10.f, 6.f);
+                int openCount = 0;
+                for (const auto& r : rooms) if (r.joinable()) ++openCount;
+                UIStyle::SectionHeader("Game Lobby");
+                char hdr[64];
+                if (rlStatus == edo::NetSession::RoomListStatus::Ready)
+                    snprintf(hdr, sizeof(hdr), "%d room%s · %d open",
+                             (int)rooms.size(), rooms.size() == 1 ? "" : "s",
+                             openCount);
+                else
+                    snprintf(hdr, sizeof(hdr), "%s",
+                             querying ? "Searching…" : "Connecting…");
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImGui::ColorConvertU32ToFloat4(C.textLo));
+                ImGui::TextUnformatted(hdr);
+                ImGui::PopStyleColor();
+                // Right-aligned auto toggle + manual refresh on the same row.
+                ImGui::SameLine();
+                float rowAvail = ImGui::GetContentRegionAvail().x;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                     (rowAvail - 156.f > 0.f ? rowAvail - 156.f : 0.f));
+                ImGui::Checkbox("Auto##lobby", &m_lobbyAutoRefresh);
+                ImGui::SameLine(0.f, 6.f);
+                if (querying) ImGui::BeginDisabled();
+                if (UIStyle::GhostButton(querying ? "…##rl" : "Refresh##rl",
+                                         {84.f, 26.f}))
+                    doRefresh();
+                if (querying) ImGui::EndDisabled();
+                // Freshness line.
+                if (m_lobbyLastRefreshAt > 0.0 &&
+                    rlStatus == edo::NetSession::RoomListStatus::Ready) {
+                    UIStyle::PushFont(UIStyle::fSmall);
+                    ImGui::TextDisabled("updated %.0fs ago",
+                                        now - m_lobbyLastRefreshAt);
+                    UIStyle::PopFont();
+                }
+
+                // ── Room cards ───────────────────────────────────────────
                 if (rlStatus == edo::NetSession::RoomListStatus::Error) {
+                    ImGui::Dummy({1.f, 4.f});
                     ImGui::TextColored({1.f, 0.6f, 0.6f, 1.f}, "%s",
                         m_net.roomListError().c_str());
-                } else if (rlStatus == edo::NetSession::RoomListStatus::Ready) {
-                    auto rooms = m_net.roomList();
-                    if (rooms.empty()) {
-                        ImGui::Dummy({1.f, 4.f});
-                        UIStyle::EmptyState(120.f, "No open rooms",
-                            "Create one above, or refresh");
-                    } else {
-                        ImGui::TextDisabled("%d room%s", (int)rooms.size(),
-                            rooms.size() == 1 ? "" : "s");
-                        ImGui::BeginChild("##roomlist", {-1.f,
-                            std::min(260.f, 14.f + rooms.size() * 58.f)}, false);
-                        for (size_t i = 0; i < rooms.size(); ++i) {
-                            const edo::RoomInfo& rm = rooms[i];
-                            ImGui::PushID((int)i);
-                            ImVec2 rp = ImGui::GetCursorScreenPos();
-                            float rw = ImGui::GetContentRegionAvail().x;
-                            float rh = 52.f;
-                            ImDrawList* dl = ImGui::GetWindowDrawList();
-                            UIStyle::DrawGlassPanel(dl, rp, {rp.x + rw, rp.y + rh},
-                                                    7.f, 0);
-                            // Host + code.
-                            UIStyle::PushFont(UIStyle::fHeader);
-                            dl->AddText({rp.x + 12.f, rp.y + 7.f}, C.textHi,
-                                        rm.hostName.empty() ? "Host"
-                                                            : rm.hostName.c_str());
-                            UIStyle::PopFont();
-                            char sub[80];
-                            const char* stTxt = rm.state == 0 ? "waiting"
-                                              : rm.state == 1 ? "ready"
-                                                              : "in duel";
-                            snprintf(sub, sizeof(sub), "Code %s   ·   %d/2   ·   %s",
-                                     rm.code.c_str(), rm.players, stTxt);
-                            UIStyle::PushFont(UIStyle::fSmall);
-                            dl->AddText({rp.x + 12.f, rp.y + 30.f}, C.textLo, sub);
-                            UIStyle::PopFont();
-                            // Join button on the right (joinable only).
-                            ImGui::SetCursorScreenPos({rp.x + rw - 86.f,
-                                                       rp.y + 12.f});
-                            bool joinable = rm.joinable();
-                            if (!joinable) ImGui::BeginDisabled();
-                            if (UIStyle::SecondaryButton(
-                                    joinable ? "Join##rj" : "Full##rj",
-                                    {76.f, 28.f})) {
-                                strncpy(m_mpRoomCodeBuf, rm.code.c_str(),
-                                        sizeof(m_mpRoomCodeBuf) - 1);
-                                m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf)-1] = '\0';
-                                startRelayJoin();
-                            }
-                            if (!joinable) ImGui::EndDisabled();
-                            ImGui::SetCursorScreenPos({rp.x, rp.y + rh + 6.f});
-                            ImGui::PopID();
-                        }
-                        ImGui::EndChild();
+                } else if (rooms.empty() &&
+                           rlStatus == edo::NetSession::RoomListStatus::Ready) {
+                    ImGui::Dummy({1.f, 4.f});
+                    UIStyle::EmptyState(120.f, "No open rooms",
+                        "Quick Match will host one for you");
+                } else if (!rooms.empty()) {
+                    ImGui::BeginChild("##roomlist", {-1.f,
+                        std::min(300.f, 14.f + rooms.size() * 64.f)}, false);
+                    for (size_t i = 0; i < rooms.size(); ++i) {
+                        const edo::RoomInfo& rm = rooms[i];
+                        ImGui::PushID((int)i);
+                        ImVec2 rp = ImGui::GetCursorScreenPos();
+                        float rw = ImGui::GetContentRegionAvail().x;
+                        float rh = 58.f;
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        bool joinable = rm.joinable();
+                        UIStyle::DrawGlassPanel(dl, rp, {rp.x + rw, rp.y + rh},
+                                                7.f, 0);
+                        // Status pill (left accent): open / ready / in duel.
+                        ImU32 stCol = rm.state == 0 ? IM_COL32(110, 220, 140, 255)
+                                    : rm.state == 1 ? IM_COL32(232, 196, 110, 255)
+                                                    : IM_COL32(150, 150, 158, 255);
+                        const char* stTxt = rm.state == 0 ? "OPEN"
+                                          : rm.state == 1 ? "READY"
+                                                          : "IN DUEL";
+                        dl->AddRectFilled(rp, {rp.x + 4.f, rp.y + rh},
+                                          stCol, 7.f, ImDrawFlags_RoundCornersLeft);
+                        // Host name.
+                        UIStyle::PushFont(UIStyle::fHeader);
+                        dl->AddText({rp.x + 14.f, rp.y + 8.f}, C.textHi,
+                                    rm.hostName.empty() ? "Host"
+                                                        : rm.hostName.c_str());
+                        UIStyle::PopFont();
+                        // Sub: code · players · status.
+                        char sub[96];
+                        snprintf(sub, sizeof(sub), "Code %s   ·   %d/2   ·   %s",
+                                 rm.code.c_str(), rm.players, stTxt);
+                        UIStyle::PushFont(UIStyle::fSmall);
+                        dl->AddText({rp.x + 14.f, rp.y + 32.f}, C.textLo, sub);
+                        UIStyle::PopFont();
+                        // Status dot near the right of the title.
+                        dl->AddCircleFilled({rp.x + rw - 100.f, rp.y + 16.f},
+                                            4.f, stCol);
+                        // Join button on the right (joinable only).
+                        ImGui::SetCursorScreenPos({rp.x + rw - 88.f,
+                                                   rp.y + 15.f});
+                        if (!joinable) ImGui::BeginDisabled();
+                        if (UIStyle::SecondaryButton(
+                                joinable ? "Join##rj" : "Full##rj",
+                                {78.f, 28.f}))
+                            joinCode(rm.code);
+                        if (!joinable) ImGui::EndDisabled();
+                        ImGui::SetCursorScreenPos({rp.x, rp.y + rh + 6.f});
+                        ImGui::PopID();
                     }
-                } else if (!querying) {
-                    ImGui::TextDisabled("Browse to see rooms on this server.");
+                    ImGui::EndChild();
                 }
             } else if (m_mpRoomActive && !m_mpRoomCode.empty()) {
                 // Show the active room code prominently + a copy button.

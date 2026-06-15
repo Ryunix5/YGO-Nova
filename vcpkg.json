@@ -1,0 +1,14 @@
+{
+  "name": "edopro-plus",
+  "version": "0.1.0",
+  "dependencies": [
+    "sdl2",
+    "sqlite3",
+    {
+      "name": "lua",
+      "features": [
+        "cpp"
+      ]
+    }
+  ]
+}

@@ -9,6 +9,7 @@
 #include "Replay.h"
 #include "TestingTimeline.h"
 #include "NetSession.h"
+#include "UpdateChecker.h"
 #include "NetSnapshots.h"
 #include <string>
 #include <vector>
@@ -49,6 +50,11 @@ private:
     CardDB&          m_db;
     Renderer&        m_rend;
     SnapshotManager& m_snap;
+
+    edo::UpdateChecker m_update;       // in-app "newer release?" check
+    bool   m_updateDismissed = false;  // user closed the update notice
+    // Open a URL in the user's default browser (release page, etc.).
+    void openExternalUrl(const std::string& url);
 
     Screen  m_screen = Screen::Lobby;
 
@@ -217,8 +223,18 @@ private:
     bool   m_testingJustRestored = false;
     std::string m_testingLastRestore;       // diagnostics: last restore result
     int    m_testingHoverIdx   = -1;         // timeline row hovered (preview)
-    // Capture the deterministic root at the start of an offline duel.
-    void captureTestingRoot();
+    // Capture the deterministic root at the start of an offline duel. The two
+    // paths are the decks in REGISTERED order (team 0 = goes first), which the
+    // coin toss may swap relative to P1/P2.
+    void captureTestingRoot(const std::string& team0Path,
+                            const std::string& team1Path);
+    // Start an offline duel, flipping a coin (when enabled) to decide who takes
+    // the first turn. Registers decks in toss order, sets the local seat, wires
+    // replay + testing capture, and shows a coin-result banner. Returns false if
+    // the engine refused to start (decks restored to P1/P2 order on failure).
+    bool startOfflineDuelWithCoinToss(const std::string& p1Path,
+                                      const std::string& p2Path,
+                                      int lp, int handCount, int drawCount);
     // Record one response into the timeline (called from the response
     // recorder). Gated to offline + testing-on + not-rebuilding.
     void recordTestingAction(const void* data, uint32_t len);
@@ -438,6 +454,10 @@ private:
     bool        m_mpRoomActive       = false; // room formed (created/joined)
     bool        m_mpRelayConnecting  = false; // socket up, awaiting room reply
     std::string m_mpRoomError;               // last friendly room error
+    // ── Online lobby (auto-refreshing open-room list) ───────────────────
+    bool        m_lobbyAutoRefresh   = true;  // poll the relay periodically
+    double      m_lobbyNextRefreshAt = 0.0;   // ImGui::GetTime() of next poll
+    double      m_lobbyLastRefreshAt = 0.0;   // when the last list landed
     // Drives the room-handshake kickoff exactly once when the peer appears.
     bool        m_mpHandshakeSent    = false;
     // Helpers for the online flow.
@@ -460,6 +480,14 @@ private:
     bool        m_mpStartupHealthRan = false;
     // Connection-lost modal latch.
     bool        m_mpConnLostShown  = false;
+    // ── Multiplayer game-over propagation ───────────────────────────────
+    // Host: send a GameOver{winner,reason} exactly once when its engine ends.
+    bool        m_mpGameOverSent   = false;
+    // Client (host-auth): set from the inbound GameOver so the Game Over
+    // panel can render even though the client never runs an ocgcore.
+    bool        m_mpRemoteDone      = false;
+    int         m_mpRemoteWinner    = -1;   // engine seat: 0/1, else draw
+    int         m_mpRemoteReason    = -1;   // DuelManager win-reason code
     // Anti-repeat guard for the MP-side zero-option chain auto-pass.
     // A unique key per (waitType + owner + cardCount + forced) fingerprint;
     // once we auto-pass for that key, we won't try again until the engine
@@ -620,6 +648,12 @@ private:
     // "frame" (per-frame pump) or "after-choice" (post-ClientChoice push).
     void buildAndSendPromptSnapshotIfRemote(const char* reason = "frame");
     void handleClientChoice(const edo::NetMessage& m); // host receives
+    // host → client, exactly once when the authoritative engine ends.
+    void sendGameOver(int winner, int reason);
+    void handleGameOver(const edo::NetMessage& m);     // client receives
+    // client → host concede; host forfeits the client's seat on its engine.
+    void sendSurrender();
+    void handleSurrender(const edo::NetMessage& m);    // host receives
     // ── Client-side: snapshot ingest ───────────────────────────────────
     void handleFieldSnapshot(const edo::NetMessage& m);
     void handlePromptSnapshot(const edo::NetMessage& m);

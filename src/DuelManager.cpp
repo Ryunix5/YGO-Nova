@@ -288,12 +288,12 @@ bool DuelManager::process() {
         // answers before touching OCG_DuelProcess again.
         if (m_awaiting && !m_responseQueued) {
             if (isRealSelect(m_selection.type)) {
-                if (m_selection.player == 0) {
+                if (m_selection.player == m_humanSeat) {
                     // Genuine local-player turn — hand control to the UI.
                     if (sawMessages) queryField();
                     return true;
                 }
-                // m_selection.player == 1
+                // The OTHER seat (opponent).
                 if (!m_localMode) {
                     // A real remote opponent: genuinely waiting on them.
                     if (sawMessages) queryField();
@@ -819,8 +819,8 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         m_selection.toEP = r8(p)!=0;   // can end turn
         r8(p);                         // can shuffle hand (not exposed yet)
 
-        addLog(m_selection.player == 0 ? "[Your turn - Main Phase]"
-                                       : "[Player 2 - Main Phase]");
+        addLog(m_selection.player == m_humanSeat ? "[Your turn - Main Phase]"
+                                                 : "[Player 2 - Main Phase]");
         // Per-action source dump so a GY effect and a field effect of the
         // same card are visibly distinct (different loc/seq/index). Each
         // activatable source is uniquely identified by con+loc+seq+code+

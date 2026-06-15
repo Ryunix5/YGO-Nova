@@ -2,6 +2,7 @@
 #include <string>
 #include <unordered_map>
 #include <cstdint>
+#include "ImageFetcher.h"
 
 // Manages SDL2/OpenGL textures for card art
 class Renderer {
@@ -12,6 +13,13 @@ public:
     // Must be called after OpenGL context is created
     void init();
     void shutdown();
+
+    // Toggle on-demand card-image downloading (off = local files only).
+    void setImageDownload(bool on) {
+        m_downloadImages = on;
+        m_fetcher.setEnabled(on);
+    }
+    const edo::ImageFetcher& fetcher() const { return m_fetcher; }
 
     // Load a card texture by passcode. Returns ImGui texture ID (void*)
     // Falls back to the back-of-card texture if art is missing.
@@ -32,4 +40,7 @@ private:
     void* m_backTex    = nullptr;
     void* m_unknownTex = nullptr;
     std::string m_backInfo;            // card-back load diagnostics
+
+    edo::ImageFetcher m_fetcher;       // on-demand card-art downloader
+    bool  m_downloadImages = true;     // mirror of m_fetcher.enabled()
 };

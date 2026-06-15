@@ -80,6 +80,8 @@ enum class NetMsgType : uint32_t {
     ClientChoice    = 14, // client → host: chosen option for a PromptSnapshot
     GameEvent       = 15, // host → client: optional fx hint (summon/attack/…)
     SyncError       = 16, // either direction: hard-fault notice, pause the duel
+    GameOver        = 17, // host → client: duel ended {winner, reason}
+    Surrender       = 18, // client → host: concede {seat}; host forfeits it
 
     // ── Relay / room control (online play, types 101+) ───────────────────
     // These travel between a peer and the RELAY SERVER only — they are NOT
@@ -187,12 +189,21 @@ public:
     bool      isOffline()   const { return mode() == NetMode::Offline; }
     bool      isHost()      const { return mode() == NetMode::Host; }
     bool      isClient()    const { return mode() == NetMode::Client; }
+    // Engine seat the LOCAL human controls. Normally fixed by mode
+    // (host = 0, client = 1, offline = 0), but a coin toss can override it
+    // (e.g. the local player going SECOND controls engine player 1 because
+    // ocgcore always gives the first turn to team 0). The override is the
+    // single source of truth used by perspective, prompt routing and the
+    // engine responder. -1 = no override (use the mode default).
     int       localPlayerIndex() const {
+        if (m_seatOverride >= 0) return m_seatOverride;
         if (mode() == NetMode::Host)   return 0;
         if (mode() == NetMode::Client) return 1;
         return 0;
     }
     int       remotePlayerIndex() const { return localPlayerIndex() ^ 1; }
+    void      setSeatOverride(int idx) { m_seatOverride = (idx == 0 || idx == 1) ? idx : -1; }
+    void      clearSeatOverride()      { m_seatOverride = -1; }
 
     NetPeer       peer()       const;
     std::string   lastError()  const;
@@ -253,6 +264,9 @@ private:
     std::vector<RoomInfo>  m_roomList;
     std::string            m_roomListError;
     std::atomic<int>       m_roomListStatus{0};   // RoomListStatus
+
+    // Coin-toss seat override (-1 = none). UI-thread only.
+    int                    m_seatOverride = -1;
 };
 
 // ── Wire-format helpers — small endian-safe encoders ──────────────────

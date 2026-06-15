@@ -253,6 +253,14 @@ public:
     void setPhaseDelay(double sec) { m_phaseDelaySec = sec < 0.0 ? 0.0 : sec; }
     double phaseDelay() const { return m_phaseDelaySec; }
 
+    // Engine seat the LOCAL human controls (0 or 1). The responder hands
+    // prompts for THIS seat to the UI and routes the other seat to the
+    // auto-AI (offline) or the remote peer (MP). A coin toss sets this so the
+    // local player can go second (controlling team 1, since ocgcore always
+    // gives the first turn to team 0). Default 0 — unchanged behaviour.
+    void setHumanSeat(int s) { m_humanSeat = (s & 1); }
+    int  humanSeat() const   { return m_humanSeat; }
+
     bool isRunning() const { return m_duel != nullptr && m_running; }
     bool isDone()    const { return m_done; }
     bool isBlocked() const { return m_blocked; }   // parked on an unsupported request
@@ -373,6 +381,7 @@ private:
 
     // ── Per-phase pacing (presentation timing only) ───────────────────────
     double                   m_phaseDelaySec = 0.0;
+    int                      m_humanSeat = 0;   // engine seat the human controls
     std::chrono::steady_clock::time_point m_phaseHoldUntil{};
     // Set by the MSG_NEW_PHASE handler; consumed by the process() pump to
     // arm the hold once per phase change.

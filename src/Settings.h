@@ -64,9 +64,25 @@ struct Settings {
     bool   debugLog          = false;
     bool   verboseLog        = false;    // engine-level technical traces
 
+    // ── Developer / diagnostics ──────────────────────────────────────────
+    // Off for release builds: hides dev-only tools (Testing Mode rewind,
+    // layout guides, the main-menu Debug panel, verbose engine traces) so the
+    // shipping UI stays clean. Power users can flip it on in Settings.
+    bool   developerMode     = false;
+
     // ── Gameplay UI ──────────────────────────────────────────────────────
     bool   confirmRestart    = false;
     bool   clickFirstHints   = true;
+    // Coin toss decides who takes the first turn at the start of an offline
+    // duel (on = random, off = P1 always first).
+    bool   coinTossEnabled   = true;
+    // Download missing card art on demand from the public CDN and cache it to
+    // assets/cards/. On by default so online releases (shipped without the ~9k
+    // images) still show art; turn off for fully offline / local-only use.
+    bool   downloadCardImages = true;
+    // Check GitHub for a newer release on launch (notice only — never auto-
+    // installs). No-op unless EDOPRO_UPDATE_REPO was set at build time.
+    bool   checkForUpdates    = true;
 
     // ── Replays ──────────────────────────────────────────────────────────
     // Auto-save a JSON replay to assets/replays/ when the duel ends. On by
@@ -77,8 +93,15 @@ struct Settings {
     // Persisted so Host/Join fields remember their last value between
     // launches. mpMode is a string ("offline"/"host"/"client"/"lan") so
     // future modes can extend it without a settings migration.
+    // A relay host can be baked in at build time so public-release players land
+    // on your server without typing anything: -DEDOPRO_DEFAULT_RELAY=host.
+    // Blank (the default) falls back to localhost for local/dev use.
+#ifndef EDOPRO_DEFAULT_RELAY
+#define EDOPRO_DEFAULT_RELAY ""
+#endif
     std::string mpDisplayName = "Player";
-    std::string mpHostIP      = "127.0.0.1";
+    std::string mpHostIP      = (EDOPRO_DEFAULT_RELAY[0] ? EDOPRO_DEFAULT_RELAY
+                                                         : "127.0.0.1");
     int         mpPort        = 7878;
     std::string mpMode        = "offline";
 
@@ -175,8 +198,12 @@ struct Settings {
         f << "debugLog="          << (debugLog          ? "1" : "0") << "\n";
         f << "verboseLog="        << (verboseLog        ? "1" : "0") << "\n";
         f << "\n# Gameplay UI\n";
+        f << "developerMode="     << (developerMode     ? "1" : "0") << "\n";
         f << "confirmRestart="    << (confirmRestart    ? "1" : "0") << "\n";
         f << "clickFirstHints="   << (clickFirstHints   ? "1" : "0") << "\n";
+        f << "coinTossEnabled="   << (coinTossEnabled   ? "1" : "0") << "\n";
+        f << "downloadCardImages="<< (downloadCardImages? "1" : "0") << "\n";
+        f << "checkForUpdates="    << (checkForUpdates    ? "1" : "0") << "\n";
         f << "\n# Replays\n";
         f << "autoSaveReplays="   << (autoSaveReplays   ? "1" : "0") << "\n";
         f << "\n# Multiplayer\n";
@@ -225,8 +252,12 @@ private:
         else if (k == "selectedLogTab")    selectedLogTab    = intFromStr(v, selectedLogTab);
         else if (k == "debugLog")          debugLog          = boolFromStr(v);
         else if (k == "verboseLog")        verboseLog        = boolFromStr(v);
+        else if (k == "developerMode")     developerMode     = boolFromStr(v);
         else if (k == "confirmRestart")    confirmRestart    = boolFromStr(v);
         else if (k == "clickFirstHints")   clickFirstHints   = boolFromStr(v);
+        else if (k == "coinTossEnabled")   coinTossEnabled   = boolFromStr(v);
+        else if (k == "downloadCardImages")downloadCardImages= boolFromStr(v);
+        else if (k == "checkForUpdates")   checkForUpdates    = boolFromStr(v);
         else if (k == "autoSaveReplays")   autoSaveReplays   = boolFromStr(v);
         else if (k == "mpDisplayName")     mpDisplayName     = v;
         else if (k == "mpHostIP")          mpHostIP          = v;

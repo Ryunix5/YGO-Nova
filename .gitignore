@@ -1,0 +1,53 @@
+# ─── Build output ────────────────────────────────────────────────────────────
+/build/
+build/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+dist/
+
+# ─── Package managers / toolchains (fetched, not source) ─────────────────────
+/vcpkg/
+vcpkg_installed/
+/emsdk/
+
+# ─── Vendored dependencies fetched by build.bat (imgui, stb) ─────────────────
+/vendor/imgui/
+/vendor/stb/
+
+# ─── IDE / editor ────────────────────────────────────────────────────────────
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+CMakeSettings.json
+CMakeCache.txt
+CMakeFiles/
+
+# ─── Runtime / generated ─────────────────────────────────────────────────────
+imgui.ini
+assets/replays/*.json
+*.log
+
+# Card images are downloaded on demand + cached here at runtime (Konami IP,
+# ~300 MB). Keep cards.cdb (the database) but not the image pack.
+assets/cards/
+!assets/cards.cdb
+
+# Dev script backups (timestamped) — never part of a release.
+assets/scripts_backup_*/
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ─── OS cruft ────────────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+desktop.ini

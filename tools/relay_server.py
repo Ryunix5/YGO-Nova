@@ -32,6 +32,8 @@
 # No accounts, no passwords, no matchmaking — guest names only, by design.
 #
 import argparse
+import os
+import signal
 import socket
 import struct
 import threading
@@ -277,7 +279,7 @@ class RelayServer:
                 try:
                     mtype, payload = read_frame(sock)
                 except socket.timeout:
-                    self.log(f"timeout {conn.addr} — dropping")
+                    self.log(f"timeout {conn.addr} - dropping")
                     break
                 conn.last_seen = time.time()
 
@@ -357,13 +359,29 @@ class RelayServer:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((host, port))
-        srv.listen(16)
+        srv.listen(64)
+        # A short accept timeout lets the loop notice a SIGTERM-set stop flag
+        # (containers/systemd stop with SIGTERM, not Ctrl+C/SIGINT).
+        srv.settimeout(1.0)
+        self._stop = False
+
+        def _on_term(signum, _frame):
+            self.log(f"received signal {signum} — shutting down")
+            self._stop = True
+        try:
+            signal.signal(signal.SIGTERM, _on_term)
+        except (ValueError, OSError):
+            pass   # not on the main thread / unsupported — ignore
+
         self.log(f"EdoPro+ relay server started on {host}:{port} "
                  f"(protocol v{PROTOCOL_VERSION})")
-        self.log("waiting for connections — Ctrl+C to stop")
+        self.log("waiting for connections - Ctrl+C or SIGTERM to stop")
         try:
-            while True:
-                csock, addr = srv.accept()
+            while not self._stop:
+                try:
+                    csock, addr = srv.accept()
+                except socket.timeout:
+                    continue
                 csock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 conn = Conn(csock, addr)
                 self.vlog(f"connection from {addr}")
@@ -376,12 +394,18 @@ class RelayServer:
 
 
 def main():
+    # Env vars are the natural config surface for containers / systemd; CLI
+    # flags override them. EDOPRO_RELAY_HOST / EDOPRO_RELAY_PORT / *_VERBOSE.
+    env_host = os.environ.get("EDOPRO_RELAY_HOST", "0.0.0.0")
+    env_port = int(os.environ.get("EDOPRO_RELAY_PORT", "7879"))
+    env_verbose = os.environ.get("EDOPRO_RELAY_VERBOSE", "0") not in ("0", "", "false", "False")
+
     ap = argparse.ArgumentParser(description="EdoPro+ online relay server")
-    ap.add_argument("--host", default="0.0.0.0",
-                    help="bind address (default 0.0.0.0 — all interfaces)")
-    ap.add_argument("--port", type=int, default=7879,
-                    help="listen port (default 7879)")
-    ap.add_argument("--verbose", action="store_true",
+    ap.add_argument("--host", default=env_host,
+                    help="bind address (default 0.0.0.0 / $EDOPRO_RELAY_HOST)")
+    ap.add_argument("--port", type=int, default=env_port,
+                    help="listen port (default 7879 / $EDOPRO_RELAY_PORT)")
+    ap.add_argument("--verbose", action="store_true", default=env_verbose,
                     help="log every connection + periodic relay counts")
     args = ap.parse_args()
     RelayServer(verbose=args.verbose).run(args.host, args.port)
