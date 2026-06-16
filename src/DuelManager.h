@@ -304,6 +304,7 @@ public:
     // Most recent on-field action + who did it (0/1, or 0xFF if none).
     const std::string& lastActionDesc()   const { return m_lastActionDesc; }
     uint8_t            lastActionPlayer() const { return m_lastActionPlayer; }
+    uint64_t           lastActionSeq()    const { return m_lastActionSeq; }
 
     // Pulls all MSG_ATTACK events the engine has reported since the last
     // call, then clears the queue. The UI animation layer drains this once
@@ -350,8 +351,10 @@ private:
     // player can see what their opponent is attempting before deciding to chain.
     std::string m_lastActionDesc;
     uint8_t     m_lastActionPlayer    = 0xFF;   // 0xFF = none recorded
+    uint64_t    m_lastActionSeq       = 0;      // bumps on every new action
     void setLastAction(uint8_t player, const std::string& desc) {
         m_lastActionPlayer = player & 1; m_lastActionDesc = desc;
+        ++m_lastActionSeq;
     }
     uint32_t    m_traceSummonCode     = 0;
     std::string m_traceSummonName;
@@ -397,6 +400,11 @@ private:
     // this turn, so it never re-activates the same effect into an endless loop.
     int                      m_aiTurnSeen = -1;
     std::vector<uint64_t>    m_aiDoneThisTurn;
+    // Hard loop backstop: total AI responses this turn. If an effect/summon
+    // loop ever spins, this forces the AI to bail out of the phase rather than
+    // respond forever.
+    int                      m_aiActionTurn      = -1;
+    int                      m_aiActionsThisTurn = 0;
     std::chrono::steady_clock::time_point m_phaseHoldUntil{};
     // Set by the MSG_NEW_PHASE handler; consumed by the process() pump to
     // arm the hold once per phase change.

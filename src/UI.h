@@ -273,6 +273,9 @@ private:
     void   drawOpponentActionHint();
     // First-run welcome (name setup) — shown once when no config exists.
     bool   m_showWelcome = false;
+    // Last opponent-action sequence we toasted, so each new summon/activation/
+    // attack notifies the player exactly once.
+    uint64_t m_uiLastActionSeq = 0;
     // Fullscreen toggle request (F11) — Game applies it to the SDL window.
     bool   m_fullscreenToggleReq = false;
     void   sortEditDeck();        // organise the deck-builder deck by type

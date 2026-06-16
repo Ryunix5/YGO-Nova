@@ -4553,6 +4553,18 @@ void UI::drawDuel(int w, int h) {
             ? (m_settings.fastTurns ? 0.0 : (double)m_settings.enginePhasePacing)
             : 0.0);
 
+    // Opponent-action notifications: toast each new summon / activation /
+    // attack the opponent makes, so the player can follow the game state even
+    // when they have no response to give. One toast per action (seq-guarded).
+    if (m_dm.lastActionSeq() != m_uiLastActionSeq) {
+        m_uiLastActionSeq = m_dm.lastActionSeq();
+        if (m_dm.lastActionPlayer() != (uint8_t)m_net.localPlayerIndex() &&
+            !m_dm.lastActionDesc().empty()) {
+            pushToast("Opponent: " + m_dm.lastActionDesc(),
+                      IM_COL32(255, 178, 92, 235), 2.6);
+        }
+    }
+
     // Replay playback — auto-feed recorded responses BEFORE any input UI
     // runs this frame. The feeder is a no-op outside replay mode.
     feedReplayTick();
@@ -8643,9 +8655,17 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
         hintLine("BATTLE PHASE", IM_COL32(240, 120, 80, 220),
                  desc, IM_COL32(180, 150, 140, 200));
     } else if (inChain) {
-        hintLine("CHAIN WINDOW", IM_COL32(220, 110, 210, 220),
-                 "  Click a glowing magenta card, or Pass",
-                 IM_COL32(180, 148, 178, 200));
+        // Show what the opponent is attempting, so the player understands what
+        // they'd be chaining to before they respond or Pass.
+        std::string desc;
+        if (!m_dm.lastActionDesc().empty() &&
+            m_dm.lastActionPlayer() != (uint8_t)kLocal)
+            desc = "  Opponent is " + m_dm.lastActionDesc() +
+                   "  —  chain a card, or Pass";
+        else
+            desc = "  Click a glowing magenta card, or Pass";
+        hintLine("RESPOND?", IM_COL32(255, 178, 92, 230),
+                 desc.c_str(), IM_COL32(255, 214, 140, 230));
     } else if (inPlace) {
         hintLine("PLACE CARD", IM_COL32(110, 210, 130, 220),
                  "  Click a glowing green zone on the field",

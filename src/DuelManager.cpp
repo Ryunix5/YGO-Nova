@@ -1774,7 +1774,10 @@ bool DuelManager::aiIdlePhase() {
             case 1: { int v = atkOf(a.code); if (v > spAtk) { spAtk = v; spIdx = i; } break; }
             case 0: { int v = atkOf(a.code); if (v > nsAtk) { nsAtk = v; nsIdx = i; } break; }
             case 5: {
-                uint64_t key = ((uint64_t)a.code << 20) ^ (a.effect.raw & 0xFFFFF);
+                // Key on the card code alone: the AI activates each card's
+                // effect at most once per turn, which prevents a single card's
+                // ignition effect from re-listing and looping.
+                uint64_t key = (uint64_t)a.code;
                 bool used = false;
                 for (uint64_t k : m_aiDoneThisTurn) if (k == key) { used = true; break; }
                 if (!used && actIdx < 0) { actIdx = i; actKey = key; }
@@ -1842,11 +1845,41 @@ bool DuelManager::autoRespondP2() {
     if (m_debugMsgs)
         addLog(std::string("[dbg] auto-AI (P2) <- ") + waitName(type));
 
+    // ── Hard per-turn loop backstop ──────────────────────────────────────
+    // Count every AI response this turn. A real combo rarely exceeds a few
+    // dozen; if we blow past the cap an effect is looping, so bail out of the
+    // current window with the most passive legal answer instead of forever.
+    if (m_field.turnCount != m_aiActionTurn) {
+        m_aiActionTurn = m_field.turnCount;
+        m_aiActionsThisTurn = 0;
+    }
+    if (++m_aiActionsThisTurn > 220) {
+        if (m_aiActionsThisTurn == 221)
+            addLog("[auto-AI] loop guard tripped — bailing out of the phase");
+        switch (type) {
+            case WaitType::SelectIdleCmd:   respondIdleCmd(7, 0); return true;
+            case WaitType::SelectBattleCmd: respondIdleCmd(3, 0); return true;
+            case WaitType::SelectChain:     respondChain(forced ? 0 : -1); return true;
+            case WaitType::SelectYesNo:
+            case WaitType::SelectEffectYn:  respondYesNo(false); return true;
+            case WaitType::SelectOption:    respondInt(0); return true;
+            case WaitType::SelectCard:
+            case WaitType::SelectTribute:
+                if (hasCards) respondSingleCard(0); else respondInt(0);
+                return true;
+            case WaitType::SelectUnselect:  respondInt(-1); return true;
+            default:                        return false;
+        }
+    }
+
     switch (type) {
     case WaitType::SelectIdleCmd:    return aiIdlePhase();
     case WaitType::SelectBattleCmd:  return aiBattlePhase();
     case WaitType::SelectYesNo:      respondYesNo(false); return true;  // generic — decline
-    case WaitType::SelectEffectYn:   respondYesNo(true);  return true;  // activate own trigger effect
+    // Decline optional trigger effects. (Activating them here could re-open the
+    // same window and loop; the AI still uses ignition effects via the Main
+    // Phase activate path, which is per-turn guarded.)
+    case WaitType::SelectEffectYn:   respondYesNo(false); return true;
     case WaitType::SelectOption:     respondInt(0);        return true;
     case WaitType::SelectCard: {
         if (!hasCards) { respondInt(0); return true; }
