@@ -6301,11 +6301,19 @@ void UI::drawCardZone(const char* label, const CardState* card,
                 }
             }
         } else {
-            // No art: name truncated in zone
-            CardInfo ci = m_db.getCard(card->code);
-            const char* nm = ci.name.empty() ? label : ci.name.c_str();
-            dl->AddText({sp.x + 4.f, sp.y + 4.f},
-                        IM_COL32(190, 200, 230, 230), nm);
+            // No art: name truncated in zone — but an opponent's face-down
+            // card must never reveal its name (hidden-info rule).
+            bool hiddenFromUs = faceDown &&
+                card->player != (uint8_t)m_net.localPlayerIndex();
+            if (hiddenFromUs) {
+                dl->AddText({sp.x + 4.f, sp.y + 4.f},
+                            IM_COL32(160, 170, 200, 210), "Set");
+            } else {
+                CardInfo ci = m_db.getCard(card->code);
+                const char* nm = ci.name.empty() ? label : ci.name.c_str();
+                dl->AddText({sp.x + 4.f, sp.y + 4.f},
+                            IM_COL32(190, 200, 230, 230), nm);
+            }
         }
 
         // Faint zone label in the top-left of occupied zones (M1, ST3, FZ, …)
@@ -6321,7 +6329,10 @@ void UI::drawCardZone(const char* label, const CardState* card,
 
         // Optional card-name strip at the bottom — toggled via the testing bar.
         // Drawn ABOVE the ATK stripe (for monsters) so neither obscures the other.
-        if (m_showFieldNames) {
+        // Hidden-info rule: never print an opponent's face-down card name.
+        bool nameHidden = faceDown &&
+            card->player != (uint8_t)m_net.localPlayerIndex();
+        if (m_showFieldNames && !nameHidden) {
             CardInfo ci = m_db.getCard(card->code);
             if (!ci.name.empty()) {
                 std::string nm = ci.name;
@@ -8557,9 +8568,11 @@ void UI::drawSelectionPanel(int pw, int ph) {
         // Horizontal gallery of big card thumbnails. Click a card to pick it
         // (single-pick) or toggle it (multi-pick); the row scrolls sideways
         // when there are many candidates. Hovering shows the full preview.
-        const float kCardW = 96.f, kCardH = 140.f;
+        const float kCardW = 104.f, kCardH = 152.f;
         const ImU32 kSelCol = IM_COL32(232, 196, 110, 255);   // gold (selected)
-        float listH = kCardH + 26.f;
+        // Height = card + name line + horizontal scrollbar, so the row never
+        // needs a vertical scroll — only sideways to see more options.
+        float listH = kCardH + 50.f;
         ImGui::BeginChild("##sclist", {bw, listH}, true,
                           ImGuiWindowFlags_HorizontalScrollbar);
         bool first = true;
@@ -9153,7 +9166,7 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     // below maxH and the child scrolls only when it actually overflows.
     float MW, maxH;
     if (isViewer)        { MW = 440.f; maxH = 600.f; }
-    else if (listLike)   { MW = 480.f; maxH = 600.f; }
+    else if (listLike)   { MW = 860.f; maxH = 600.f; }   // wide card gallery
     else if (optionLike) { MW = 460.f; maxH = 440.f; }
     else if (m_dm.isDone()) { MW = 440.f; maxH = 500.f; } // game over panel
     else                 { MW = 400.f; maxH = 340.f; }   // yes/no
