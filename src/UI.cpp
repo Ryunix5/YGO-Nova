@@ -2541,6 +2541,7 @@ void UI::loadSettings() {
     } else if (!existed) {
         // No file — first run. We'll write defaults on the first save().
         m_dm.logEvent("[settings] no config found, using defaults");
+        m_showWelcome = true;   // greet the player + ask for a display name
     }
     m_dm.setDebugMessages(m_debugLog);
 
@@ -3376,6 +3377,10 @@ bool UI::draw(int winW, int winH) {
         case Screen::Replays:     drawReplays(winW, winH);      break;
         case Screen::Multiplayer: drawMultiplayer(winW, winH);  break;
     }
+    // F11 toggles fullscreen on any screen (Game applies it to the window).
+    if (ImGui::IsKeyPressed(ImGuiKey_F11, false) &&
+        !ImGui::GetIO().WantTextInput)
+        m_fullscreenToggleReq = true;
     // Duel keyboard shortcuts + help overlay (drawn after the screen so the
     // overlay sits on top; hotkeys are UI-only — see handleDuelHotkeys).
     if (m_screen == Screen::Duel) {
@@ -4086,6 +4091,39 @@ void UI::drawLobby(int w, int h) {
         ImGui::EndPopup();
     }
 
+    // ── First-run welcome (display-name setup) ──────────────────────────────
+    if (m_showWelcome) {
+        ImGui::OpenPopup("Welcome##firstrun");
+        m_showWelcome = false;
+        strncpy(m_mpNameBuf, m_settings.mpDisplayName.c_str(),
+                sizeof(m_mpNameBuf) - 1);
+        m_mpNameBuf[sizeof(m_mpNameBuf) - 1] = '\0';
+    }
+    ImGui::SetNextWindowSize({420.f, 0.f}, ImGuiCond_Always);
+    if (ImGui::BeginPopupModal("Welcome##firstrun", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+        ImGui::TextUnformatted("Welcome to YGO: Nova");
+        if (UIStyle::fHeader) ImGui::PopFont();
+        ImGui::Spacing();
+        ImGui::TextWrapped("Pick a display name — it's shown to opponents in "
+            "online and LAN duels. You can change it any time in Settings.");
+        ImGui::Dummy({1.f, 8.f});
+        ImGui::TextUnformatted("Display name");
+        ImGui::SetNextItemWidth(-1.f);
+        bool enter = ImGui::InputTextWithHint("##welcomename", "Player",
+            m_mpNameBuf, sizeof(m_mpNameBuf),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Dummy({1.f, 10.f});
+        if (UIStyle::PrimaryButton("Let's duel", {-1.f, 36.f}) || enter) {
+            m_settings.mpDisplayName = m_mpNameBuf[0] ? m_mpNameBuf : "Player";
+            saveSettings();
+            gAudio().play("confirm");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // ── Settings popup ──────────────────────────────────────────────────────
     // Multi-section modal that surfaces every persisted user preference.
     // Changes apply immediately to the live UI/audio subsystems AND save to
@@ -4446,6 +4484,7 @@ void UI::drawHelpOverlay(int w, int h) {
     row("Left-click",  "Play a card / pick an action or option");
     row("Hover",       "Preview a card + its text");
     row("F1",          "Toggle this help");
+    row("F11",         "Toggle fullscreen");
     row("Esc",         "Close the open panel (help / viewer / info / tools)");
     ImGui::Dummy({1.f, 4.f});
     UIStyle::Subtle("Offline prompts");
@@ -9648,6 +9687,12 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::SameLine(0.f, 6.f);
         if (UIStyle::GhostButton("Refresh", {REF_W, 32.f})) refreshDeckFiles();
 
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Sort", {52.f, 32.f})) {
+            sortEditDeck();
+            pushToast("Deck sorted", IM_COL32(180, 220, 255, 255), 1.8);
+        }
+
         // Clipboard share — copy the current deck as .ydk text, or paste one in.
         ImGui::SameLine(0.f, 6.f);
         if (UIStyle::GhostButton("Copy", {52.f, 32.f})) {
@@ -11320,6 +11365,30 @@ std::string UI::deckToYdkText(const Deck& d) {
     s += "!side\n";
     for (auto c : d.side)  s += std::to_string(c) + "\n";
     return s;
+}
+
+// Organise the deck-builder deck: monsters (high level/ATK first) → spells →
+// traps, alphabetical within a tier. Deck order is irrelevant to play (the
+// engine shuffles), so this is purely a tidy-up for the builder.
+void UI::sortEditDeck() {
+    auto cat = [](uint32_t t) -> int {
+        if (t & TYPE_MONSTER) return 0;
+        if (t & TYPE_SPELL)   return 1;
+        if (t & TYPE_TRAP)    return 2;
+        return 3;
+    };
+    auto less = [&](uint32_t a, uint32_t b) {
+        CardInfo ca = m_db.getCard(a), cb = m_db.getCard(b);
+        int xa = cat(ca.type), xb = cat(cb.type);
+        if (xa != xb)             return xa < xb;
+        if (ca.level != cb.level) return ca.level > cb.level;  // higher first
+        if (ca.atk   != cb.atk)   return ca.atk   > cb.atk;
+        if (ca.name  != cb.name)  return ca.name  < cb.name;
+        return a < b;
+    };
+    std::stable_sort(m_editDeck.main.begin(),  m_editDeck.main.end(),  less);
+    std::stable_sort(m_editDeck.extra.begin(), m_editDeck.extra.end(), less);
+    std::stable_sort(m_editDeck.side.begin(),  m_editDeck.side.end(),  less);
 }
 
 Deck UI::loadYdk(const std::string& path) {

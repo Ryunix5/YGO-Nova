@@ -267,6 +267,17 @@ private:
     bool   m_helpOverlayOpen = false;
     void   handleDuelHotkeys();   // F1 = help, Esc = close top panel
     void   drawHelpOverlay(int w, int h);
+    // First-run welcome (name setup) — shown once when no config exists.
+    bool   m_showWelcome = false;
+    // Fullscreen toggle request (F11) — Game applies it to the SDL window.
+    bool   m_fullscreenToggleReq = false;
+    void   sortEditDeck();        // organise the deck-builder deck by type
+public:
+    // Polled by Game once per frame to apply an F11 fullscreen toggle.
+    bool   consumeFullscreenToggle() {
+        bool r = m_fullscreenToggleReq; m_fullscreenToggleReq = false; return r;
+    }
+private:
 
     // Visual polish toggles
     bool   m_largePreview = false;   // 320x520 floating preview instead of 240x380

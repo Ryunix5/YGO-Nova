@@ -290,6 +290,13 @@ void Game::run() {
         SDL_GetWindowSize(m_window, &winW, &winH);
         m_ui->draw(winW, winH);
 
+        // Apply an F11 fullscreen toggle requested by the UI this frame.
+        if (m_ui->consumeFullscreenToggle()) {
+            m_fullscreen = !m_fullscreen;
+            SDL_SetWindowFullscreen(
+                m_window, m_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+        }
+
         // ── Render ────────────────────────────────────────────────────────────
         render();
     }
