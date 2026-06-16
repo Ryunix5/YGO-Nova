@@ -1549,17 +1549,40 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         break;
 
     case MSG_ANNOUNCE_RACE:
-    case MSG_ANNOUNCE_ATTRIB:
-        r8(p); r8(p); r32(p);
+    case MSG_ANNOUNCE_ATTRIB: {
+        // player, count, available-bitmask. Respond with the `count` lowest
+        // available race/attribute bits so the effect can resolve.
+        r8(p); uint8_t cnt = r8(p); uint32_t avail = r32(p);
+        uint32_t resp = 0; int picked = 0;
+        for (int b = 0; b < 32 && picked < (int)cnt; ++b)
+            if (avail & (1u << b)) { resp |= (1u << b); ++picked; }
+        if (resp == 0) resp = avail;     // fallback — never send an empty pick
+        submitResponse(&resp, 4);
+        { char hb[16]; snprintf(hb, sizeof(hb), "0x%x", (unsigned)resp);
+          addLog(std::string("[auto] announce race/attribute -> ") + hb); }
         break;
+    }
 
-    case MSG_ANNOUNCE_CARD:
+    case MSG_ANNOUNCE_CARD: {
+        // Declaring a specific card name needs the engine's opcode filter to
+        // resolve a legal code — not yet supported. Respond 0 as a best effort
+        // (some effects accept it; others will re-ask and the retry cap stops
+        // the duel cleanly rather than hanging).
         r8(p); r32(p);
+        int32_t code = 0;
+        submitResponse(&code, 4);
         break;
+    }
 
-    case MSG_ANNOUNCE_NUMBER:
+    case MSG_ANNOUNCE_NUMBER: {
+        // player, count, [count] numbers. Response is the INDEX of the chosen
+        // number. Pick the first option (e.g. "banish 3" for Pot of Prosperity).
         r8(p); r8(p);
+        int32_t idx = 0;
+        submitResponse(&idx, 4);
+        addLog("[auto] announce number -> option 0");
         break;
+    }
 
     case MSG_CARD_HINT:
         r8(p);r8(p);r32(p);r32(p); r8(p); p+=8;
