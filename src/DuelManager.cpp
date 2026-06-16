@@ -1277,11 +1277,18 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     case MSG_SELECT_POSITION: {
         // Format: player(u8), code(u32), positions-mask(u8). Response: int32 of
         // one position bit that is set in the mask.
-        r8(p); r32(p); uint8_t mask=r8(p);
-        int32_t pos=POS_FACEUP_ATTACK;
-        if(mask&0x1) pos=0x1; else if(mask&0x2) pos=0x2;
-        else if(mask&0x4) pos=0x4; else if(mask&0x8) pos=0x8;
-        submitResponse(&pos,4);
+        uint8_t who = r8(p); uint32_t code = r32(p); uint8_t mask = r8(p);
+        int32_t pos = POS_FACEUP_ATTACK;
+        // Default (and the human's auto-position): prefer attack, else first.
+        if      (mask & 0x1) pos = 0x1; else if (mask & 0x2) pos = 0x2;
+        else if (mask & 0x4) pos = 0x4; else if (mask & 0x8) pos = 0x8;
+        // AI: put a defensive monster (DEF > ATK, low ATK) face-up in defence.
+        if ((who & 1) != m_humanSeat) {
+            CardInfo ci = m_db.getCard(code);
+            if ((mask & 0x4) && ci.def > ci.atk && ci.atk < 1500) pos = 0x4;
+            else if (mask & 0x1)                                  pos = 0x1;
+        }
+        submitResponse(&pos, 4);
         break;
     }
 
@@ -1823,13 +1830,38 @@ bool DuelManager::autoRespondP2() {
     switch (type) {
     case WaitType::SelectIdleCmd:    return aiIdlePhase();
     case WaitType::SelectBattleCmd:  return aiBattlePhase();
-    case WaitType::SelectYesNo:
-    case WaitType::SelectEffectYn:   respondYesNo(false);  return true;
+    case WaitType::SelectYesNo:      respondYesNo(false); return true;  // generic — decline
+    case WaitType::SelectEffectYn:   respondYesNo(true);  return true;  // activate own trigger effect
     case WaitType::SelectOption:     respondInt(0);        return true;
-    case WaitType::SelectCard:
-    case WaitType::SelectTribute:
-        if (hasCards) respondSingleCard(0); else respondInt(0);
-        return true;
+    case WaitType::SelectCard: {
+        if (!hasCards) { respondInt(0); return true; }
+        const int aiSeat = m_selection.player & 1;
+        // If every option is an OPPONENT card, this is almost certainly a
+        // removal / attack target — take the strongest. Otherwise (own cards:
+        // costs, summon material, etc.) take the first valid one.
+        bool allOpp = true;
+        for (const CardState& c : m_selection.cards)
+            if ((c.player & 1) == aiSeat) { allOpp = false; break; }
+        int pick = 0;
+        if (allOpp) {
+            int best = -1;
+            for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
+                int v = m_db.getCard(m_selection.cards[i].code).atk;
+                if (v > best) { best = v; pick = i; }
+            }
+        }
+        respondSingleCard(pick); return true;
+    }
+    case WaitType::SelectTribute: {
+        if (!hasCards) { respondInt(0); return true; }
+        // Tribute the weakest available monster (least to lose).
+        int pick = 0, worst = 0x7fffffff;
+        for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
+            int v = m_db.getCard(m_selection.cards[i].code).atk;
+            if (v < worst) { worst = v; pick = i; }
+        }
+        respondSingleCard(pick); return true;
+    }
     case WaitType::SelectChain:
         respondChain(forced ? 0 : -1);   // never start a chain unless forced
         return true;
