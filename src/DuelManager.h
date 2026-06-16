@@ -301,6 +301,9 @@ public:
     const FieldState&       field()      const { return m_field; }
     const SelectionRequest& selection()  const { return m_selection; }
     const std::vector<std::string>& log() const { return m_log; }
+    // Most recent on-field action + who did it (0/1, or 0xFF if none).
+    const std::string& lastActionDesc()   const { return m_lastActionDesc; }
+    uint8_t            lastActionPlayer() const { return m_lastActionPlayer; }
 
     // Pulls all MSG_ATTACK events the engine has reported since the last
     // call, then clears the queue. The UI animation layer drains this once
@@ -342,6 +345,14 @@ private:
     int         m_pendingSummonType   = 0;  // 0 Normal, 1 Special, 2 Flip
     uint8_t     m_pendingSummonPlayer = 0;  // controller of that card
     bool        m_postSummonPending   = false;
+    // The most recent on-field action (summon / activation / attack) and who
+    // performed it. Surfaced in the UI so that when a response window opens, the
+    // player can see what their opponent is attempting before deciding to chain.
+    std::string m_lastActionDesc;
+    uint8_t     m_lastActionPlayer    = 0xFF;   // 0xFF = none recorded
+    void setLastAction(uint8_t player, const std::string& desc) {
+        m_lastActionPlayer = player & 1; m_lastActionDesc = desc;
+    }
     uint32_t    m_traceSummonCode     = 0;
     std::string m_traceSummonName;
     int         m_traceSummonType     = 0;

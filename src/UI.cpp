@@ -5982,7 +5982,8 @@ void UI::drawDuel(int w, int h) {
 // Draws a utility zone (GY, Deck, Extra Deck) with a count badge.
 // No hit-testing needed — purely informational.
 void UI::drawSideZone(const char* label, int count,
-                       ImVec2 sp, float zW, float zH, ImVec4 col) {
+                       ImVec2 sp, float zW, float zH, ImVec4 col,
+                       uint32_t topCode, bool topHidden) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 br = {sp.x + zW, sp.y + zH};
     // Classify the pile from its label so each reads distinctly.
@@ -5990,6 +5991,9 @@ void UI::drawSideZone(const char* label, int count,
     bool isBN = label && label[0]=='B';
     bool isED = label && label[0]=='E';
     bool isDK = label && label[0]=='D';
+    // GY / Banishment show the TOP card that most recently entered, so the
+    // player can read the game state at a glance instead of a generic icon.
+    bool showTop = (isGY || isBN) && topCode != 0;
 
     // Glass pile tile with a downward hue fade. Drop shadow for depth.
     dl->AddRectFilled({sp.x + 2.f, sp.y + 3.f}, {br.x + 2.f, br.y + 3.f},
@@ -6008,23 +6012,38 @@ void UI::drawSideZone(const char* label, int count,
     dl->AddRectFilled(sp, {br.x, sp.y + 4.f}, accent, 2.f);
     dl->AddRect(sp, br, IM_COL32(104, 118, 162, 200), 6.f, 0, 1.2f);
 
-    // Pile glyph behind the count — original simple geometry per pile type.
-    ImVec2 gc{ sp.x + zW * 0.5f, sp.y + zH * 0.40f };
-    float gr = zW * 0.20f;
-    ImU32 gcol = (accent & 0x00FFFFFF) | 0x40000000;
-    if (isGY) {                                   // tombstone arch + base
-        dl->AddRectFilled({gc.x - gr, gc.y}, {gc.x + gr, gc.y + gr*1.1f}, gcol, 3.f);
-        dl->AddCircleFilled({gc.x, gc.y}, gr, gcol, 16);
-    } else if (isBN) {                            // X (banished)
-        dl->AddLine({gc.x - gr, gc.y - gr}, {gc.x + gr, gc.y + gr}, gcol, 3.f);
-        dl->AddLine({gc.x + gr, gc.y - gr}, {gc.x - gr, gc.y + gr}, gcol, 3.f);
-    } else if (isED) {                            // diamond (extra)
-        ImVec2 d[4]={{gc.x,gc.y-gr},{gc.x+gr,gc.y},{gc.x,gc.y+gr},{gc.x-gr,gc.y}};
-        dl->AddConvexPolyFilled(d, 4, gcol);
-    } else {                                       // stacked deck lines
-        for (int k=0;k<3;++k)
-            dl->AddRectFilled({gc.x-gr, gc.y-gr+k*gr*0.8f},
-                              {gc.x+gr, gc.y-gr*0.6f+k*gr*0.8f}, gcol, 1.f);
+    if (showTop) {
+        // Top card art fills the tile beneath the accent bar (back if hidden,
+        // e.g. a face-down banished card the player isn't allowed to see).
+        void* tex = topHidden ? m_rend.getBackTexture()
+                              : m_rend.getCardTexture(topCode);
+        if (tex)
+            dl->AddImage((ImTextureID)tex, {sp.x + 2.f, sp.y + 6.f},
+                         {br.x - 2.f, br.y - 2.f});
+        // Subtle darkening at the bottom so the count pill stays legible.
+        dl->AddRectFilledMultiColor({sp.x + 2.f, br.y - zH * 0.34f},
+                                    {br.x - 2.f, br.y - 2.f},
+                                    IM_COL32(0,0,0,0), IM_COL32(0,0,0,0),
+                                    IM_COL32(8,8,14,200), IM_COL32(8,8,14,200));
+    } else {
+        // Pile glyph behind the count — original simple geometry per pile type.
+        ImVec2 gc{ sp.x + zW * 0.5f, sp.y + zH * 0.40f };
+        float gr = zW * 0.20f;
+        ImU32 gcol = (accent & 0x00FFFFFF) | 0x40000000;
+        if (isGY) {                                   // tombstone arch + base
+            dl->AddRectFilled({gc.x - gr, gc.y}, {gc.x + gr, gc.y + gr*1.1f}, gcol, 3.f);
+            dl->AddCircleFilled({gc.x, gc.y}, gr, gcol, 16);
+        } else if (isBN) {                            // X (banished)
+            dl->AddLine({gc.x - gr, gc.y - gr}, {gc.x + gr, gc.y + gr}, gcol, 3.f);
+            dl->AddLine({gc.x + gr, gc.y - gr}, {gc.x - gr, gc.y + gr}, gcol, 3.f);
+        } else if (isED) {                            // diamond (extra)
+            ImVec2 d[4]={{gc.x,gc.y-gr},{gc.x+gr,gc.y},{gc.x,gc.y+gr},{gc.x-gr,gc.y}};
+            dl->AddConvexPolyFilled(d, 4, gcol);
+        } else {                                       // stacked deck lines
+            for (int k=0;k<3;++k)
+                dl->AddRectFilled({gc.x-gr, gc.y-gr+k*gr*0.8f},
+                                  {gc.x+gr, gc.y-gr*0.6f+k*gr*0.8f}, gcol, 1.f);
+        }
     }
 
     // Label (top-left).
@@ -6388,9 +6407,15 @@ void UI::drawCardZone(const char* label, const CardState* card,
     // if it was already the selected one). Anchor the action popup above
     // this card so it floats over the field, not in a side panel.
     if (clicked && card && card->code) {
-        selectCardFrom(*card);
-        m_actionAnchorX = sp.x + zW * 0.5f;
-        m_actionAnchorY = sp.y;
+        // Hidden-info rule: never select/reveal an opponent's face-down card
+        // (the action popup + preview would otherwise expose its identity).
+        bool hiddenFromUs = faceDown &&
+            card->player != (uint8_t)m_net.localPlayerIndex();
+        if (!hiddenFromUs) {
+            selectCardFrom(*card);
+            m_actionAnchorX = sp.x + zW * 0.5f;
+            m_actionAnchorY = sp.y;
+        }
     }
 }
 
@@ -6858,6 +6883,20 @@ void UI::drawField(int fw, int fh) {
     };
     int uid = 0;
 
+    // Top card of a pile (most recently entered) for the GY/BN tile preview.
+    auto topGYCode = [&](int pl) -> uint32_t {
+        return f.gy[pl].empty() ? 0u : f.gy[pl].back().code;
+    };
+    auto topBNCode = [&](int pl, bool& hidden) -> uint32_t {
+        hidden = false;
+        if (f.banished[pl].empty()) return 0u;
+        const CardState& c = f.banished[pl].back();
+        // A face-down banished card stays hidden from everyone but its owner.
+        hidden = (c.pos & (POS_FACEDOWN_ATTACK | POS_FACEDOWN_DEFENSE)) != 0 &&
+                 c.player != (uint8_t)m_net.localPlayerIndex();
+        return c.code;
+    };
+
     const ImVec4 COL_GY  = {0.42f,0.22f,0.07f,0.90f};
     const ImVec4 COL_ED  = {0.16f,0.14f,0.42f,0.90f};
     const ImVec4 COL_FZ  = {0.10f,0.34f,0.20f,0.90f};
@@ -6942,14 +6981,17 @@ void UI::drawField(int fw, int fh) {
     // col 6: ED rY[1] (Monster-row level) · FZ rY[2].
     // ─────────────────────────────────────────────────────────────────────────
     drawDeck     ("DK",  f.deckCount[topP],            {cx(0),rY[1]});
-    drawSideZone ("GY", (int)f.gy[topP].size(),        {cx(0),rY[2]}, zW,zH, COL_GY);
+    drawSideZone ("GY", (int)f.gy[topP].size(),        {cx(0),rY[2]}, zW,zH, COL_GY,
+                  topGYCode(topP));
     if (clickZone({cx(0),rY[2]}, "##zgytop")) {
         m_viewerPlayer=topP; m_viewerLoc=LOC_GY; m_viewerFilter[0]=0;
         m_dm.logEvent("Opened P" + std::to_string(topP+1) +
                       " Graveyard viewer (" +
                       std::to_string(f.gy[topP].size()) + " cards)");
     }
-    drawSideZone ("BN", (int)f.banished[topP].size(),  {cx(0),rY[3]}, zW,zH, COL_BN);
+    { bool bnHidden; uint32_t bnTop = topBNCode(topP, bnHidden);
+      drawSideZone ("BN", (int)f.banished[topP].size(), {cx(0),rY[3]}, zW,zH, COL_BN,
+                    bnTop, bnHidden); }
     if (clickZone({cx(0),rY[3]}, "##zbntop")) {
         m_viewerPlayer=topP; m_viewerLoc=LOC_REM; m_viewerFilter[0]=0;
         m_dm.logEvent("Opened P" + std::to_string(topP+1) +
@@ -7101,7 +7143,9 @@ void UI::drawField(int fw, int fh) {
     };
     bool bnAct = pileHasLocalAction(LOC_REM);
     bool gyAct = pileHasLocalAction(LOC_GY);
-    drawSideZone ("BN", (int)f.banished[botP].size(), {cx(6),rY[3]}, zW,zH, COL_BN);
+    { bool bnHidden; uint32_t bnTop = topBNCode(botP, bnHidden);
+      drawSideZone ("BN", (int)f.banished[botP].size(), {cx(6),rY[3]}, zW,zH, COL_BN,
+                    bnTop, bnHidden); }
     pileEffectGlow({cx(6),rY[3]}, bnAct);
     if (clickZone({cx(6),rY[3]}, "##zbnbot")) {
         m_viewerPlayer=botP; m_viewerLoc=LOC_REM; m_viewerFilter[0]=0;
@@ -7112,7 +7156,8 @@ void UI::drawField(int fw, int fh) {
                       " count=" + std::to_string(f.banished[botP].size()) +
                       " activatable=" + std::to_string(actN));
     }
-    drawSideZone ("GY", (int)f.gy[botP].size(),       {cx(6),rY[4]}, zW,zH, COL_GY);
+    drawSideZone ("GY", (int)f.gy[botP].size(),       {cx(6),rY[4]}, zW,zH, COL_GY,
+                  topGYCode(botP));
     pileEffectGlow({cx(6),rY[4]}, gyAct);
     if (clickZone({cx(6),rY[4]}, "##zgybot")) {
         m_viewerPlayer=botP; m_viewerLoc=LOC_GY; m_viewerFilter[0]=0;
@@ -7278,6 +7323,20 @@ void UI::drawField(int fw, int fh) {
 }
 
 // ─── drawSelectionPanel (content-only) ───────────────────────────────────────
+void UI::drawOpponentActionHint() {
+    // What the opponent (AI or remote player) is attempting, captured by the
+    // engine on the last summon / activation / attack. Shown in response windows
+    // so the player knows what they'd be chaining to. Offline + host see this
+    // directly; the MP client renders from snapshots and won't have it yet.
+    const std::string& desc = m_dm.lastActionDesc();
+    if (desc.empty()) return;
+    if (m_dm.lastActionPlayer() == (uint8_t)m_net.localPlayerIndex()) return;
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 178, 92, 255));
+    ImGui::TextWrapped("Opponent is %s", desc.c_str());
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+}
+
 void UI::drawSelectionPanel(int pw, int ph) {
     // ph = the modal's height CAP (maxH). Inner scrollable lists size their
     // child against the room left after the panel's fixed chrome, so the
@@ -8113,6 +8172,7 @@ void UI::drawSelectionPanel(int pw, int ph) {
     // ── Yes / No ──────────────────────────────────────────────────────────────
     case WaitType::SelectYesNo:
         ImGui::Text("Activate / respond?");
+        drawOpponentActionHint();
         ImGui::Spacing();
         if (ImGui::Button("Yes##yn", {hw, 36.f})) submitMpChoice(WaitType::SelectYesNo, 1);
         ImGui::SameLine(0.f, 8.f);
@@ -8165,6 +8225,7 @@ void UI::drawSelectionPanel(int pw, int ph) {
             ImGui::PopTextWrapPos();
         }
         ImGui::TextDisabled("Window: %s", DuelManager::timingName(sel.timing));
+        drawOpponentActionHint();
         ImGui::Spacing();
         if (ImGui::Button("Yes##eyn", {hw, 36.f})) submitMpChoice(WaitType::SelectEffectYn, 1);
         ImGui::SameLine(0.f, 8.f);
@@ -8268,6 +8329,7 @@ void UI::drawSelectionPanel(int pw, int ph) {
                                           : "Respond with a chain?");
         ImGui::PopStyleColor();
         UIStyle::PopFont();
+        drawOpponentActionHint();
         if (m_debugLog)
             ImGui::TextDisabled("Window: %s", DuelManager::timingName(sel.timing));
         ImGui::Spacing();

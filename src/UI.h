@@ -81,7 +81,8 @@ private:
     // to the engine's placeFlag bitmask for the current SelectPlace request.
     bool isPlacementLegal(uint8_t loc, uint32_t seq) const;
     void drawSideZone(const char* label, int count,
-                      ImVec2 screenPos, float zW, float zH, ImVec4 col);
+                      ImVec2 screenPos, float zW, float zH, ImVec4 col,
+                      uint32_t topCode = 0, bool topHidden = false);
     void drawSelectionPanel(int w, int h);
     void drawTestingBar(int w);
     // Shorten an effect description for a compact prompt row: collapse
@@ -267,6 +268,9 @@ private:
     bool   m_helpOverlayOpen = false;
     void   handleDuelHotkeys();   // F1 = help, Esc = close top panel
     void   drawHelpOverlay(int w, int h);
+    // In a response window, show what the opponent is attempting (summon /
+    // activation / attack) so the player can decide whether to chain.
+    void   drawOpponentActionHint();
     // First-run welcome (name setup) — shown once when no config exists.
     bool   m_showWelcome = false;
     // Fullscreen toggle request (F11) — Game applies it to the SDL window.

@@ -42,6 +42,8 @@ void DuelManager::endDuel() {
     m_missingScripts.clear();
     m_pendingSummonCode   = 0;
     m_pendingSummonName.clear();
+    m_lastActionDesc.clear();
+    m_lastActionPlayer    = 0xFF;
     m_postSummonPending   = false;
     m_postSummonChainSeen = false;
     m_postSummonEffYnSeen = false;
@@ -675,16 +677,22 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         m_pendingSummonType   = (type==MSG_SUMMONING) ? 0
                               : (type==MSG_SPSUMMONING) ? 1 : 2;
         m_pendingSummonPlayer = con;
+        setLastAction(con, std::string(
+            type==MSG_SPSUMMONING ? "Special Summoning " :
+            type==MSG_FLIPSUMMONING ? "Flip Summoning " : "Summoning ") + nm);
         break;
     }
 
     case MSG_CHAINING: {
         uint32_t code=r32(p);
-        r8(p);r8(p);r32(p);r32(p);
+        uint8_t con = r8(p) & 1;             // controller of the chaining card
+        r8(p);r32(p);r32(p);
         r8(p);r8(p);r32(p);
         p+=8; r32(p);
         CardInfo ci=m_db.getCard(code);
-        addLog("Activating: "+(ci.name.empty()?"#"+std::to_string(code):ci.name));
+        std::string nm = ci.name.empty()?("#"+std::to_string(code)):ci.name;
+        addLog("Activating: "+nm);
+        setLastAction(con, "Activating " + nm);
         break;
     }
 
@@ -727,6 +735,9 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
                                       : "(unknown attacker)";
         std::string tgtName = ev.direct ? "(Direct Attack)"
             : tgtCode ? m_db.getCard(tgtCode).name : "(unknown target)";
+        setLastAction(ev.attackerCon, ev.direct
+            ? ("Attacking directly with " + atkName)
+            : ("Attacking " + tgtName + " with " + atkName));
 
         addLog("[ATTACK EVENT] attacker #" + std::to_string(atkCode) +
                " [" + atkName + "] (P" +
@@ -1222,7 +1233,11 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
 
         // For the local human placing a single card, let them pick the zone.
         // (Opponent, multi-zone placements and DISFIELD stay auto-resolved.)
-        if (type == MSG_SELECT_PLACE && pid == 0 && count == 1) {
+        // NOTE: must compare against m_humanSeat, not 0 — the coin toss can seat
+        // the human at index 1, in which case the AI is player 0 and its zone
+        // choice must fall through to the auto-resolver below (else the duel
+        // hangs on "no auto-AI response available").
+        if (type == MSG_SELECT_PLACE && pid == m_humanSeat && count == 1) {
             m_selection = {};
             m_selection.type       = WaitType::SelectPlace;
             m_selection.player     = pid;
