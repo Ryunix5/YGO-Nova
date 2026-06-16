@@ -378,6 +378,7 @@ private:
     // animations on that frame.
     bool   m_zoneRectsReady = false;
     ImVec2 m_rectMZ_tl[2][7], m_rectMZ_br[2][7];   // monster zones 0..4 + EMZ 5/6
+    ImVec2 m_rectSZ_tl[2][5], m_rectSZ_br[2][5];   // spell/trap zones 0..4
     ImVec2 m_rectDeck_tl[2],  m_rectDeck_br[2];
     ImVec2 m_rectGY_tl[2],    m_rectGY_br[2];
     ImVec2 m_rectBN_tl[2],    m_rectBN_br[2];

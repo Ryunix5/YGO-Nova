@@ -6207,9 +6207,13 @@ bool UI::locInfoToRect(uint8_t con, uint8_t loc, uint32_t seq,
         *br = m_rectMZ_br[con][seq];
         return true;
     }
-    // S/T row: we did not cache per-seq rects for S/T zones, but the
-    // attack animation only needs monster zones + LP panels, so callers
-    // should treat a non-MZONE attacker/target as "use LP fallback".
+    // S/T zones 0..4 (now cached) — lets spell/trap placement + activation
+    // animations anchor to the correct zone.
+    if (loc == LOC_SZONE && seq < 5) {
+        *tl = m_rectSZ_tl[con][seq];
+        *br = m_rectSZ_br[con][seq];
+        return true;
+    }
     return false;
 }
 
@@ -7095,6 +7099,8 @@ void UI::drawField(int fw, int fh) {
         const CardState* cs=getCard(f.spells[topP],i);
         char lbl[8]; snprintf(lbl,8,"ST%d",i+1);
         bool fd=cs&&!!(cs->pos&(POS_FACEDOWN_DEFENSE|POS_FACEDOWN_ATTACK));
+        m_rectSZ_tl[topP][i] = {cx(1+i), rY[1]};
+        m_rectSZ_br[topP][i] = {cx(1+i)+zW, rY[1]+zH};
         drawCardZone(lbl,cs,{cx(1+i),rY[1]},zW,zH,fd,uid++,
                      topP, LOC_SZONE, (uint32_t)i);
     }
@@ -7267,6 +7273,8 @@ void UI::drawField(int fw, int fh) {
         const CardState* cs=getCard(f.spells[botP],i);
         char lbl[8]; snprintf(lbl,8,"ST%d",i+1);
         bool fd=cs&&!!(cs->pos&(POS_FACEDOWN_DEFENSE|POS_FACEDOWN_ATTACK));
+        m_rectSZ_tl[botP][i] = {cx(1+i), rY[5]};
+        m_rectSZ_br[botP][i] = {cx(1+i)+zW, rY[5]+zH};
         drawCardZone(lbl,cs,{cx(1+i),rY[5]},zW,zH,fd,uid++,
                      botP, LOC_SZONE, (uint32_t)i);
     }
@@ -8546,15 +8554,15 @@ void UI::drawSelectionPanel(int pw, int ph) {
         for (char& c : flt) c = (char)tolower((unsigned char)c);
 
         const bool fastSingle = (sel.min == 1 && sel.max == 1);
-        // Content-sized card list. Each row is a thumbnail + name + type line
-        // + Pick button (~76px), so it must size to that — the old 30px/row
-        // estimate clipped even a single card. Show up to 5 candidates
-        // without scrolling; beyond that the list scrolls.
-        const float kScRowH = 76.f;
-        const int   kScMaxVisible = 5;
-        // Count the candidates that pass the search filter so the list fits
-        // exactly (no empty space, no premature scroll).
-        int scVisible = 0;
+        // Horizontal gallery of big card thumbnails. Click a card to pick it
+        // (single-pick) or toggle it (multi-pick); the row scrolls sideways
+        // when there are many candidates. Hovering shows the full preview.
+        const float kCardW = 96.f, kCardH = 140.f;
+        const ImU32 kSelCol = IM_COL32(232, 196, 110, 255);   // gold (selected)
+        float listH = kCardH + 26.f;
+        ImGui::BeginChild("##sclist", {bw, listH}, true,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        bool first = true;
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             const auto& c = sel.cards[i];
             CardInfo ci = m_db.getCard(c.code);
@@ -8566,70 +8574,46 @@ void UI::drawSelectionPanel(int pw, int ph) {
                 for (char& ch : lc) ch = (char)tolower((unsigned char)ch);
                 if (lc.find(flt) == std::string::npos) continue;
             }
-            ++scVisible;
-        }
-        int   scRows = std::min(std::max(scVisible, 1), kScMaxVisible);
-        float scH    = scRows * kScRowH + 6.f;
-        ImGui::BeginChild("##sclist", {bw, scH}, true);
-        for (int i = 0; i < (int)sel.cards.size(); i++) {
-            const auto& c = sel.cards[i];
-            CardInfo ci = m_db.getCard(c.code);
-            std::string nm = c.name.empty() && ci.name.empty()
-                ? ("#" + std::to_string(c.code))
-                : (c.name.empty() ? ci.name : c.name);
-            if (!flt.empty()) {
-                std::string lc = nm + "#" + std::to_string(c.code);
-                for (char& ch : lc) ch = (char)tolower((unsigned char)ch);
-                if (lc.find(flt) == std::string::npos) continue;
-            }
-            const char* tline =
-                (ci.type & TYPE_MONSTER) ? "Monster" :
-                (ci.type & TYPE_SPELL)   ? "Spell"   :
-                (ci.type & TYPE_TRAP)    ? "Trap"    : "Card";
-            const char* locName =
-                (c.loc == LOC_HAND)  ? "Hand"  :
-                (c.loc == LOC_DECK)  ? "Deck"  :
-                (c.loc == LOC_MZONE) ? "MZone" :
-                (c.loc == LOC_SZONE) ? "SZone" :
-                (c.loc == LOC_GY)    ? "GY"    :
-                (c.loc == LOC_REM)   ? "Banished" :
-                (c.loc == LOC_EXTRA) ? "Extra" : "?";
-
             bool already = false;
             for (int x : m_selSelIdx) if (x == i) { already = true; break; }
 
+            if (!first) ImGui::SameLine(0.f, 8.f);
+            first = false;
             ImGui::PushID(i);
-            void* tex = m_rend.getCardTexture(c.code);
-            ImGui::Image(tex ? tex : (void*)0, {30.f, 44.f});
-            // Hovering the thumbnail also pushes the preview overlay so the
-            // user can read the effect text while picking.
-            if (ImGui::IsItemHovered()) {
-                m_hoveredCard = c.code; m_hoveredInfo = ci;
-            }
-            ImGui::SameLine();
             ImGui::BeginGroup();
-            ImGui::TextColored(already ? COL_ACCENT
-                                       : ImVec4{0.9f,0.9f,0.95f,1.f},
-                               "%s", nm.c_str());
-            if (ImGui::IsItemHovered()) {
-                m_hoveredCard = c.code; m_hoveredInfo = ci;
-            }
-            ImGui::TextDisabled("%s  #%u  P%d %s seq %u  [engineIdx %d]",
-                tline, (unsigned)c.code, (int)c.player + 1, locName,
-                (unsigned)c.seq, i);
+            // Clickable card image (drawn manually for version-proof clicks).
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##scimg", {kCardW, kCardH});
+            bool clicked = ImGui::IsItemClicked();
+            bool hov     = ImGui::IsItemHovered();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            void* tex = m_rend.getCardTexture(c.code);
+            ImVec2 cbr{ cp.x + kCardW, cp.y + kCardH };
+            if (tex) dl->AddImage(tex, cp, cbr);
+            else     dl->AddRectFilled(cp, cbr, IM_COL32(40, 46, 70, 255), 4.f);
+            if (already)   dl->AddRect(cp, cbr, kSelCol, 4.f, 0, 3.5f);
+            else if (hov)  dl->AddRect(cp, cbr, IM_COL32(255,255,255,170), 4.f, 0, 2.f);
+            if (hov) { m_hoveredCard = c.code; m_hoveredInfo = ci; }
+            // Short name under the card.
+            ImGui::PushFont(UIStyle::fSmall);
+            ImGui::PushStyleColor(ImGuiCol_Text, already
+                ? ImGui::ColorConvertU32ToFloat4(kSelCol)
+                : ImVec4{0.86f, 0.88f, 0.94f, 1.f});
+            // Truncate to keep each cell the card's width (no wrap, which would
+            // reflow to the whole child and break the horizontal row).
+            std::string shortNm = nm.size() > 13 ? nm.substr(0, 12) + "…" : nm;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX());
+            ImGui::TextUnformatted(shortNm.c_str());
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+            ImGui::EndGroup();
+            ImGui::PopID();
 
-            const char* btn = fastSingle
-                ? "Pick"
-                : (already ? "Unpick" : "Pick");
-            std::string btnLbl = std::string(btn) + "##scp" + std::to_string(i);
-            if (ImGui::Button(btnLbl.c_str(), {80.f, 22.f})) {
+            if (clicked) {
                 m_hoveredCard = c.code; m_hoveredInfo = ci;
                 if (fastSingle) {
                     m_dm.logEvent("Selected card #" + std::to_string(c.code) +
                                   " [" + nm + "] for effect");
-                    // submitMpChoice maps the index onto the host's
-                    // choiceId table on the host-auth client and falls
-                    // back to respondSingleCard everywhere else.
                     submitMpChoice(WaitType::SelectCard, i);
                     m_selSelIdx.clear();
                     m_selFilter[0] = 0;
@@ -8641,13 +8625,6 @@ void UI::drawSelectionPanel(int pw, int ph) {
                     m_selSelIdx.push_back(i);
                 }
             }
-            ImGui::SameLine();
-            std::string prev = "Preview##scv" + std::to_string(i);
-            if (ImGui::Button(prev.c_str(), {bw - 50.f - 80.f - 8.f, 22.f})) {
-                m_hoveredCard = c.code; m_hoveredInfo = ci;
-            }
-            ImGui::EndGroup();
-            ImGui::PopID();
         }
         ImGui::EndChild();
 

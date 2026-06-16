@@ -1802,7 +1802,10 @@ bool DuelManager::aiIdlePhase() {
             case 5: {
                 // Key on the card code alone: the AI activates each card's
                 // effect at most once per turn, which prevents a single card's
-                // ignition effect from re-listing and looping.
+                // ignition effect from re-listing and looping. Also cap total
+                // activations per turn so the AI develops a board instead of
+                // spiralling into a huge, chaotic combo.
+                if ((int)m_aiDoneThisTurn.size() >= 4) break;
                 uint64_t key = (uint64_t)a.code;
                 bool used = false;
                 for (uint64_t k : m_aiDoneThisTurn) if (k == key) { used = true; break; }
