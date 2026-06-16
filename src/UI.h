@@ -263,6 +263,10 @@ private:
     // Debug/testing toggles collapsed behind a "Tools" button so the
     // gameplay bottom bar doesn't read like a dev console.
     bool   m_toolsDrawerOpen = false;
+    // Controls/help overlay (F1) + duel keyboard shortcuts.
+    bool   m_helpOverlayOpen = false;
+    void   handleDuelHotkeys();   // F1 = help, Esc = close top panel
+    void   drawHelpOverlay(int w, int h);
 
     // Visual polish toggles
     bool   m_largePreview = false;   // 320x520 floating preview instead of 240x380
@@ -769,6 +773,9 @@ private:
     // ── Helpers ────────────────────────────────────────────────────────────
     Deck loadYdk(const std::string& path);
     void saveYdk(const Deck& d, const std::string& path);
+    // .ydk text (de)serialisation — shared by file IO and clipboard share.
+    Deck deckFromYdkText(const std::string& text);
+    std::string deckToYdkText(const Deck& d);
     void refreshDeckFiles();
 };
 

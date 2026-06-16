@@ -3376,6 +3376,12 @@ bool UI::draw(int winW, int winH) {
         case Screen::Replays:     drawReplays(winW, winH);      break;
         case Screen::Multiplayer: drawMultiplayer(winW, winH);  break;
     }
+    // Duel keyboard shortcuts + help overlay (drawn after the screen so the
+    // overlay sits on top; hotkeys are UI-only — see handleDuelHotkeys).
+    if (m_screen == Screen::Duel) {
+        handleDuelHotkeys();
+        drawHelpOverlay(winW, winH);
+    }
     // Toasts rendered LAST so they sit above every screen. Uses the
     // foreground draw list so they're not clipped by any active window.
     if (!m_toasts.empty()) {
@@ -4204,6 +4210,8 @@ void UI::drawLobby(int w, int h) {
                     &m_settings.compactPrompts);
         savedToggle("Coin toss decides who goes first (offline)",
                     &m_settings.coinTossEnabled);
+        savedToggle("Fast turns (skip the pause between phases)",
+                    &m_settings.fastTurns);
         if (ImGui::Checkbox("Download missing card art on demand",
                             &m_settings.downloadCardImages)) {
             m_rend.setImageDownload(m_settings.downloadCardImages);
@@ -4358,6 +4366,64 @@ void UI::drawLobby(int w, int h) {
 // it to show (a hovered/selected card, an engine prompt, a zone viewer, the
 // duel paused or finished). When the field is "just sitting there", the
 // overlay is hidden and the field gets the full freed width.
+// Duel keyboard shortcuts. Deliberately limited to SAFE, UI-only actions —
+// F1 (help) and Esc (close the top panel). We never bind keys to game
+// selections here: an untested mis-fire could submit a wrong response or
+// desync a multiplayer duel. Reducing clicks on actual plays is handled by the
+// gated "auto-pass" option instead.
+void UI::handleDuelHotkeys() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput) return;   // don't hijack typing (chat, names, search)
+
+    if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
+        m_helpOverlayOpen = !m_helpOverlayOpen;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        // Close the top-most open panel only; leave game prompts untouched.
+        if      (m_helpOverlayOpen) m_helpOverlayOpen = false;
+        else if (m_infoCtxCode)     m_infoCtxCode = 0;
+        else if (m_viewerLoc != 0)  m_viewerLoc = 0;
+        else if (m_toolsDrawerOpen) m_toolsDrawerOpen = false;
+    }
+}
+
+void UI::drawHelpOverlay(int w, int h) {
+    if (!m_helpOverlayOpen) return;
+    const auto& C = UIStyle::C();
+    ImGui::SetNextWindowPos({w * 0.5f, h * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({460.f, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(18, 22, 32, 246));
+    ImGui::PushStyleColor(ImGuiCol_Border,   C.accent);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{18.f, 14.f});
+    ImGui::Begin("##help_overlay", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings);
+    UIStyle::SectionHeader("Controls & Shortcuts");
+    auto row = [&](const char* key, const char* desc) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(C.accentHi));
+        ImGui::TextUnformatted(key);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(150.f);
+        ImGui::TextDisabled("%s", desc);
+    };
+    row("Left-click",  "Play a card / pick an action or option");
+    row("Hover",       "Preview a card + its text");
+    row("F1",          "Toggle this help");
+    row("Esc",         "Close the open panel (help / viewer / info / tools)");
+    ImGui::Dummy({1.f, 6.f});
+    ImGui::TextDisabled("Tip: the bottom bar shows whose turn it is and the");
+    ImGui::TextDisabled("phase; the Tools button hides extra panels.");
+    ImGui::Dummy({1.f, 10.f});
+    if (UIStyle::PrimaryButton("Close", {-1.f, 30.f}))
+        m_helpOverlayOpen = false;
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+}
+
 void UI::drawDuel(int w, int h) {
     // ── computeDuelLayout — the duel screen's named rects ───────────────
     // Exactly THREE layout bands plus floating overlays; nothing else may
@@ -4406,7 +4472,8 @@ void UI::drawDuel(int w, int h) {
     // so mode changes take effect immediately.
     m_dm.setPhaseDelay(
         (m_net.isOffline() && !m_replayMode && !m_testingRebuilding)
-            ? (double)m_settings.enginePhasePacing : 0.0);
+            ? (m_settings.fastTurns ? 0.0 : (double)m_settings.enginePhasePacing)
+            : 0.0);
 
     // Replay playback — auto-feed recorded responses BEFORE any input UI
     // runs this frame. The feeder is a no-op outside replay mode.
@@ -8543,6 +8610,23 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
                                                    : "Tools##tools",
                                  {kGhostW, 30.f}))
             m_toolsDrawerOpen = !m_toolsDrawerOpen;
+        ImGui::SameLine(0.f, 4.f);
+        if (UIStyle::GhostButton("?##help", {30.f, 30.f}))
+            m_helpOverlayOpen = !m_helpOverlayOpen;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Controls & shortcuts (F1)");
+        // Fast turns toggle (offline only — pacing has no effect in MP/replay).
+        if (m_net.isOffline() && !m_replayMode) {
+            ImGui::SameLine(0.f, 4.f);
+            if (UIStyle::GhostButton(m_settings.fastTurns ? "Fast*##fast"
+                                                          : "Fast##fast",
+                                     {kGhostW, 30.f})) {
+                m_settings.fastTurns = !m_settings.fastTurns;
+                saveSettings();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Skip the pause between phases");
+        }
     }
 
     // ── Right-aligned phase buttons (left of the ghost corner) ──────────────
@@ -9524,6 +9608,34 @@ void UI::drawDeckBuilder(int w, int h) {
 
         ImGui::SameLine(0.f, 6.f);
         if (UIStyle::GhostButton("Refresh", {REF_W, 32.f})) refreshDeckFiles();
+
+        // Clipboard share — copy the current deck as .ydk text, or paste one in.
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Copy", {52.f, 32.f})) {
+            ImGui::SetClipboardText(deckToYdkText(m_editDeck).c_str());
+            int total = (int)(m_editDeck.main.size() + m_editDeck.extra.size() +
+                              m_editDeck.side.size());
+            pushToast("Deck copied to clipboard (" + std::to_string(total) +
+                      " cards)", IM_COL32(110, 220, 140, 255), 2.4);
+        }
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Paste", {56.f, 32.f})) {
+            const char* clip = ImGui::GetClipboardText();
+            Deck pasted = clip ? deckFromYdkText(clip) : Deck{};
+            int total = (int)(pasted.main.size() + pasted.extra.size() +
+                              pasted.side.size());
+            if (total > 0) {
+                pasted.name = m_editDeck.name;   // keep the current name
+                m_editDeck  = pasted;
+                gAudio().play("confirm");
+                pushToast("Deck pasted (" + std::to_string(total) + " cards)",
+                          IM_COL32(110, 220, 140, 255), 2.4);
+            } else {
+                gAudio().play("error");
+                pushToast("Clipboard has no valid .ydk deck",
+                          IM_COL32(232, 110, 100, 255), 2.6);
+            }
+        }
 
         ImGui::End();
         ImGui::PopStyleVar(2);
@@ -11129,17 +11241,19 @@ void UI::refreshDeckFiles() {
 }
 
 // ─── YDK helpers ─────────────────────────────────────────────────────────────
-Deck UI::loadYdk(const std::string& path) {
+// Parse the standard .ydk text format (shared by file load + clipboard paste).
+// Tolerates CRLF line endings so a deck copied from another app pastes cleanly.
+Deck UI::deckFromYdkText(const std::string& text) {
     Deck d;
-    std::ifstream f(path);
-    if (!f) return d;
+    std::istringstream f(text);
     std::string line;
     int zone = 0;
     while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
         if (line[0] == '#') {
-            if (line.substr(0, 6) == "#extra") zone = 1;
-            else if (line.substr(0, 5) == "#main") zone = 0;
+            if      (line.substr(0, 6) == "#extra") zone = 1;
+            else if (line.substr(0, 5) == "#main")  zone = 0;
             continue;
         }
         if (line[0] == '!') {
@@ -11158,13 +11272,27 @@ Deck UI::loadYdk(const std::string& path) {
     return d;
 }
 
+// Serialise a deck to the standard .ydk text format (file save + clipboard copy).
+std::string UI::deckToYdkText(const Deck& d) {
+    std::string s = "#created by YGO: Nova\n#main\n";
+    for (auto c : d.main)  s += std::to_string(c) + "\n";
+    s += "#extra\n";
+    for (auto c : d.extra) s += std::to_string(c) + "\n";
+    s += "!side\n";
+    for (auto c : d.side)  s += std::to_string(c) + "\n";
+    return s;
+}
+
+Deck UI::loadYdk(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return Deck{};
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return deckFromYdkText(ss.str());
+}
+
 void UI::saveYdk(const Deck& d, const std::string& path) {
     std::ofstream f(path);
     if (!f) return;
-    f << "#created by EdoPro+\n#main\n";
-    for (auto c : d.main)  f << c << "\n";
-    f << "#extra\n";
-    for (auto c : d.extra) f << c << "\n";
-    f << "!side\n";
-    for (auto c : d.side)  f << c << "\n";
+    f << deckToYdkText(d);
 }

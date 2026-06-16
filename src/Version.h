@@ -11,7 +11,7 @@
 #endif
 
 namespace edo {
-inline constexpr const char* kAppName     = "EdoPro+";
+inline constexpr const char* kAppName     = "YGO: Nova";
 inline constexpr const char* kAppVersion  = EDOPROPLUS_VERSION;
 inline constexpr const char* kUpdateRepo  = EDOPRO_UPDATE_REPO;
 }
