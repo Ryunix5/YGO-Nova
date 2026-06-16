@@ -586,6 +586,9 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         if (m_postSummonPending)
             endPostSummonTrace("MSG_NEW_TURN", {}, "n/a (turn changed)");
         m_field.turnPlayer = r8(p)&1; m_field.turnCount++;
+        // Drop the captured "last opponent action" so it can never bleed into a
+        // new turn's response prompts (e.g. stale "Activating Fuwalos").
+        m_lastActionDesc.clear(); m_lastActionPlayer = 0xFF;
         addLog("Turn "+std::to_string(m_field.turnCount)+" - Player "+std::to_string(m_field.turnPlayer+1));
         m_snap.save("Turn "+std::to_string(m_field.turnCount), m_field.turnCount, m_field.phase);
         break;

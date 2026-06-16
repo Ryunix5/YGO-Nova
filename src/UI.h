@@ -271,6 +271,10 @@ private:
     // In a response window, show what the opponent is attempting (summon /
     // activation / attack) so the player can decide whether to chain.
     void   drawOpponentActionHint();
+    // Centred response pop-out shown during the local player's chain window:
+    // states what the opponent did + a Pass button; the player chains by
+    // clicking a glowing card on the field.
+    void   drawChainResponsePopup(int w, int h);
     // First-run welcome (name setup) — shown once when no config exists.
     bool   m_showWelcome = false;
     // Last opponent-action sequence we toasted, so each new summon/activation/

@@ -3385,6 +3385,7 @@ bool UI::draw(int winW, int winH) {
     // overlay sits on top; hotkeys are UI-only — see handleDuelHotkeys).
     if (m_screen == Screen::Duel) {
         handleDuelHotkeys();
+        drawChainResponsePopup(winW, winH);
         drawHelpOverlay(winW, winH);
     }
     // Toasts rendered LAST so they sit above every screen. Uses the
@@ -7337,9 +7338,10 @@ void UI::drawField(int fw, int fh) {
 // ─── drawSelectionPanel (content-only) ───────────────────────────────────────
 void UI::drawOpponentActionHint() {
     // What the opponent (AI or remote player) is attempting, captured by the
-    // engine on the last summon / activation / attack. Shown in response windows
-    // so the player knows what they'd be chaining to. Offline + host see this
-    // directly; the MP client renders from snapshots and won't have it yet.
+    // engine on the last summon / activation / attack. Only shown when this is
+    // genuinely a response to the OPPONENT (their turn) — never on the player's
+    // own-turn quick effects / triggers, where the captured action is stale.
+    if (currentSelection().timing != TimingContext::OpponentChainWindow) return;
     const std::string& desc = m_dm.lastActionDesc();
     if (desc.empty()) return;
     if (m_dm.lastActionPlayer() == (uint8_t)m_net.localPlayerIndex()) return;
@@ -7347,6 +7349,65 @@ void UI::drawOpponentActionHint() {
     ImGui::TextWrapped("Opponent is %s", desc.c_str());
     ImGui::PopStyleColor();
     ImGui::Spacing();
+}
+
+void UI::drawChainResponsePopup(int w, int h) {
+    const SelectionRequest& sel = currentSelection();
+    // Only during the LOCAL player's chain window. (Card targeting / other
+    // prompts keep their own UI.)
+    if (sel.type != WaitType::SelectChain ||
+        sel.player != (uint8_t)m_net.localPlayerIndex())
+        return;
+
+    // Centred near the top so it never sits over the player's own glowing
+    // cards (hand + backrow) that they click to chain. Non-modal: the field
+    // stays clickable so a card can be chosen as the response.
+    ImGui::SetNextWindowPos({w * 0.5f, h * 0.13f}, ImGuiCond_Always, {0.5f, 0.f});
+    ImGui::SetNextWindowSize({460.f, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(26, 20, 36, 250));
+    ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(224, 124, 214, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{18.f, 14.f});
+    ImGui::Begin("##chain_response", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+
+    UIStyle::PushFont(UIStyle::fHeader);
+    ImGui::PushStyleColor(ImGuiCol_Text,
+        ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
+    ImGui::TextUnformatted(sel.forced ? "You must chain a card"
+                                      : "Respond?");
+    ImGui::PopStyleColor();
+    UIStyle::PopFont();
+
+    // What triggered this — only when genuinely responding to the opponent.
+    if (sel.timing == TimingContext::OpponentChainWindow &&
+        !m_dm.lastActionDesc().empty() &&
+        m_dm.lastActionPlayer() != (uint8_t)m_net.localPlayerIndex()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 184, 100, 255));
+        ImGui::TextWrapped("Opponent is %s", m_dm.lastActionDesc().c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(190, 200, 220, 230));
+    ImGui::TextWrapped("Click a glowing card on the field to chain it"
+                       "%s.", sel.forced ? "" : ", or pass");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({1.f, 10.f});
+
+    if (!sel.forced) {
+        if (UIStyle::PrimaryButton("Pass / No Response", {-1.f, 36.f})) {
+            gAudio().play("cancel");
+            submitMpChoice(WaitType::SelectChain, -1);
+            clearSelection();
+        }
+    } else {
+        ImGui::TextDisabled("This chain is forced — you must respond.");
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
 }
 
 void UI::drawSelectionPanel(int pw, int ph) {
@@ -8655,17 +8716,9 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
         hintLine("BATTLE PHASE", IM_COL32(240, 120, 80, 220),
                  desc, IM_COL32(180, 150, 140, 200));
     } else if (inChain) {
-        // Show what the opponent is attempting, so the player understands what
-        // they'd be chaining to before they respond or Pass.
-        std::string desc;
-        if (!m_dm.lastActionDesc().empty() &&
-            m_dm.lastActionPlayer() != (uint8_t)kLocal)
-            desc = "  Opponent is " + m_dm.lastActionDesc() +
-                   "  —  chain a card, or Pass";
-        else
-            desc = "  Click a glowing magenta card, or Pass";
-        hintLine("RESPOND?", IM_COL32(255, 178, 92, 230),
-                 desc.c_str(), IM_COL32(255, 214, 140, 230));
+        hintLine("CHAIN WINDOW", IM_COL32(220, 110, 210, 220),
+                 "  Click a glowing magenta card, or Pass",
+                 IM_COL32(180, 148, 178, 200));
     } else if (inPlace) {
         hintLine("PLACE CARD", IM_COL32(110, 210, 130, 220),
                  "  Click a glowing green zone on the field",
