@@ -135,6 +135,15 @@ struct AttackEvent {
     bool     direct       = false;
 };
 
+// Parsed MSG_MOVE payload (a card changed location). Drained by the UI to play
+// movement animations (placed on field, sent to GY, milled from deck, etc.).
+struct MoveEvent {
+    uint32_t code     = 0;
+    uint8_t  prevCon  = 0; uint8_t prevLoc = 0; uint32_t prevSeq = 0;
+    uint8_t  curCon   = 0; uint8_t curLoc  = 0; uint32_t curSeq  = 0;
+    uint32_t curPos   = 0;   // destination position (face-down sets stay hidden)
+};
+
 struct SelectionRequest {
     WaitType     type        = WaitType::None;
     uint8_t      player      = 0;
@@ -315,6 +324,11 @@ public:
         out.swap(m_attackEvents);
         return out;
     }
+    std::vector<MoveEvent> drainMoveEvents() {
+        std::vector<MoveEvent> out;
+        out.swap(m_moveEvents);
+        return out;
+    }
     int winner() const { return m_winner; }
 
 private:
@@ -370,6 +384,7 @@ private:
     // MSG_ATTACK events pushed by handleMsg() and drained by the UI animation
     // layer. Bounded by the message loop — at most a handful per turn.
     std::vector<AttackEvent> m_attackEvents;
+    std::vector<MoveEvent>   m_moveEvents;
     // Replay-recording hook + the seed actually used for this duel.
     ResponseRecorder         m_responseRecorder;
     uint64_t                 m_duelSeed = 0;

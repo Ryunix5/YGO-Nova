@@ -40,6 +40,8 @@ void DuelManager::endDuel() {
     m_selection      = {};
     m_lastReqLog.clear();
     m_missingScripts.clear();
+    m_attackEvents.clear();
+    m_moveEvents.clear();
     m_pendingSummonCode   = 0;
     m_pendingSummonName.clear();
     m_lastActionDesc.clear();
@@ -311,6 +313,19 @@ bool DuelManager::process() {
                 if (!autoRespondP2()) {
                     m_blocked = true;
                     logRequestOnce("[error] no auto-AI response available — duel paused");
+                    if (sawMessages) queryField();
+                    return true;
+                }
+                // Pace the AI: hold briefly after each of its decisions so the
+                // player can follow what it does instead of a whole turn
+                // happening in one frame. (Position/place sub-prompts resolve
+                // inline, so this is ~one beat per real action.) Honours the
+                // same pacing switch as phases — Fast turns disables it.
+                if (m_phaseDelaySec > 0.0) {
+                    double aiHold = m_phaseDelaySec < 0.5 ? m_phaseDelaySec : 0.5;
+                    m_phaseHoldUntil = std::chrono::steady_clock::now() +
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                            std::chrono::duration<double>(aiHold));
                     if (sawMessages) queryField();
                     return true;
                 }
@@ -630,9 +645,17 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         break;
     }
 
-    case MSG_MOVE:
-        r32(p); r8(p);r8(p);r32(p);r32(p); r8(p);r8(p);r32(p);r32(p); r32(p);
+    case MSG_MOVE: {
+        // code, previous (con,loc,seq,pos), current (con,loc,seq,pos), reason.
+        MoveEvent mv;
+        mv.code    = r32(p);
+        mv.prevCon = r8(p) & 1; mv.prevLoc = r8(p); mv.prevSeq = r32(p); r32(p);
+        mv.curCon  = r8(p) & 1; mv.curLoc  = r8(p); mv.curSeq  = r32(p);
+        mv.curPos  = r32(p);
+        r32(p);   // reason
+        m_moveEvents.push_back(mv);
         break;
+    }
 
     case MSG_LPUPDATE: {
         uint8_t pl=r8(p)&1; uint32_t lp=r32(p);

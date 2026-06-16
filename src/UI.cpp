@@ -5058,6 +5058,72 @@ void UI::drawDuel(int w, int h) {
                 gAudio().play("attack");
             }
         }
+
+        // ── Card-movement animations ─────────────────────────────────────
+        // A card sent to the GY (destroyed / milled / sent) glides from its
+        // source to the GY tile; a card placed on the field (summon / set)
+        // gets a placement pop. Makes the board feel alive. Capped per frame
+        // so a mass mill/destroy doesn't flood the screen.
+        {
+            auto moves = m_dm.drainMoveEvents();   // always drain to clear queue
+            int shown = m_settings.animationsEnabled ? 0 : 6;  // off => emit none
+            for (const MoveEvent& mv : moves) {
+                if (shown >= 6) break;
+                if (mv.prevLoc == mv.curLoc) continue;   // reposition, not a move
+                uint8_t cc = mv.curCon & 1, pc = mv.prevCon & 1;
+
+                if (mv.curLoc == LOC_GY) {                // → Graveyard
+                    ImVec2 gTl = m_rectGY_tl[cc], gBr = m_rectGY_br[cc];
+                    ImVec2 gCtr{ (gTl.x+gBr.x)*0.5f, (gTl.y+gBr.y)*0.5f };
+                    ImVec2 sTl, sBr; bool haveSrc = false;
+                    if ((mv.prevLoc == LOC_MZONE || mv.prevLoc == LOC_SZONE) &&
+                        locInfoToRect(pc, mv.prevLoc, mv.prevSeq, &sTl, &sBr))
+                        haveSrc = true;
+                    else if (mv.prevLoc == LOC_DECK)
+                        { sTl = m_rectDeck_tl[pc]; sBr = m_rectDeck_br[pc]; haveSrc = true; }
+                    ImU32 col = IM_COL32(150, 165, 200, 255);   // GY grey-blue
+                    if (haveSrc) {
+                        ImVec2 sCtr{ (sTl.x+sBr.x)*0.5f, (sTl.y+sBr.y)*0.5f };
+                        m_anim.cardTrail(sCtr, gCtr,
+                                         m_rend.getCardTexture(mv.code), col, 0.50);
+                        m_anim.zoneFlash(sTl, sBr, col, 0.28);
+                    }
+                    m_anim.ring(gCtr, 32.f, col, 0.50);
+                    ++shown;
+                }
+                else if ((mv.curLoc == LOC_MZONE || mv.curLoc == LOC_SZONE) &&
+                         (mv.prevLoc == LOC_HAND || mv.prevLoc == LOC_DECK ||
+                          mv.prevLoc == LOC_EXTRA)) {       // → placed on field
+                    ImVec2 dTl, dBr;
+                    if (locInfoToRect(cc, mv.curLoc, mv.curSeq, &dTl, &dBr)) {
+                        ImVec2 dCtr{ (dTl.x+dBr.x)*0.5f, (dTl.y+dBr.y)*0.5f };
+                        ImU32 col = IM_COL32(120, 200, 255, 255);  // place cyan
+                        // Source point: the deck tile, else a point toward the
+                        // controller's hand (below = local, above = opponent).
+                        ImVec2 sCtr;
+                        if (mv.prevLoc == LOC_DECK) {
+                            ImVec2 kTl = m_rectDeck_tl[pc], kBr = m_rectDeck_br[pc];
+                            sCtr = { (kTl.x+kBr.x)*0.5f, (kTl.y+kBr.y)*0.5f };
+                        } else {
+                            bool ctrlBottom =
+                                (cc == (uint8_t)m_net.localPlayerIndex());
+                            sCtr = { dCtr.x, ctrlBottom ? dBr.y + 210.f
+                                                        : dTl.y - 210.f };
+                        }
+                        // Face-down sets must show the card back, never the art
+                        // (would leak an opponent's set card identity).
+                        bool faceDown = (mv.curPos & (POS_FACEDOWN_ATTACK |
+                                                      POS_FACEDOWN_DEFENSE)) != 0;
+                        void* tex = faceDown ? m_rend.getBackTexture()
+                                             : m_rend.getCardTexture(mv.code);
+                        m_anim.cardTrail(sCtr, dCtr, tex, col, 0.46);
+                        m_anim.zoneFlash(dTl, dBr, col, 0.40);
+                        m_anim.ring(dCtr, 28.f, col, 0.50);
+                        ++shown;
+                    }
+                }
+            }
+        }
     }
 
     ImGui::SetNextWindowPos({0.f, 0.f});
@@ -8758,52 +8824,9 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
                  IM_COL32(100, 118, 155, 160));
     }
 
-    // ── Centre: primary contextual action ────────────────────────────────────
-    // "Pass / No Response" during a chain window is drawn as a large magenta
-    // primary action centred in the bar.
-    if (inChain && !sel.forced) {
-        float winW = ImGui::GetWindowContentRegionMax().x;
-        const float passW = 240.f, passH = 36.f;
-        float cxBtn = (winW - passW) * 0.5f;
-        ImGui::SameLine(cxBtn < 0.f ? 0.f : cxBtn, 0.f);
-        // Draw a custom magenta "Pass / No Response" button.
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##passmain", {passW, passH});
-        bool hov = ImGui::IsItemHovered();
-        bool act = ImGui::IsItemActive();
-        bool clk = ImGui::IsItemClicked();
-        {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImVec2 br = {pos.x + passW, pos.y + passH};
-            float r = 9.f;
-            if (hov)
-                for (int g = 2; g >= 1; --g)
-                    dl->AddRectFilled({pos.x-g*2.f, pos.y-g*2.f},
-                                      {br.x+g*2.f,  br.y+g*2.f},
-                                      IM_COL32(200, 80, 180, 18), r + g*2.f);
-            ImU32 fill = act  ? IM_COL32(148, 42, 120, 255)
-                       : hov  ? IM_COL32(178, 62, 148, 255)
-                              : IM_COL32(148, 32, 118, 255);
-            dl->AddRectFilled(pos, br, fill, r);
-            dl->AddRectFilledMultiColor(pos, {br.x, pos.y + passH*0.5f},
-                IM_COL32(255,255,255,32), IM_COL32(255,255,255,32),
-                IM_COL32(255,255,255,0), IM_COL32(255,255,255,0));
-            dl->AddRect(pos, br,
-                        hov ? IM_COL32(240, 160, 220, 255) : IM_COL32(200, 110, 186, 200),
-                        r, 0, hov ? 1.6f : 1.2f);
-            UIStyle::PushFont(UIStyle::fBody);
-            const char* lbl = "Pass / No Response";
-            ImVec2 ts = ImGui::CalcTextSize(lbl);
-            dl->AddText({pos.x + (passW - ts.x)*0.5f,
-                         pos.y + (passH - ts.y)*0.5f},
-                        IM_COL32(252, 228, 248, 255), lbl);
-            UIStyle::PopFont();
-        }
-        if (clk) {
-            gAudio().play("cancel");
-            submitMpChoice(WaitType::SelectChain, -1);
-        }
-    }
+    // NOTE: the chain-window "Pass / No Response" button now lives in the
+    // centred drawChainResponsePopup (which also names the opponent's action),
+    // so it is intentionally NOT duplicated here in the bottom strip.
 
     // ── Right corner: Log / Tools ghost buttons (always present) ────────────
     // The permanent dev strip is gone; these two small ghosts are the only
