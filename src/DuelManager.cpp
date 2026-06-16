@@ -316,12 +316,15 @@ bool DuelManager::process() {
                     if (sawMessages) queryField();
                     return true;
                 }
-                // Pace the AI: hold briefly after each of its decisions so the
-                // player can follow what it does instead of a whole turn
-                // happening in one frame. (Position/place sub-prompts resolve
-                // inline, so this is ~one beat per real action.) Honours the
-                // same pacing switch as phases — Fast turns disables it.
-                if (m_phaseDelaySec > 0.0) {
+                // Pace the AI: hold briefly after each VISIBLE action (a Main-
+                // Phase or Battle decision) so its turn plays out one move at a
+                // time. Card / material / option sub-selections are NOT paced —
+                // pacing them made a material-selection loop take ~110s to hit
+                // the safety cap (looked frozen). Honours the phase pacing
+                // switch; Fast turns disables it.
+                if (m_phaseDelaySec > 0.0 &&
+                    (m_selection.type == WaitType::SelectIdleCmd ||
+                     m_selection.type == WaitType::SelectBattleCmd)) {
                     double aiHold = m_phaseDelaySec < 0.5 ? m_phaseDelaySec : 0.5;
                     m_phaseHoldUntil = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -1882,8 +1885,8 @@ bool DuelManager::autoRespondP2() {
         m_aiActionTurn = m_field.turnCount;
         m_aiActionsThisTurn = 0;
     }
-    if (++m_aiActionsThisTurn > 220) {
-        if (m_aiActionsThisTurn == 221)
+    if (++m_aiActionsThisTurn > 120) {
+        if (m_aiActionsThisTurn == 121)
             addLog("[auto-AI] loop guard tripped — bailing out of the phase");
         switch (type) {
             case WaitType::SelectIdleCmd:   respondIdleCmd(7, 0); return true;
@@ -1896,6 +1899,8 @@ bool DuelManager::autoRespondP2() {
             case WaitType::SelectTribute:
                 if (hasCards) respondSingleCard(0); else respondInt(0);
                 return true;
+            // Finish/cancel the material selection (-1) so an unsatisfiable
+            // summon is abandoned instead of re-asked forever.
             case WaitType::SelectUnselect:  respondInt(-1); return true;
             default:                        return false;
         }
