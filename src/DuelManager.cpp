@@ -1719,6 +1719,99 @@ void DuelManager::validateState() {
 // Built-in test AI for player 1 in local/offline mode. Picks a safe, legal
 // default so the duel always progresses. Returns true if a response was set.
 // (submitResponse clears m_selection, so capture what we need up front.)
+// ── Offline opponent AI ──────────────────────────────────────────────────────
+//
+// A lightweight heuristic AI for solo practice. It plays only from the actions
+// the engine actually offers (m_selection.idle), so it can never make an illegal
+// move. Strategy, in priority order:
+//   Main Phase : activate one un-used effect -> Special Summon (highest ATK) ->
+//                Normal Summon (highest ATK) -> Set a Spell/Trap -> Battle (if
+//                it has a monster) -> End.
+//   Battle     : attack directly when possible; otherwise attack with the
+//                strongest monster only when it can beat the opponent's weakest
+//                (avoids throwing monsters away); else end the Battle Phase.
+// A per-turn guard stops it re-activating the same effect forever; the engine's
+// own retry cap is the final backstop.
+bool DuelManager::aiIdlePhase() {
+    const std::vector<IdleAction>& idle = m_selection.idle;
+    const int aiSeat = m_selection.player & 1;
+
+    if (m_field.turnCount != m_aiTurnSeen) {
+        m_aiTurnSeen = m_field.turnCount;
+        m_aiDoneThisTurn.clear();
+    }
+    auto atkOf = [&](uint32_t code){ return m_db.getCard(code).atk; };
+
+    int  spIdx = -1, spAtk = -1;     // best Special Summon
+    int  nsIdx = -1, nsAtk = -1;     // best Normal Summon
+    int  actIdx = -1; uint64_t actKey = 0;   // first un-used activation
+    int  setIdx = -1;                // first Spell/Trap set
+    for (int i = 0; i < (int)idle.size(); ++i) {
+        const IdleAction& a = idle[i];
+        switch (a.cmd) {
+            case 1: { int v = atkOf(a.code); if (v > spAtk) { spAtk = v; spIdx = i; } break; }
+            case 0: { int v = atkOf(a.code); if (v > nsAtk) { nsAtk = v; nsIdx = i; } break; }
+            case 5: {
+                uint64_t key = ((uint64_t)a.code << 20) ^ (a.effect.raw & 0xFFFFF);
+                bool used = false;
+                for (uint64_t k : m_aiDoneThisTurn) if (k == key) { used = true; break; }
+                if (!used && actIdx < 0) { actIdx = i; actKey = key; }
+                break;
+            }
+            case 4: if (setIdx < 0) setIdx = i; break;
+            default: break;   // skip reposition / set-monster
+        }
+    }
+
+    if (actIdx >= 0) {
+        m_aiDoneThisTurn.push_back(actKey);
+        respondIdleCmd(idle[actIdx].cmd, idle[actIdx].index); return true;
+    }
+    if (spIdx  >= 0) { respondIdleCmd(idle[spIdx].cmd,  idle[spIdx].index);  return true; }
+    if (nsIdx  >= 0) { respondIdleCmd(idle[nsIdx].cmd,  idle[nsIdx].index);  return true; }
+    if (setIdx >= 0) { respondIdleCmd(idle[setIdx].cmd, idle[setIdx].index); return true; }
+    if (m_selection.toBP && !m_field.monsters[aiSeat].empty()) {
+        respondIdleCmd(6, 0); return true;   // -> Battle Phase
+    }
+    respondIdleCmd(7, 0); return true;        // -> End Phase
+}
+
+bool DuelManager::aiBattlePhase() {
+    const std::vector<IdleAction>& idle = m_selection.idle;
+    const int aiSeat  = m_selection.player & 1;
+    const int oppSeat = aiSeat ^ 1;
+    auto statOf = [&](const CardState& c) -> int {
+        CardInfo ci = m_db.getCard(c.code);
+        // Defence-position monsters block with DEF, attack-position with ATK.
+        return (c.pos & (POS_FACEUP_DEFENSE | POS_FACEDOWN_DEFENSE)) ? ci.def
+                                                                     : ci.atk;
+    };
+
+    int directIdx = -1;
+    int bestIdx = -1, bestAtk = -1;
+    for (int i = 0; i < (int)idle.size(); ++i) {
+        const IdleAction& a = idle[i];
+        if (a.cmd != 1) continue;                  // only attack actions
+        if (a.canDirect && directIdx < 0) directIdx = i;
+        int v = m_db.getCard(a.code).atk;
+        if (v > bestAtk) { bestAtk = v; bestIdx = i; }
+    }
+
+    if (directIdx >= 0) { respondIdleCmd(1, idle[directIdx].index); return true; }
+    if (bestIdx >= 0) {
+        int oppMin = 0x7fffffff;
+        for (const CardState& m : m_field.monsters[oppSeat]) {
+            int s = statOf(m);
+            if (s < oppMin) oppMin = s;
+        }
+        // Attack only when nothing's there or we can beat the weakest blocker.
+        if (m_field.monsters[oppSeat].empty() || bestAtk > oppMin) {
+            respondIdleCmd(1, idle[bestIdx].index); return true;
+        }
+    }
+    respondIdleCmd(3, 0); return true;            // -> End Battle Phase
+}
+
 bool DuelManager::autoRespondP2() {
     const WaitType type     = m_selection.type;
     const bool     forced   = m_selection.forced;
@@ -1728,8 +1821,8 @@ bool DuelManager::autoRespondP2() {
         addLog(std::string("[dbg] auto-AI (P2) <- ") + waitName(type));
 
     switch (type) {
-    case WaitType::SelectIdleCmd:    respondIdleCmd(7, 0); return true;  // -> End Phase
-    case WaitType::SelectBattleCmd:  respondIdleCmd(3, 0); return true;  // -> End Phase
+    case WaitType::SelectIdleCmd:    return aiIdlePhase();
+    case WaitType::SelectBattleCmd:  return aiBattlePhase();
     case WaitType::SelectYesNo:
     case WaitType::SelectEffectYn:   respondYesNo(false);  return true;
     case WaitType::SelectOption:     respondInt(0);        return true;

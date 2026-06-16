@@ -382,6 +382,10 @@ private:
     // ── Per-phase pacing (presentation timing only) ───────────────────────
     double                   m_phaseDelaySec = 0.0;
     int                      m_humanSeat = 0;   // engine seat the human controls
+    // AI per-turn guard: which (card,effect) the offline AI already activated
+    // this turn, so it never re-activates the same effect into an endless loop.
+    int                      m_aiTurnSeen = -1;
+    std::vector<uint64_t>    m_aiDoneThisTurn;
     std::chrono::steady_clock::time_point m_phaseHoldUntil{};
     // Set by the MSG_NEW_PHASE handler; consumed by the process() pump to
     // arm the hold once per phase change.
@@ -408,6 +412,10 @@ private:
     // a hard-coded override table for cards missing from cards.cdb.
     bool isExtraDeckCard(uint32_t code) const;
     bool autoRespondP2();                 // auto-handle P2 selections in local mode
+    // Heuristic AI for the offline opponent's Main / Battle phases. Returns
+    // true once a response is submitted. See DuelManager.cpp for the strategy.
+    bool aiIdlePhase();
+    bool aiBattlePhase();
     void submitResponse(const void* data, uint32_t len);  // central response setter
     void logRequestOnce(const std::string& s);            // log once per distinct msg
     void addLog(const std::string& s);
