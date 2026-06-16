@@ -4385,6 +4385,40 @@ void UI::handleDuelHotkeys() {
         else if (m_viewerLoc != 0)  m_viewerLoc = 0;
         else if (m_toolsDrawerOpen) m_toolsDrawerOpen = false;
     }
+
+    // ── Prompt shortcuts — OFFLINE ONLY ──────────────────────────────────
+    // Bound to game decisions, so restricted to offline practice duels where a
+    // mis-press only affects a local, rewindable duel — never multiplayer
+    // (where a wrong/duplicate response could desync) or replay playback.
+    if (!(m_net.isOffline() && !m_replayMode &&
+          m_dm.isRunning() && !m_dm.isDone()))
+        return;
+    const SelectionRequest& sel = m_dm.selection();
+    if (!DuelManager::isRealSelect(sel.type)) return;
+    if (sel.player != m_dm.humanSeat()) return;   // only the human's own prompt
+
+    switch (sel.type) {
+        case WaitType::SelectYesNo:
+        case WaitType::SelectEffectYn:
+            if (ImGui::IsKeyPressed(ImGuiKey_Y, false) ||
+                ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
+                submitMpChoice(sel.type, 1);          // Yes / activate
+            else if (ImGui::IsKeyPressed(ImGuiKey_N, false))
+                submitMpChoice(sel.type, 0);          // No / decline
+            break;
+        case WaitType::SelectOption: {
+            int n = (int)sel.options.size();
+            for (int k = 0; k < n && k < 9; ++k) {
+                if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + k), false)) {
+                    submitMpChoice(WaitType::SelectOption, k);
+                    break;
+                }
+            }
+            break;
+        }
+        default: break;   // cards / chains stay click-only (index ambiguity)
+    }
 }
 
 void UI::drawHelpOverlay(int w, int h) {
@@ -4413,9 +4447,14 @@ void UI::drawHelpOverlay(int w, int h) {
     row("Hover",       "Preview a card + its text");
     row("F1",          "Toggle this help");
     row("Esc",         "Close the open panel (help / viewer / info / tools)");
+    ImGui::Dummy({1.f, 4.f});
+    UIStyle::Subtle("Offline prompts");
+    row("1 - 9",       "Pick option N when choosing an effect");
+    row("Y / Enter",   "Yes / activate on a Yes-No prompt");
+    row("N",           "No / decline on a Yes-No prompt");
     ImGui::Dummy({1.f, 6.f});
     ImGui::TextDisabled("Tip: the bottom bar shows whose turn it is and the");
-    ImGui::TextDisabled("phase; the Tools button hides extra panels.");
+    ImGui::TextDisabled("phase; the \"Fast\" button skips phase pauses.");
     ImGui::Dummy({1.f, 10.f});
     if (UIStyle::PrimaryButton("Close", {-1.f, 30.f}))
         m_helpOverlayOpen = false;
