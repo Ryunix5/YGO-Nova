@@ -88,10 +88,25 @@ set(EDOPRO_DEFAULT_RELAY "" CACHE STRING
 # GitHub repo's latest release. Blank = update check disabled.
 set(EDOPRO_UPDATE_REPO "" CACHE STRING
     "GitHub owner/repo for in-app update checks (blank = disabled)")
+# Card-art image host. Blank = built-in default (public ygoprodeck CDN). Point
+# these at a self-hosted mirror to serve art in regions where the public CDN is
+# blocked: -DEDOPRO_IMAGE_CDN_HOST=images.myserver.com -DEDOPRO_IMAGE_CDN_PATH=/cards/
+set(EDOPRO_IMAGE_CDN_HOST "" CACHE STRING
+    "Card-art image host (blank = public ygoprodeck CDN)")
+set(EDOPRO_IMAGE_CDN_PATH "" CACHE STRING
+    "Card-art image path prefix, e.g. /images/cards/ (blank = default)")
 target_compile_definitions(EdoProPlus PRIVATE
     EDOPROPLUS_VERSION="${PROJECT_VERSION}"
     EDOPRO_DEFAULT_RELAY="${EDOPRO_DEFAULT_RELAY}"
     EDOPRO_UPDATE_REPO="${EDOPRO_UPDATE_REPO}")
+if(EDOPRO_IMAGE_CDN_HOST)
+    target_compile_definitions(EdoProPlus PRIVATE
+        EDOPRO_IMAGE_CDN_HOST="${EDOPRO_IMAGE_CDN_HOST}")
+endif()
+if(EDOPRO_IMAGE_CDN_PATH)
+    target_compile_definitions(EdoProPlus PRIVATE
+        EDOPRO_IMAGE_CDN_PATH="${EDOPRO_IMAGE_CDN_PATH}")
+endif()
 
 # ─── Include dirs ─────────────────────────────────────────────────────────────
 target_include_directories(EdoProPlus PRIVATE

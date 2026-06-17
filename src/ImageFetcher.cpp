@@ -12,11 +12,22 @@
 
 namespace edo {
 
-// Public CDN for card art, keyed by Konami passcode. Most standard cards
-// resolve here; misses (alt-art high codes, etc.) just fall back to the
-// placeholder. Kept as a single host/path constant so it is easy to retarget.
-static const wchar_t* kCdnHost = L"images.ygoprodeck.com";
-static const wchar_t* kCdnPathPrefix = L"/images/cards/";   // + <code>.jpg
+// Image host for card art, keyed by Konami passcode. Configurable at build
+// time so a self-hosted mirror (e.g. a sponsor's server, reachable in regions
+// where the public CDN is blocked) can serve art without a code change:
+//   cmake -DEDOPRO_IMAGE_CDN_HOST=images.myserver.com
+//         -DEDOPRO_IMAGE_CDN_PATH=/cards/
+// Defaults to the public ygoprodeck CDN. Misses just fall back to placeholder.
+#ifndef EDOPRO_IMAGE_CDN_HOST
+#define EDOPRO_IMAGE_CDN_HOST "images.ygoprodeck.com"
+#endif
+#ifndef EDOPRO_IMAGE_CDN_PATH
+#define EDOPRO_IMAGE_CDN_PATH "/images/cards/"
+#endif
+#define EDO_WIDEN2(x) L##x
+#define EDO_WIDEN(x)  EDO_WIDEN2(x)
+static const wchar_t* kCdnHost       = EDO_WIDEN(EDOPRO_IMAGE_CDN_HOST);
+static const wchar_t* kCdnPathPrefix = EDO_WIDEN(EDOPRO_IMAGE_CDN_PATH); // +<code>.jpg
 
 ImageFetcher::~ImageFetcher() { stop(); }
 
