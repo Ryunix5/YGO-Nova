@@ -23,14 +23,22 @@ ImageFetcher::~ImageFetcher() { stop(); }
 void ImageFetcher::start() {
     bool expected = false;
     if (!m_running.compare_exchange_strong(expected, true)) return;
-    m_worker = std::thread([this]{ workerLoop(); });
+    // A handful of parallel connections to the CDN so a deck page's worth of
+    // art arrives together instead of trickling in one image at a time. Kept
+    // modest to stay polite to the CDN and bounded on memory.
+    const int kWorkers = 6;
+    m_workers.reserve(kWorkers);
+    for (int i = 0; i < kWorkers; ++i)
+        m_workers.emplace_back([this]{ workerLoop(); });
 }
 
 void ImageFetcher::stop() {
     bool expected = true;
     if (!m_running.compare_exchange_strong(expected, false)) return;
     m_cv.notify_all();
-    if (m_worker.joinable()) m_worker.join();
+    for (auto& t : m_workers)
+        if (t.joinable()) t.join();
+    m_workers.clear();
 }
 
 void ImageFetcher::request(uint32_t code, const std::string& destPath) {

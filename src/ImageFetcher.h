@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <deque>
+#include <vector>
 #include <mutex>
 #include <condition_variable>
 #include <thread>
@@ -54,7 +55,9 @@ private:
 
     std::atomic<bool> m_enabled{true};
     std::atomic<bool> m_running{false};
-    std::thread       m_worker;
+    // Pool of download workers — several cards (a whole deck page) fetch in
+    // parallel instead of trickling out one at a time on a single thread.
+    std::vector<std::thread> m_workers;
 
     std::mutex                          m_mx;
     std::condition_variable             m_cv;
