@@ -6394,6 +6394,16 @@ void UI::drawCardZone(const char* label, const CardState* card,
     if (chainHere) {
         dl->AddRect(sp, br, IM_COL32(255, 120, 240, 255), 5.f, 0, 3.f);
     }
+    // Selection candidate (target / summon material) — green glow so it can be
+    // clicked on the board, alongside the gallery picker.
+    int selCandIdx = -1;
+    bool selHere = card && card->code &&
+                   isSelectCandidate(card->player, (uint8_t)card->loc,
+                                     card->seq, &selCandIdx);
+    if (selHere) {
+        UIStyle::DrawGlow(dl, sp, br, IM_COL32(110, 230, 140, 220), 5.f, 3);
+        dl->AddRect(sp, br, IM_COL32(140, 255, 165, 255), 5.f, 0, 3.f);
+    }
     // Selected outline (bright cyan) — drawn under the InvisibleButton so it
     // shows on top of the card background but below tooltips/hover effects.
     if (card && card->code && isSelectedCard(*card))
@@ -6482,6 +6492,15 @@ void UI::drawCardZone(const char* label, const CardState* card,
         gAudio().play("confirm");
         submitPlace((int)currentSelection().player,
                     (int)zoneLoc, (int)zoneSeq);
+        return;
+    }
+    // Selection candidate — clicking a glowing green card on the board submits
+    // it as the target / summon material (mirrors the gallery picker).
+    if (clicked && selHere && selCandIdx >= 0) {
+        const SelectionRequest& s = currentSelection();
+        gAudio().play("confirm");
+        if (s.type == WaitType::SelectUnselect) submitUnselect(selCandIdx);
+        else                                    submitMpChoice(s.type, selCandIdx);
         return;
     }
     // Chain response — clicking a glowing magenta card sends respondChain
@@ -7327,8 +7346,15 @@ void UI::drawField(int fw, int fh) {
                 int hChainIdx = -1;
                 bool hChainHere = isChainCandidate(c.player, (uint8_t)c.loc,
                                                    c.seq, &hChainIdx);
+                int hSelIdx = -1;
+                bool hSelHere = isSelectCandidate(c.player, (uint8_t)c.loc,
+                                                  c.seq, &hSelIdx);
                 if (isSelectedCard(c))
                     dl->AddRect(hp,hbr,IM_COL32(120,230,255,255),5.f,0,3.f);
+                else if (hSelHere) {
+                    UIStyle::DrawGlow(dl, hp, hbr, IM_COL32(110,230,140,220), 5.f, 3);
+                    dl->AddRect(hp,hbr,IM_COL32(140,255,165,255),5.f,0,3.f);
+                }
                 else if (hChainHere)
                     dl->AddRect(hp,hbr,IM_COL32(255,120,240,255),5.f,0,3.f);
                 else if (m_showLegalGlow &&
@@ -7391,6 +7417,14 @@ void UI::drawField(int fw, int fh) {
                     }
                 }
                 if (hClicked) {
+                    // Selection candidate: click a glowing green hand card to
+                    // submit it as target / summon material.
+                    if (hSelHere && hSelIdx >= 0) {
+                        const SelectionRequest& s = currentSelection();
+                        gAudio().play("confirm");
+                        if (s.type == WaitType::SelectUnselect) submitUnselect(hSelIdx);
+                        else                                    submitMpChoice(s.type, hSelIdx);
+                    } else
                     // Chain response: click a glowing magenta hand card to
                     // send respondChain(index) directly.
                     if (hChainHere && hChainIdx >= 0) {
@@ -8939,6 +8973,24 @@ bool UI::isChainCandidate(uint8_t player, uint8_t loc, uint32_t seq,
     for (size_t i = 0; i < sel.cards.size(); ++i) {
         const CardState& c = sel.cards[i];
         if (c.player == player && c.loc == loc && c.seq == seq) {
+            if (outIdx) *outIdx = (int)i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool UI::isSelectCandidate(uint8_t player, uint8_t loc, uint32_t seq,
+                           int* outIdx) const {
+    const SelectionRequest& sel = currentSelection();
+    if ((sel.type != WaitType::SelectCard &&
+         sel.type != WaitType::SelectTribute &&
+         sel.type != WaitType::SelectUnselect) ||
+        sel.player != (uint8_t)m_net.localPlayerIndex())
+        return false;
+    for (size_t i = 0; i < sel.cards.size(); ++i) {
+        const CardState& c = sel.cards[i];
+        if (c.player == player && (uint8_t)c.loc == loc && c.seq == seq) {
             if (outIdx) *outIdx = (int)i;
             return true;
         }

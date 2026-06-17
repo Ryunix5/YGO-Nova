@@ -113,6 +113,12 @@ private:
     void drawCenteredModal(int screenW, int screenH);
     bool isChainCandidate(uint8_t player, uint8_t loc, uint32_t seq,
                           int* outIdx = nullptr) const;
+    // True if a SelectCard / SelectTribute / SelectUnselect prompt for the
+    // local player offers the card at (player, loc, seq). `outIdx` receives the
+    // candidate index so a board click can submit it (glow + click on the field
+    // alongside the gallery picker).
+    bool isSelectCandidate(uint8_t player, uint8_t loc, uint32_t seq,
+                           int* outIdx = nullptr) const;
     // True if the engine is currently in SelectBattleCmd AND offers an
     // attack action originating at this card. `outIdx` receives the
     // matching engine index (cmd=1 entry) so the click handler can
