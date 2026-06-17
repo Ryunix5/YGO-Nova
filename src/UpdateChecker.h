@@ -29,6 +29,19 @@ public:
     std::string latestVersion() const;   // e.g. "1.2.0" (no leading v)
     std::string releaseUrl() const;      // GitHub release page URL
 
+    // ── Self-update (auto-updater) ───────────────────────────────────────────
+    // The check stores the release's installer (.exe) asset URL. beginDownload()
+    // fetches it to a temp file on a worker thread; runInstaller() launches it.
+    // The caller should quit the app right after a successful runInstaller() so
+    // the installer can overwrite the running files.
+    enum class DownloadState { Idle, Running, Ready, Failed };
+    bool        canSelfUpdate() const;            // an installer asset was found
+    void        beginDownload();                  // async download of the asset
+    DownloadState downloadState() const { return m_dlState.load(); }
+    double      downloadProgress() const { return m_dlProgress.load(); }  // 0..1
+    std::string installerPath() const;            // valid once Ready
+    bool        runInstaller();                   // launch it; true on success
+
 private:
     void run(std::string current, std::string repo);
 
@@ -40,6 +53,12 @@ private:
     mutable std::mutex m_mx;
     std::string       m_latest;   // guarded by m_mx
     std::string       m_url;      // guarded by m_mx
+    std::string       m_assetUrl; // installer download URL, guarded by m_mx
+
+    std::atomic<DownloadState> m_dlState{DownloadState::Idle};
+    std::atomic<double>        m_dlProgress{0.0};
+    std::thread                m_dlWorker;
+    std::string                m_installerPath;   // guarded by m_mx
 };
 
 // Open a URL in the user's default browser (no-op on unsupported platforms).

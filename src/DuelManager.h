@@ -428,6 +428,10 @@ private:
     // Set by the MSG_NEW_PHASE handler; consumed by the process() pump to
     // arm the hold once per phase change.
     bool                     m_phaseChangedThisProcess = false;
+    // Set when a process step put a card on the board (a Summon) or started an
+    // activation. The pump arms a short "combo beat" so a cascade of Special
+    // Summons plays out one card at a time instead of appearing all at once.
+    bool                     m_pacedEventThisProcess = false;
 
     // Last engine message frame seen, captured at the top of handleMsg().
     // When the engine awaits input on a message type the parser doesn't

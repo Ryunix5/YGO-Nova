@@ -3642,11 +3642,41 @@ void UI::drawLobby(int w, int h) {
         ImGui::TextUnformatted(label.c_str());
         ImGui::PopStyleColor();
         ImGui::SameLine(0.f, 12.f);
-        if (UIStyle::PrimaryButton("Download", {110.f, 28.f})) {
-            openExternalUrl(m_update.releaseUrl());
+
+        using DL = edo::UpdateChecker::DownloadState;
+        const DL ds = m_update.downloadState();
+        if (m_update.canSelfUpdate()) {
+            // One-click auto-update: download the installer, then launch it and
+            // quit so it can overwrite the running app.
+            if (ds == DL::Idle) {
+                if (UIStyle::PrimaryButton("Update now", {120.f, 28.f}))
+                    m_update.beginDownload();
+            } else if (ds == DL::Running) {
+                ImGui::TextDisabled("Downloading...");
+                ImGui::SameLine(0.f, 8.f);
+                char pct[16];
+                snprintf(pct, sizeof(pct), "%d%%",
+                         (int)(m_update.downloadProgress() * 100.0));
+                ImGui::TextUnformatted(pct);
+            } else if (ds == DL::Ready) {
+                if (UIStyle::PrimaryButton("Install & Restart", {150.f, 28.f})) {
+                    if (m_update.runInstaller()) {
+                        extern bool g_quit; g_quit = true;   // let installer replace files
+                    }
+                }
+            } else { // Failed
+                ImGui::TextDisabled("Download failed");
+                ImGui::SameLine(0.f, 8.f);
+                if (UIStyle::GhostButton("Open page##upd", {96.f, 28.f}))
+                    openExternalUrl(m_update.releaseUrl());
+            }
+        } else {
+            // No installer asset (or unsupported platform): open the release page.
+            if (UIStyle::PrimaryButton("Download", {110.f, 28.f}))
+                openExternalUrl(m_update.releaseUrl());
         }
         ImGui::SameLine(0.f, 6.f);
-        if (UIStyle::GhostButton("Later##upd", {64.f, 28.f}))
+        if (ds != DL::Running && UIStyle::GhostButton("Later##upd", {64.f, 28.f}))
             m_updateDismissed = true;
         ImGui::End();
         ImGui::PopStyleVar(2);
@@ -11623,6 +11653,7 @@ static std::vector<uint8_t> b64decode(const std::string& in) {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     int rev[256]; for (int i = 0; i < 256; ++i) rev[i] = -1;
     for (int i = 0; i < 64; ++i) rev[(uint8_t)tbl[i]] = i;
+    rev[(uint8_t)'-'] = 62; rev[(uint8_t)'_'] = 63;   // accept base64url too
     std::vector<uint8_t> out;
     int val = 0, bits = -8;
     for (uint8_t c : in) {

@@ -407,6 +407,22 @@ bool DuelManager::process() {
         void* msgBuf = OCG_DuelGetMessage(m_duel, &msgLen);
         if (msgBuf && msgLen > 0) { parseMessages(msgBuf, msgLen); sawMessages = true; }
 
+        // A Summon landed or an effect started this step — arm a short "combo
+        // beat" and YIELD so a cascade of Special Summons plays out one card at
+        // a time instead of the whole combo snapping onto the board at once.
+        // This is what actually slows the AI's combos down to watchable speed
+        // (the per-decision holds don't, because the cascade resolves between
+        // decision points). Skipped under Fast turns / testing rebuild (delay 0).
+        if (m_phaseDelaySec > 0.0 && m_pacedEventThisProcess && !m_done) {
+            m_pacedEventThisProcess = false;
+            double beat = m_phaseDelaySec < 0.45 ? m_phaseDelaySec : 0.45;
+            m_phaseHoldUntil = std::chrono::steady_clock::now() +
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(beat));
+            queryField();
+            return true;
+        }
+
         // A phase changed in this step — arm the pacing hold and YIELD so the
         // player sees the new phase (and any end-of-phase prompt) before the
         // engine races on. Resumes automatically once the hold elapses.
@@ -790,6 +806,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         setLastAction(con, std::string(
             type==MSG_SPSUMMONING ? "Special Summoning " :
             type==MSG_FLIPSUMMONING ? "Flip Summoning " : "Summoning ") + nm);
+        m_pacedEventThisProcess = true;   // beat: let each summon land visibly
         break;
     }
 
@@ -803,6 +820,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         std::string nm = ci.name.empty()?("#"+std::to_string(code)):ci.name;
         addLog("Activating: "+nm);
         setLastAction(con, "Activating " + nm);
+        m_pacedEventThisProcess = true;   // beat: let each activation read
         break;
     }
 
