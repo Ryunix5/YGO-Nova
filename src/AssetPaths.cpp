@@ -4,6 +4,12 @@
 #include <filesystem>
 #include <string>
 
+#if defined(_WIN32)
+  #define WIN32_LEAN_AND_MEAN
+  #define NOMINMAX
+  #include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -32,9 +38,21 @@ bool hasProjectMarker(const fs::path& dir) {
 
 #if defined(_WIN32)
 fs::path exeDirectory() {
-    // GetModuleFileNameW would be ideal but pulls in <windows.h>; argv[0]
-    // is not accessible here. Fall back to the parent of CWD if needed.
-    return fs::path();
+    // The folder the running .exe lives in — independent of the working
+    // directory. This is what makes an INSTALLED build find its assets no
+    // matter how it was launched (Start Menu / desktop shortcut CWDs are
+    // often System32 or the user profile, not the install folder).
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+        if (n == 0) return fs::path();
+        if (n < buf.size()) { buf.resize(n); break; }
+        buf.resize(buf.size() * 2);          // path longer than buffer; grow
+        if (buf.size() > 32768) return fs::path();
+    }
+    std::error_code ec;
+    fs::path exe(buf);
+    return exe.parent_path();
 }
 #else
 fs::path exeDirectory() { return fs::path(); }
