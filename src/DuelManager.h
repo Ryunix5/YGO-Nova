@@ -150,6 +150,10 @@ struct SelectionRequest {
     int          min         = 0;
     int          max         = 0;
     bool         forced      = false;
+    // SelectUnselect (summon material): the engine says the current selection
+    // is already a legal set and may be finished (respond -1). Distinct from
+    // `forced`, which only means "no finish AND no cancel allowed".
+    bool         finishable  = false;
     int          summonCount = 0;  // how many Normal-Summonable cards are in cards[]
     int          msetCount   = 0;  // how many Monster-Settable cards follow
     std::vector<CardState> cards;   // select targets (SelectCard / SelectChain)

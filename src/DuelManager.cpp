@@ -1393,6 +1393,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         m_selection.player = pid;
         m_selection.cards  = sel;
         m_selection.min=mn; m_selection.max=mx;
+        m_selection.finishable = finishable;
         m_selection.forced = !(finishable || cancelable);
         addLog("[Select card/material - Player "+std::to_string(pid+1)+" - "+
                std::to_string(sc)+" option(s)]");
@@ -1832,7 +1833,18 @@ bool DuelManager::aiIdlePhase() {
     for (int i = 0; i < (int)idle.size(); ++i) {
         const IdleAction& a = idle[i];
         switch (a.cmd) {
-            case 1: { int v = atkOf(a.code); if (v > spAtk) { spAtk = v; spIdx = i; } break; }
+            case 1: {
+                // Special Summon. Attempt each card at most once per turn:
+                // keyed by code so a summon the AI cannot satisfy (e.g. it can't
+                // pick legal Synchro materials and ends up cancelling) is not
+                // re-offered and re-attempted on the very next idle loop.
+                uint64_t key = (uint64_t)a.code | (1ull << 40);   // tag: SP summon
+                bool used = false;
+                for (uint64_t k : m_aiDoneThisTurn) if (k == key) { used = true; break; }
+                if (used) break;
+                int v = atkOf(a.code); if (v > spAtk) { spAtk = v; spIdx = i; }
+                break;
+            }
             case 0: { int v = atkOf(a.code); if (v > nsAtk) { nsAtk = v; nsIdx = i; } break; }
             case 5: {
                 // Key on the card code alone: the AI activates each card's
@@ -1856,7 +1868,10 @@ bool DuelManager::aiIdlePhase() {
         m_aiDoneThisTurn.push_back(actKey);
         respondIdleCmd(idle[actIdx].cmd, idle[actIdx].index); return true;
     }
-    if (spIdx  >= 0) { respondIdleCmd(idle[spIdx].cmd,  idle[spIdx].index);  return true; }
+    if (spIdx  >= 0) {
+        m_aiDoneThisTurn.push_back((uint64_t)idle[spIdx].code | (1ull << 40));
+        respondIdleCmd(idle[spIdx].cmd, idle[spIdx].index); return true;
+    }
     if (nsIdx  >= 0) { respondIdleCmd(idle[nsIdx].cmd,  idle[nsIdx].index);  return true; }
     if (setIdx >= 0) { respondIdleCmd(idle[setIdx].cmd, idle[setIdx].index); return true; }
     if (m_selection.toBP && !m_field.monsters[aiSeat].empty()) {
@@ -1980,10 +1995,20 @@ bool DuelManager::autoRespondP2() {
         respondChain(forced ? 0 : -1);   // never start a chain unless forced
         return true;
     case WaitType::SelectUnselect:
-        // Material selection during P2's own summon: pick a card if it must,
-        // otherwise finish/cancel so the engine resolves the count itself.
-        if (forced && hasCards) respondUnselect(0);
-        else                    respondInt(-1);
+        // Material selection during the AI's own summon (Synchro/Link/Xyz/
+        // Fusion). The engine re-asks one card at a time and only sets
+        // `finishable` once the current picks form a LEGAL material set.
+        //   - finishable        -> finish (respond -1): we have a valid set.
+        //   - still has options  -> pick one (build toward a legal set). The
+        //     engine only offers cards that can still lead to a legal sum, so
+        //     greedily taking the first offered card converges on a real summon
+        //     instead of cancelling and re-attempting it forever.
+        //   - nothing offered & not finishable -> give up (respond -1).
+        // Previously a *cancelable* window made the AI bail immediately, so it
+        // never completed an Extra-Deck summon and looped idle<->material.
+        if (m_selection.finishable)      respondInt(-1);   // legal set -> done
+        else if (hasCards)               respondUnselect(0);// take next material
+        else                             respondInt(-1);   // unsatisfiable -> drop
         return true;
     case WaitType::SelectPosition: { int32_t pos = POS_FACEUP_ATTACK; submitResponse(&pos, 4); return true; }
     case WaitType::None:

@@ -1,3 +1,11 @@
+# ─── Runtime asset / data trees (local only, synced separately, large) ───────
+# These are downloaded/synced onto a dev machine, not part of the source repo.
+/assets/
+/frontend/
+/engine/
+/database/
+/BabelCDB-master/
+
 # ─── Build output ────────────────────────────────────────────────────────────
 /build/
 build/
