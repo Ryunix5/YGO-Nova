@@ -1390,16 +1390,43 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         if (count == 0) count = 1;
         if (count > 8)  count = 8;
         uint8_t  resp[8 * 3];
-        uint32_t used = flag;               // avoid choosing the same zone twice
+        uint32_t used = flag;               // SET bit = unavailable zone
+        // Zone groups exactly as ocgcore encodes the place flag (see its
+        // SIMPLE_AI placer): the low 16 bits are the asked player's own zones,
+        // bits 16-31 are the opponent's. CRUCIALLY this includes the Extra
+        // Monster Zones (bits 5-6) and never lets a monster land in an S/T zone
+        // — the old picker missed the EMZ and fell back to S/T, so a Fusion /
+        // Synchro / Link Summon whose only legal spot was an EMZ got rejected
+        // (MSG_RETRY) and paused the duel.
+        struct ZGroup { int base, n, locMZ, seqBase, opp; };
+        static const ZGroup kGroups[] = {
+            { 0,  5, 1, 0, 0 },   // own main monster zones -> seq 0..4
+            { 5,  2, 1, 5, 0 },   // own Extra Monster Zones -> seq 5,6
+            { 8,  5, 0, 0, 0 },   // own spell/trap zones    -> seq 0..4
+            { 13, 1, 0, 5, 0 },   // own field zone          -> seq 5
+            { 14, 2, 0, 6, 0 },   // own pendulum zones      -> seq 6,7
+            { 16, 5, 1, 0, 1 },   // opponent main monster
+            { 21, 2, 1, 5, 1 },   // opponent EMZ
+            { 24, 5, 0, 0, 1 },   // opponent spell/trap
+            { 29, 1, 0, 5, 1 },   // opponent field zone
+            { 30, 2, 0, 6, 1 },   // opponent pendulum
+        };
         for (uint8_t k = 0; k < count; ++k) {
-            uint8_t loc = (uint8_t)LOC_MZONE, seq = 0; bool found = false;
-            for (int s = 0; s < 5 && !found; ++s)
-                if (!(used & (1u << s)))
-                    { loc = LOC_MZONE; seq = (uint8_t)s; used |= (1u << s); found = true; }
-            for (int s = 0; s < 5 && !found; ++s)
-                if (!(used & (1u << (s + 8))))
-                    { loc = LOC_SZONE; seq = (uint8_t)s; used |= (1u << (s + 8)); found = true; }
-            resp[k*3+0] = pid; resp[k*3+1] = loc; resp[k*3+2] = seq;
+            uint8_t rplayer = pid, loc = (uint8_t)LOC_MZONE, seq = 0;
+            bool found = false;
+            for (const ZGroup& g : kGroups) {
+                for (int i = 0; i < g.n && !found; ++i) {
+                    int bit = g.base + i;
+                    if (used & (1u << bit)) continue;          // unavailable
+                    used   |= (1u << bit);
+                    rplayer = (uint8_t)(g.opp ? (pid ^ 1) : pid);
+                    loc     = (uint8_t)(g.locMZ ? LOC_MZONE : LOC_SZONE);
+                    seq     = (uint8_t)(g.seqBase + i);
+                    found   = true;
+                }
+                if (found) break;
+            }
+            resp[k*3+0] = rplayer; resp[k*3+1] = loc; resp[k*3+2] = seq;
         }
         submitResponse(resp, (uint32_t)count * 3u);
         break;
