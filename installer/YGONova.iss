@@ -1,7 +1,7 @@
-; Inno Setup script for EdoPro+.
+; Inno Setup script for YGO: Nova.
 ;
 ; Build with:  tools\build_installer.ps1   (stages the bundle, then runs ISCC)
-; or directly: ISCC /DMyAppVersion=1.0.0 installer\EdoProPlus.iss
+; or directly: ISCC /DMyAppVersion=1.0.0 installer\YGONova.iss
 ;
 ; Per-user install (PrivilegesRequired=lowest) so the install directory is
 ; writable - the app caches on-demand card art into assets\cards\ next to the
@@ -10,15 +10,15 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppName "EdoPro+"
-#define MyAppExeName "EdoProPlus.exe"
-#define MyAppPublisher "EdoPro+ Project"
+#define MyAppName "YGO Nova"
+#define MyAppExeName "YGONova.exe"
+#define MyAppPublisher "YGO Nova Project"
 ; Staged payload produced by package_release.ps1.
-#define StageDir "..\dist\EdoProPlus-v" + MyAppVersion
+#define StageDir "..\dist\YGONova-v" + MyAppVersion
 
 [Setup]
 ; A stable AppId keeps upgrades/uninstall consistent across versions.
-AppId={{8F2C4B91-7A3E-4D6C-9B1F-EDOPROPLUS001}}
+AppId={{8F2C4B91-7A3E-4D6C-9B1F-YGONOVA00001}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -28,7 +28,7 @@ DisableProgramGroupPage=yes
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\dist
-OutputBaseFilename=EdoProPlus-v{#MyAppVersion}-Setup
+OutputBaseFilename=YGONova-v{#MyAppVersion}-Setup
 Compression=lzma2/max
 SolidCompression=yes
 PrivilegesRequired=lowest
@@ -36,6 +36,10 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 LicenseFile={#StageDir}\THIRD_PARTY_NOTICES.md
+; Branded installer + Add/Remove Programs icon (present once make_icon.py runs).
+#if FileExists("YGONova.ico")
+SetupIconFile=YGONova.ico
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -66,9 +70,9 @@ begin
   Result := True;
   if not FileExists(ExpandConstant('{sys}\vcruntime140.dll')) then
   begin
-    if MsgBox('EdoPro+ needs the Microsoft Visual C++ 2015-2022 Redistributable (x64),'
+    if MsgBox('YGO Nova needs the Microsoft Visual C++ 2015-2022 Redistributable (x64),'
       + #13#10 + 'which does not appear to be installed.' + #13#10#13#10
-      + 'Install EdoPro+ anyway? (Get the runtime from https://aka.ms/vs/17/release/vc_redist.x64.exe)',
+      + 'Install YGO Nova anyway? (Get the runtime from https://aka.ms/vs/17/release/vc_redist.x64.exe)',
       mbConfirmation, MB_YESNO) = IDNO then
       Result := False;
     Dummy := '';

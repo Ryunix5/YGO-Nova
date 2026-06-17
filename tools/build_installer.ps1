@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Build the EdoPro+ Windows installer (Setup.exe) with Inno Setup.
+    Build the YGO Nova Windows installer (Setup.exe) with Inno Setup.
 
 .DESCRIPTION
     1. Stages the release bundle via package_release.ps1 (no zip).
-    2. Compiles installer\EdoProPlus.iss with Inno Setup's ISCC.exe.
-    Output: dist\EdoProPlus-v<Version>-Setup.exe
+    2. Compiles installer\YGONova.iss with Inno Setup's ISCC.exe.
+    Output: dist\YGONova-v<Version>-Setup.exe
 
     Requires Inno Setup 6 (ISCC.exe). Install once with:
         winget install -e --id JRSoftware.InnoSetup
@@ -54,11 +54,11 @@ if ($IncludeCardImages) {
 
 # 3) Compile the installer.
 Write-Host "Compiling installer with Inno Setup..." -ForegroundColor Cyan
-$iss = Join-Path $root "installer\EdoProPlus.iss"
+$iss = Join-Path $root "installer\YGONova.iss"
 & $iscc "/DMyAppVersion=$Version" $iss
 if ($LASTEXITCODE -ne 0) { Write-Error "ISCC failed with exit code $LASTEXITCODE." }
 
-$setup = Join-Path $root "dist\EdoProPlus-v$Version-Setup.exe"
+$setup = Join-Path $root "dist\YGONova-v$Version-Setup.exe"
 if (Test-Path $setup) {
     $sz = "{0:N1} MB" -f ((Get-Item $setup).Length / 1MB)
     Write-Host "Done. $setup ($sz)" -ForegroundColor Green

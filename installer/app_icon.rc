@@ -1,0 +1,5 @@
+// Windows application icon resource for YGO: Nova.
+// ID 1 (lowest) becomes the default Explorer / taskbar icon for the exe.
+// The .ico is generated from the logo by tools/make_icon.py and sits next to
+// this file so the resource compiler resolves the relative path.
+1 ICON "YGONova.ico"

@@ -68,6 +68,16 @@ add_executable(EdoProPlus
     ${IMGUI_SOURCES}
 )
 
+# ─── App identity: produced exe name + Windows icon ──────────────────────────
+# Ship the binary as "YGONova.exe" (the CMake target keeps its internal name).
+set_target_properties(EdoProPlus PROPERTIES OUTPUT_NAME "YGONova")
+# Embed the taskbar / Explorer icon when the .ico is present. It lives next to
+# app_icon.rc in installer/ so the resource compiler resolves the relative path.
+# Generate the .ico from the logo with: python tools/make_icon.py
+if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/installer/YGONova.ico")
+    target_sources(EdoProPlus PRIVATE "${CMAKE_SOURCE_DIR}/installer/app_icon.rc")
+endif()
+
 # ─── App version (surfaced in the window title + main menu) ──────────────────
 # EDOPRO_DEFAULT_RELAY bakes a default online relay host into the build so a
 # public release lands players on your server with no typing (blank = localhost,

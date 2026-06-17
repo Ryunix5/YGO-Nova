@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Assemble a distributable EdoPro+ release bundle (zip).
+    Assemble a distributable YGO Nova release bundle (zip).
 
 .DESCRIPTION
     Stages the built executable, game assets, the online relay tools, and the
-    user docs into dist\EdoProPlus-v<Version>\, then compresses that to
-    dist\EdoProPlus-v<Version>-win64.zip.
+    user docs into dist\YGONova-v<Version>\, then compresses that to
+    dist\YGONova-v<Version>-win64.zip.
 
     The build is statically linked (vcpkg x64-windows-static-md), so no third-
     party DLLs are bundled. End users need the Microsoft Visual C++ 2015-2022
@@ -35,13 +35,13 @@ $ErrorActionPreference = "Stop"
 
 # Repo root = parent of this script's folder.
 $root    = Split-Path -Parent $PSScriptRoot
-$exePath = Join-Path $root "build\windows\$Config\EdoProPlus.exe"
+$exePath = Join-Path $root "build\windows\$Config\YGONova.exe"
 
 if (-not (Test-Path $exePath)) {
     Write-Error "Executable not found: $exePath`nBuild it first (build.bat or cmake --build build/windows --config $Config)."
 }
 
-$stageName = "EdoProPlus-v$Version"
+$stageName = "YGONova-v$Version"
 $distDir   = Join-Path $root "dist"
 $stageDir  = Join-Path $distDir $stageName
 $zipPath   = Join-Path $distDir "$stageName-win64.zip"
@@ -54,7 +54,7 @@ if (Test-Path $zipPath)  { Remove-Item $zipPath  -Force }
 New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 
 # 1) Executable (+ any DLLs that happen to sit next to it, for shared builds).
-Copy-Item $exePath (Join-Path $stageDir "EdoProPlus.exe") -Force
+Copy-Item $exePath (Join-Path $stageDir "YGONova.exe") -Force
 $exeDir = Split-Path -Parent $exePath
 Get-ChildItem -Path $exeDir -Filter *.dll -ErrorAction SilentlyContinue |
     ForEach-Object { Copy-Item $_.FullName $stageDir -Force }

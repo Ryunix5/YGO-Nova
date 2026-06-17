@@ -3515,30 +3515,62 @@ void UI::drawLobby(int w, int h) {
     // Slim left gold accent bar + transparent glass tint + diamond avatar.
     // No filled background rectangle — the strip blends into the backdrop.
     {
-        ImVec2 a = {24.f, 22.f};
-        ImVec2 b = {a.x + 320.f, a.y + 96.f};
-        // Soft glass tint (very low alpha) over the backdrop.
-        bg->AddRectFilled(a, b, IM_COL32(18, 26, 42, 110), UIStyle::M().radS);
-        // Left gold accent bar.
-        bg->AddRectFilled({a.x, a.y + 10.f}, {a.x + 4.f, b.y - 10.f},
-                          C.accent, 1.f);
-        // Avatar diamond (no surrounding rectangle — just the glyph).
-        ImVec2 cd  = {a.x + 44.f, a.y + 48.f};
-        ImVec2 outer[4] = {{cd.x, cd.y - 26.f}, {cd.x + 26.f, cd.y},
-                           {cd.x, cd.y + 26.f}, {cd.x - 26.f, cd.y}};
-        ImVec2 inner[4] = {{cd.x, cd.y - 17.f}, {cd.x + 17.f, cd.y},
-                           {cd.x, cd.y + 17.f}, {cd.x - 17.f, cd.y}};
-        bg->AddConvexPolyFilled(outer, 4, IM_COL32(40, 56, 92, 220));
-        bg->AddPolyline(outer, 4, C.accent, ImDrawFlags_Closed, 1.4f);
-        bg->AddConvexPolyFilled(inner, 4, IM_COL32(255, 210, 120, 230));
-        // Text column — app name + version, role, tagline.
-        char titleBuf[48];
-        snprintf(titleBuf, sizeof(titleBuf), "%s  v%s",
-                 edo::kAppName, edo::kAppVersion);
-        bg->AddText({a.x + 86.f, a.y + 14.f}, C.textHi,  titleBuf);
-        bg->AddText({a.x + 86.f, a.y + 36.f}, C.textLo,  "Local Profile");
-        bg->AddText({a.x + 86.f, a.y + 58.f}, C.textMuted,
+        ImVec2 a = {26.f, 24.f};
+        const float CW = 298.f, CH = 90.f;
+        ImVec2 b = {a.x + CW, a.y + CH};
+        // Premium glass card: soft gold halo, glass surface, top sheen — sits
+        // on the backdrop as one material rather than a flat tinted box.
+        UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x26000000,
+                          UIStyle::M().radL, 3);
+        UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
+                                IM_COL32(20, 28, 46, 226));
+        bg->AddLine({a.x + 16.f, a.y + 1.5f}, {b.x - 16.f, a.y + 1.5f},
+                    (C.accent & 0x00FFFFFF) | 0x55000000, 1.f);
+
+        // Emblem — concentric gold diamond (the logo motif; the texture icon
+        // ships as the app/window icon).
+        ImVec2 cd = {a.x + 42.f, a.y + CH * 0.5f};
+        auto diamond = [&](float r, ImU32 col, bool fill, float th) {
+            ImVec2 p[4] = {{cd.x, cd.y - r}, {cd.x + r, cd.y},
+                           {cd.x, cd.y + r}, {cd.x - r, cd.y}};
+            if (fill) bg->AddConvexPolyFilled(p, 4, col);
+            else      bg->AddPolyline(p, 4, col, ImDrawFlags_Closed, th);
+        };
+        diamond(25.f, IM_COL32(44, 60, 96, 230), true, 0.f);
+        diamond(25.f, (C.accent & 0x00FFFFFF) | 0x99000000, false, 1.5f);
+        diamond(13.f, IM_COL32(255, 210, 120, 235), true, 0.f);
+        diamond(6.f,  IM_COL32(28, 38, 62, 255), true, 0.f);
+
+        // Title in the header face, with a gold version pill + BETA tag on the
+        // same baseline.
+        const float tx = a.x + 80.f;
+        UIStyle::PushFont(UIStyle::fHeader);
+        bg->AddText({tx, a.y + 13.f}, C.textHi, edo::kAppName);
+        ImVec2 nameSz = ImGui::CalcTextSize(edo::kAppName);
+        UIStyle::PopFont();
+        UIStyle::PushFont(UIStyle::fSmall);
+        char ver[24]; snprintf(ver, sizeof(ver), "v%s", edo::kAppVersion);
+        ImVec2 vs = ImGui::CalcTextSize(ver);
+        float py = a.y + 17.f;
+        ImVec2 pA{tx + nameSz.x + 10.f, py}, pB{pA.x + vs.x + 14.f, py + 17.f};
+        bg->AddRectFilled(pA, pB, (C.accent & 0x00FFFFFF) | 0x33000000, 8.f);
+        bg->AddRect(pA, pB, (C.accent & 0x00FFFFFF) | 0x99000000, 8.f, 0, 1.f);
+        bg->AddText({pA.x + 7.f, pA.y + 2.f}, C.accentText, ver);
+        const char* beta = "BETA";
+        ImVec2 bs = ImGui::CalcTextSize(beta);
+        ImVec2 betaA{pB.x + 6.f, py}, betaB{betaA.x + bs.x + 14.f, py + 17.f};
+        bg->AddRectFilled(betaA, betaB, IM_COL32(120, 92, 205, 90), 8.f);
+        bg->AddRect(betaA, betaB, IM_COL32(172, 142, 240, 190), 8.f, 0, 1.f);
+        bg->AddText({betaA.x + 7.f, betaA.y + 2.f},
+                    IM_COL32(222, 208, 255, 255), beta);
+        UIStyle::PopFont();
+
+        // Sub-lines.
+        bg->AddText({tx, a.y + 44.f}, C.textLo, "Local Profile");
+        UIStyle::PushFont(UIStyle::fSmall);
+        bg->AddText({tx, a.y + 66.f}, C.textMuted,
                     "Modern Yu-Gi-Oh duel simulator");
+        UIStyle::PopFont();
     }
 
     // ── Top-right action icons (Settings / Audio / Debug / Exit) ────────────
@@ -3746,49 +3778,59 @@ void UI::drawLobby(int w, int h) {
     // status chips (DB / Scripts / Audio / Online) so the readiness of the
     // runtime reads at a glance instead of a plain text strip.
     {
-        const float NW = 372.f, NH = 132.f;
-        ImVec2 a = {24.f, H - NH - 30.f};
+        const float NW = 300.f, NH = 120.f;
+        ImVec2 a = {26.f, H - NH - 28.f};
         ImVec2 b = {a.x + NW, a.y + NH};
-        UIStyle::DrawGamePanel(bg, a, b, UIStyle::M().radL, 0);
-        bg->AddRectFilled({a.x, a.y + 12.f}, {a.x + 4.f, b.y - 12.f},
+        // Match the identity card's material: gold halo + glass + top sheen.
+        UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x20000000,
+                          UIStyle::M().radL, 3);
+        UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
+                                IM_COL32(20, 28, 46, 226));
+        bg->AddLine({a.x + 16.f, a.y + 1.5f}, {b.x - 16.f, a.y + 1.5f},
+                    (C.accent & 0x00FFFFFF) | 0x55000000, 1.f);
+        // Header row: small gold marker + label.
+        bg->AddRectFilled({a.x + 18.f, a.y + 16.f}, {a.x + 25.f, a.y + 23.f},
                           C.accent, 2.f);
         UIStyle::PushFont(UIStyle::fSmall);
-        bg->AddText({a.x + 18.f, a.y + 12.f}, C.textLo, "SYSTEM STATUS");
+        bg->AddText({a.x + 33.f, a.y + 15.f}, C.textLo, "SYSTEM STATUS");
         UIStyle::PopFont();
 
-        // Chip drawer on the background list: dot + label, coloured by state.
+        // Chip drawer: status dot + label, coloured by state, in a soft pill.
         auto chip = [&](ImVec2 p, ImU32 col, const char* text) {
             ImVec2 ts = ImGui::CalcTextSize(text);
-            ImVec2 c0{p.x, p.y}, c1{p.x + ts.x + 30.f, p.y + 22.f};
-            bg->AddRectFilled(c0, c1, (col & 0x00FFFFFF) | 0x22000000, 11.f);
-            bg->AddRect(c0, c1, (col & 0x00FFFFFF) | 0x99000000, 11.f, 0, 1.f);
-            bg->AddCircleFilled({p.x + 12.f, p.y + 11.f}, 4.f, col, 12);
-            bg->AddText({p.x + 22.f, p.y + 4.f}, C.textHi, text);
+            ImVec2 c0{p.x, p.y}, c1{p.x + ts.x + 28.f, p.y + 24.f};
+            bg->AddRectFilled(c0, c1, (col & 0x00FFFFFF) | 0x26000000, 12.f);
+            bg->AddRect(c0, c1, (col & 0x00FFFFFF) | 0x99000000, 12.f, 0, 1.f);
+            bg->AddCircleFilled({p.x + 13.f, p.y + 12.f}, 4.f, col, 12);
+            bg->AddText({p.x + 23.f, p.y + 5.f}, C.textHi, text);
             return c1.x;
         };
         bool audioOk = gAudio().isAvailable() && !gAudio().muted();
-        char dbTxt[40]; snprintf(dbTxt, sizeof(dbTxt), "Card DB  %d", dbCount);
-        char scTxt[40]; snprintf(scTxt, sizeof(scTxt), "Scripts  %d", scriptCount);
-        float row1 = a.y + 38.f, row2 = a.y + 70.f, row3 = a.y + 102.f;
-        float x2 = chip({a.x + 18.f, row1},
-                        dbCount > 0 ? C.success : C.danger, dbTxt);
-        chip({x2 + 8.f, row1}, scriptCount > 0 ? C.success : C.warning, scTxt);
-        chip({a.x + 18.f, row2},
-             audioOk ? C.success : C.warning,
-             !gAudio().isAvailable() ? "Audio  off"
-             : gAudio().muted() ? "Audio  muted" : "Audio  ready");
-        // Online relay configured?
         bool relayCfg = !m_settings.mpHostIP.empty() &&
                         m_settings.mpHostIP != "127.0.0.1";
-        chip({a.x + 18.f, row3},
-             relayCfg ? C.primaryHi : C.textMuted,
-             relayCfg ? "Online relay set" : "Online relay: local");
+        char dbTxt[40]; snprintf(dbTxt, sizeof(dbTxt), "Card DB  %d", dbCount);
+        char scTxt[40]; snprintf(scTxt, sizeof(scTxt), "Scripts  %d", scriptCount);
+        const char* auTxt = !gAudio().isAvailable() ? "Audio  off"
+                          : gAudio().muted()        ? "Audio  muted"
+                                                    : "Audio  ready";
+        const char* rlTxt = relayCfg ? "Relay  set" : "Relay  local";
+        // 2x2 grid so the panel reads at a glance.
+        float rowA = a.y + 42.f, rowB = a.y + 76.f;
+        chip({a.x + 18.f, rowA}, dbCount > 0 ? C.success : C.danger, dbTxt);
+        chip({a.x + 162.f, rowA}, scriptCount > 0 ? C.success : C.warning, scTxt);
+        chip({a.x + 18.f, rowB}, audioOk ? C.success : C.warning, auTxt);
+        chip({a.x + 162.f, rowB}, relayCfg ? C.primaryHi : C.textMuted, rlTxt);
     }
 
     // ── Bottom-right footer build line ──────────────────────────────────────
     UIStyle::PushFont(UIStyle::fSmall);
-    bg->AddText({W - 200.f, H - 26.f}, C.textMuted,
-                "EdoPro+  ·  modern duel client");
+    {
+        char foot[64];
+        snprintf(foot, sizeof(foot), "%s  ·  v%s  ·  modern duel client",
+                 edo::kAppName, edo::kAppVersion);
+        ImVec2 fsz = ImGui::CalcTextSize(foot);
+        bg->AddText({W - fsz.x - 26.f, H - 26.f}, C.textMuted, foot);
+    }
     UIStyle::PopFont();
 
     // ── Audio settings popup (opened by the top-right Audio button) ────────
