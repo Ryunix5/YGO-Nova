@@ -9259,8 +9259,10 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     maxH = std::min((float)screenH - 100.f, maxH);
 
     // Dim the duel underneath ONLY for real decision modals — the viewer is a
-    // browse panel and must keep the field fully visible/interactive.
-    if (!isViewer) {
+    // browse panel and must keep the field fully visible/interactive. Card /
+    // material selection (listLike) also skips the dim so the player can see +
+    // click the glowing eligible cards on the board behind the picker.
+    if (!isViewer && !listLike) {
         ImGui::SetNextWindowPos({0.f, 0.f});
         ImGui::SetNextWindowSize({(float)screenW, (float)screenH});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.f, 0.f, 0.f, 0.f});
@@ -9286,8 +9288,10 @@ void UI::drawCenteredModal(int screenW, int screenH) {
         if (mx < 16.f) mx = 16.f;
         ImGui::SetNextWindowPos({mx, 70.f}, ImGuiCond_Always, {0.f, 0.f});
     } else {
+        // Card/material pickers centre once on appear, then can be dragged
+        // aside; other prompts stay locked at centre.
         ImGui::SetNextWindowPos({(float)screenW * 0.5f, (float)screenH * 0.5f},
-                                ImGuiCond_Always, {0.5f, 0.5f});
+            listLike ? ImGuiCond_Appearing : ImGuiCond_Always, {0.5f, 0.5f});
     }
     // Width locked to MW (min == max width); height free up to maxH.
     ImGui::SetNextWindowSizeConstraints({MW, 0.f}, {MW, maxH});
@@ -9296,10 +9300,12 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.6f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,  10.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,   ImVec2{16.f, 14.f});
-    ImGui::Begin("##engineModal", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoResize  | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGuiWindowFlags mflags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings;
+    if (!listLike) mflags |= ImGuiWindowFlags_NoMove;   // pickers are draggable
+    ImGui::Begin("##engineModal", nullptr, mflags);
     // [PROMPT SIZE] — actual auto-sized result, debug-only.
     if (m_debugLog) {
         ImVec2 wsz = ImGui::GetWindowSize();
