@@ -9722,14 +9722,25 @@ void UI::drawTestingBar(int /*w*/) {
     if (ImGui::Checkbox("Mute SFX", &sfxMuted))
         gAudio().setMuted(sfxMuted);
 
-    // Restart with a freshly randomised seed — offline practice only.
+    // ── Practice tools (offline only) ────────────────────────────────────
+    // Testing Mode (rewind) is a legitimate player practice feature, so it
+    // lives here in normal play — not behind Developer mode.
     if (m_net.isOffline()) {
         UIStyle::DrawDivider(6.f, 6.f);
+        UIStyle::Subtle("Practice");
         if (UIStyle::DangerButton("Restart Duel (new seed)", {-1.f, 30.f}) &&
             m_deck0Path[0] && m_deck1Path[0]) {
             finalizeReplay("restart");
             startOfflineDuelWithCoinToss(m_deck0Path, m_deck1Path, 8000, 5, 1);
             m_viewerLoc = 0;
+        }
+        if (ImGui::Checkbox("Testing Mode (rewind)", &m_testingMode)) {
+            m_snap.setEnabled(m_testingMode);
+            m_timeline.setEnabled(m_testingMode);
+        }
+        if (m_testingMode) {
+            UIStyle::DrawDivider(6.f, 6.f);
+            drawTestingTimeline();
         }
     }
 
@@ -9740,14 +9751,6 @@ void UI::drawTestingBar(int /*w*/) {
         ImGui::Checkbox("Layout guides", &m_showLayoutGuides);
         if (ImGui::Checkbox("Debug Log", &m_debugLog))
             m_dm.setDebugMessages(m_debugLog);
-        if (ImGui::Checkbox("Testing Mode (rewind)", &m_testingMode)) {
-            m_snap.setEnabled(m_testingMode);
-            m_timeline.setEnabled(m_testingMode);
-        }
-        if (m_testingMode) {
-            UIStyle::DrawDivider(6.f, 6.f);
-            drawTestingTimeline();
-        }
     }
 }
 

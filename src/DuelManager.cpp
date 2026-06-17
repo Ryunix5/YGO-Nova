@@ -8,6 +8,8 @@
 #include <random>
 #include <chrono>
 #include <algorithm>
+#include <functional>
+#include <climits>
 
 static uint8_t  r8 (const uint8_t*& p) { return *p++; }
 static uint16_t r16(const uint8_t*& p) { uint16_t v; memcpy(&v,p,2); p+=2; return v; }
@@ -316,16 +318,31 @@ bool DuelManager::process() {
                     if (sawMessages) queryField();
                     return true;
                 }
-                // Pace the AI: hold briefly after each VISIBLE action (a Main-
-                // Phase or Battle decision) so its turn plays out one move at a
-                // time. Card / material / option sub-selections are NOT paced —
-                // pacing them made a material-selection loop take ~110s to hit
-                // the safety cap (looked frozen). Honours the phase pacing
-                // switch; Fast turns disables it.
-                if (m_phaseDelaySec > 0.0 &&
-                    (m_selection.type == WaitType::SelectIdleCmd ||
-                     m_selection.type == WaitType::SelectBattleCmd)) {
-                    double aiHold = m_phaseDelaySec < 0.5 ? m_phaseDelaySec : 0.5;
+                // Pace the AI so its turn is watchable. Main decisions (Summon /
+                // Attack) get the full beat; combo sub-steps (effect choices,
+                // chains, material picks) get a shorter beat so each card hitting
+                // the board reads one-at-a-time instead of bursting all at once.
+                // (The old loop that made paced sub-steps drag to ~110s is fixed,
+                // so light pacing here is safe.) Honours the pacing switch; Fast
+                // turns disables it.
+                double aiHold = 0.0;
+                switch (m_selection.type) {
+                    case WaitType::SelectIdleCmd:
+                    case WaitType::SelectBattleCmd:
+                        aiHold = m_phaseDelaySec < 0.5 ? m_phaseDelaySec : 0.5;
+                        break;
+                    case WaitType::SelectEffectYn:
+                    case WaitType::SelectYesNo:
+                    case WaitType::SelectChain:
+                    case WaitType::SelectOption:
+                    case WaitType::SelectCard:
+                    case WaitType::SelectTribute:
+                    case WaitType::SelectUnselect:
+                        aiHold = m_phaseDelaySec < 0.28 ? m_phaseDelaySec : 0.28;
+                        break;
+                    default: break;
+                }
+                if (m_phaseDelaySec > 0.0 && aiHold > 0.0) {
                     m_phaseHoldUntil = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                             std::chrono::duration<double>(aiHold));
@@ -553,6 +570,70 @@ void DuelManager::parseMessages(void* buf, uint32_t len) {
         p = msgEnd;                               // resync to the frame boundary
     }
 }
+
+namespace {
+// ── MSG_SELECT_SUM solver ────────────────────────────────────────────────────
+// Ritual tributes, "send monsters whose Levels total N" costs, and similar use
+// MSG_SELECT_SUM: pick a subset of the offered cards whose summed values hit an
+// exact target (mode 0) or just cover it (mode 1). Each card carries a packed
+// param: low 16 bits = value A, high 16 bits = value B (0 = single-valued).
+//
+// sumReachable mirrors ocgcore's select_sum_check1 exactly so a subset we pass
+// the validity test here is accepted by the engine without a retry.
+bool sumReachable(const std::vector<uint32_t>& params, size_t idx, int acc) {
+    if (acc == 0 || idx == params.size()) return false;
+    int o1 = (int)(params[idx] & 0xffff);
+    int o2 = (int)(params[idx] >> 16);
+    if (idx == params.size() - 1) return acc == o1 || acc == o2;
+    return (acc > o1 && sumReachable(params, idx + 1, acc - o1)) ||
+           (o2 > 0 && acc > o2 && sumReachable(params, idx + 1, acc - o2));
+}
+
+// Find a subset of `opt` (count in [minc,maxc]) so that must ++ subset satisfies
+// the engine's sum rule. Returns the chosen indices into `opt`. Bounded DFS so a
+// pathological field can't hang the search.
+bool solveSelectSum(const std::vector<uint32_t>& must,
+                    const std::vector<uint32_t>& opt,
+                    int acc, int minc, int maxc, int mode,
+                    std::vector<int>& outPick) {
+    const int n = (int)opt.size();
+    if (maxc <= 0) maxc = n;                 // mode 1 / unbounded count
+    if (maxc > n) maxc = n;
+    std::vector<int> cur;
+    int budget = 300000;
+    std::function<bool(int)> dfs = [&](int start) -> bool {
+        if (--budget < 0) return false;
+        const int cnt = (int)cur.size();
+        if (cnt >= minc && cnt <= maxc) {
+            std::vector<uint32_t> all = must;
+            for (int k : cur) all.push_back(opt[k]);
+            if (mode == 0) {
+                if (sumReachable(all, 0, acc)) { outPick = cur; return true; }
+            } else {
+                // mode 1 (ocgcore: valid iff maxsum >= acc and minsum-min < acc).
+                int sumMin = 0, mx = 0, mn = INT_MAX;
+                for (uint32_t pr : all) {
+                    int o1 = (int)(pr & 0xffff), o2 = (int)(pr >> 16);
+                    int ms = (o2 && o2 < o1) ? o2 : o1;
+                    sumMin += ms; mx += (o2 > o1) ? o2 : o1;
+                    if (ms < mn) mn = ms;
+                }
+                if (!all.empty() && mx >= acc && sumMin - mn < acc) {
+                    outPick = cur; return true;
+                }
+            }
+        }
+        if (cnt >= maxc) return false;
+        for (int j = start; j < n; ++j) {
+            cur.push_back(j);
+            if (dfs(j + 1)) return true;
+            cur.pop_back();
+        }
+        return false;
+    };
+    return dfs(0);
+}
+} // namespace
 
 void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     if (p >= end) return;
@@ -1360,11 +1441,47 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     }
 
     case MSG_SELECT_SUM: {
-        r8(p); r8(p); r32(p); r32(p); r32(p);
-        uint32_t mc=r32(p);
-        for(uint32_t i=0;i<mc;i++){r32(p);r8(p);r8(p);r8(p);p+=8;p+=8;}
-        uint32_t fc=r32(p);
-        for(uint32_t i=0;i<fc;i++){r32(p);r8(p);r8(p);r8(p);p+=8;p+=8;}
+        // Layout: player(u8), mode(u8), acc(u32), min(u32), max(u32),
+        //   must_count(u32) + must[ code(u32), loc_info(10), sum_param(u32) ],
+        //   sel_count(u32)  + sel [ code(u32), loc_info(10), sum_param(u32) ].
+        // loc_info = controller(u8) location(u8) sequence(u32) position(u32).
+        uint8_t  pid  = r8(p) & 1;
+        uint8_t  mode = r8(p);
+        int      acc  = (int)(r32(p) & 0xffff);
+        int      mn   = (int)r32(p);
+        int      mx   = (int)r32(p);
+        std::vector<uint32_t> mustParams, selParams;
+        std::vector<uint32_t> selCodes;
+        uint32_t mc = r32(p);
+        for (uint32_t i = 0; i < mc; ++i) {
+            r32(p);                       // code
+            r8(p); r8(p); r32(p); r32(p); // loc_info (controller/loc/seq/pos)
+            mustParams.push_back(r32(p)); // sum_param
+        }
+        uint32_t fc = r32(p);
+        for (uint32_t i = 0; i < fc; ++i) {
+            uint32_t code = r32(p);
+            r8(p); r8(p); r32(p); r32(p); // loc_info
+            selParams.push_back(r32(p));  // sum_param
+            selCodes.push_back(code);
+        }
+        addLog("[Select sum - Player " + std::to_string(pid + 1) + " - target " +
+               std::to_string(acc) + ", " + std::to_string(fc) + " option(s)]");
+
+        // Auto-solve a valid subset and respond. The engine re-validates, so an
+        // accepted subset summons cleanly; this turns the old hard "duel paused"
+        // on Ritual/sum costs into a working action for both seats.
+        std::vector<int> pick;
+        bool ok = solveSelectSum(mustParams, selParams, acc, mn, mx, mode, pick);
+        if (!ok) {
+            // No exact subset found in budget: fall back to the first `min`
+            // options so we still send a well-formed response (cancel is not
+            // allowed for SUM). A wrong guess just draws an engine retry.
+            for (int i = 0; i < mn && i < (int)selParams.size(); ++i)
+                pick.push_back(i);
+            addLog("[Select sum] no exact subset found — sent fallback");
+        }
+        respondMultipleCards(pick);
         break;
     }
 
