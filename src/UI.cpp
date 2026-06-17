@@ -8665,21 +8665,54 @@ void UI::drawSelectionPanel(int pw, int ph) {
     }
 
     // ── Select / unselect card (summon materials) ────────────────────────────
-    case WaitType::SelectUnselect:
-        ImGui::Text("Select a card (%d-%d):", sel.min, sel.max);
+    // Horizontal gallery of big card thumbnails — click a card to add it as
+    // material; the engine re-asks one card at a time until the count is met.
+    case WaitType::SelectUnselect: {
+        ImGui::Text("Select material (%d-%d):", sel.min, sel.max);
         ImGui::Spacing();
+        const float kCardW = 104.f, kCardH = 152.f;
+        float listH = kCardH + 50.f;
+        ImGui::BeginChild("##uslist", {bw, listH}, true,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        bool first = true;
         for (int i = 0; i < (int)sel.cards.size(); i++) {
-            auto& c = sel.cards[i];
-            std::string nm = c.name.empty() ? ("#" + std::to_string(c.code)) : c.name;
-            std::string lbl = "Select: " + nm + "##us" + std::to_string(i);
-            if (ImGui::Button(lbl.c_str(), {bw, 26.f}))
-                submitUnselect(i);
+            const auto& c = sel.cards[i];
+            CardInfo ci = m_db.getCard(c.code);
+            std::string nm = c.name.empty()
+                ? (ci.name.empty() ? ("#" + std::to_string(c.code)) : ci.name)
+                : c.name;
+            if (!first) ImGui::SameLine(0.f, 8.f);
+            first = false;
+            ImGui::PushID(i);
+            ImGui::BeginGroup();
+            ImVec2 cp = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##usimg", {kCardW, kCardH});
+            bool clicked = ImGui::IsItemClicked();
+            bool hov     = ImGui::IsItemHovered();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            void* tex = m_rend.getCardTexture(c.code);
+            ImVec2 cbr{ cp.x + kCardW, cp.y + kCardH };
+            if (tex) dl->AddImage(tex, cp, cbr);
+            else     dl->AddRectFilled(cp, cbr, IM_COL32(40, 46, 70, 255), 4.f);
+            if (hov) {
+                dl->AddRect(cp, cbr, IM_COL32(255,255,255,170), 4.f, 0, 2.f);
+                m_hoveredCard = c.code; m_hoveredInfo = ci;
+            }
+            ImGui::PushFont(UIStyle::fSmall);
+            std::string shortNm = nm.size() > 13 ? nm.substr(0, 12) + "…" : nm;
+            ImGui::TextUnformatted(shortNm.c_str());
+            ImGui::PopFont();
+            ImGui::EndGroup();
+            ImGui::PopID();
+            if (clicked) submitUnselect(i);
         }
+        ImGui::EndChild();
         // "Finish" is legal only when the engine said the selection is
         // finishable/cancelable (m_selection.forced is false in that case).
-        if (!sel.forced && ImGui::Button("Finish selection##usfin", {bw, 26.f}))
+        if (!sel.forced && UIStyle::PrimaryButton("Finish selection", {-1.f, 30.f}))
             submitUnselect(-1);
         break;
+    }
 
     // ── Waiting ───────────────────────────────────────────────────────────────
     case WaitType::Waiting:
