@@ -1117,8 +1117,11 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         uint32_t cnt=r32(p);
         m_selection.cards.clear();
         for(uint32_t i=0;i<cnt;i++){
-            uint32_t code=r32(p); r8(p);r8(p);r32(p);r32(p);
+            uint32_t code=r32(p);
+            uint8_t con=r8(p)&1; uint8_t loc=r8(p);
+            uint32_t seq=r32(p); uint32_t pos=r32(p);
             CardState cs{}; cs.code=code; cs.name=m_db.getCard(code).name;
+            cs.player=con; cs.loc=loc; cs.seq=seq; cs.pos=pos;
             m_selection.cards.push_back(cs);
         }
         addLog("[Select "+std::to_string(m_selection.min)+"-"+std::to_string(m_selection.max)+
@@ -1137,8 +1140,11 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         uint32_t cnt=r32(p);
         m_selection.cards.clear();
         for(uint32_t i=0;i<cnt;i++){
-            uint32_t code=r32(p); r8(p);r8(p);r32(p);r8(p);
+            uint32_t code=r32(p);
+            uint8_t con=r8(p)&1; uint8_t loc=r8(p);
+            uint32_t seq=r32(p); r8(p);             // release_param (no pos)
             CardState cs{}; cs.code=code; cs.name=m_db.getCard(code).name;
+            cs.player=con; cs.loc=loc; cs.seq=seq;
             m_selection.cards.push_back(cs);
         }
         addLog("[Select "+std::to_string(m_selection.min)+"-"+std::to_string(m_selection.max)+
@@ -1373,8 +1379,11 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         std::vector<CardState> sel;
         uint32_t sc=r32(p);
         for(uint32_t i=0;i<sc;i++){
-            uint32_t code=r32(p); r8(p);r8(p);r32(p);r32(p);
+            uint32_t code=r32(p);
+            uint8_t con=r8(p)&1; uint8_t loc=r8(p);
+            uint32_t seq=r32(p); uint32_t pos=r32(p);
             CardState cs{}; cs.code=code; cs.name=m_db.getCard(code).name;
+            cs.player=con; cs.loc=loc; cs.seq=seq; cs.pos=pos;
             sel.push_back(cs);
         }
         uint32_t uc=r32(p);
