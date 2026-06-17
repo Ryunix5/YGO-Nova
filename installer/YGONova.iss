@@ -29,8 +29,12 @@ UninstallDisplayName={#MyAppName} {#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\dist
 OutputBaseFilename=YGONova-v{#MyAppVersion}-Setup
-Compression=lzma2/max
-SolidCompression=yes
+; Non-solid, normal compression: the payload is thousands of tiny Lua scripts,
+; and solid/max made install crawl (the whole archive must be streamed to reach
+; each small file). Non-solid trades a slightly larger download for a much
+; faster install + extraction.
+Compression=lzma2/normal
+SolidCompression=no
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

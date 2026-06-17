@@ -8204,6 +8204,14 @@ void UI::drawSelectionPanel(int pw, int ph) {
         // still updates the preview; the selected card's preview is shown
         // by default (until you hover something else).
         bool haveSel = (m_selCode != 0);
+        // Esc backs out of a picked card before any action is committed (you can
+        // also click the card again, or the Deselect button). Note: once a
+        // Summon is actually declared YGO has no take-backs — use Testing Mode
+        // rewind to undo a committed play.
+        if (haveSel && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            clearSelection();
+            haveSel = false;
+        }
         if (haveSel) {
             // Force the top-of-panel card preview to the selected card.
             m_hoveredCard = m_selCode;
@@ -8221,7 +8229,7 @@ void UI::drawSelectionPanel(int pw, int ph) {
                     : m_hoveredInfo.name.c_str());
             ImGui::TextDisabled("P%d %s [seq %u]",
                 m_selPlayer + 1, locName, (unsigned)m_selSeq);
-            if (ImGui::Button("Deselect (show all actions)", {bw, 24.f}))
+            if (ImGui::Button("Cancel / Deselect  (Esc)", {bw, 24.f}))
                 clearSelection();
             ImGui::Separator();
         } else {
@@ -10000,7 +10008,7 @@ void UI::drawDeckBuilder(int w, int h) {
                           IM_COL32(110, 220, 140, 255), 2.4);
             } else {
                 gAudio().play("error");
-                pushToast("Clipboard has no valid .ydk deck",
+                pushToast("Clipboard has no valid deck (.ydk text or ydke:// URL)",
                           IM_COL32(232, 110, 100, 255), 2.6);
             }
         }
@@ -11609,9 +11617,57 @@ void UI::refreshDeckFiles() {
 }
 
 // ─── YDK helpers ─────────────────────────────────────────────────────────────
+// Decode standard base64 (skips whitespace/newlines; stops at '=' padding).
+static std::vector<uint8_t> b64decode(const std::string& in) {
+    static const char* tbl =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int rev[256]; for (int i = 0; i < 256; ++i) rev[i] = -1;
+    for (int i = 0; i < 64; ++i) rev[(uint8_t)tbl[i]] = i;
+    std::vector<uint8_t> out;
+    int val = 0, bits = -8;
+    for (uint8_t c : in) {
+        if (c == '=') break;
+        int dv = rev[c];
+        if (dv < 0) continue;                       // skip non-b64 bytes
+        val = (val << 6) | dv; bits += 6;
+        if (bits >= 0) { out.push_back((uint8_t)((val >> bits) & 0xff)); bits -= 8; }
+    }
+    return out;
+}
+
+// Parse a YDKE share URL — ydke://<b64 main>!<b64 extra>!<b64 side>! — where
+// each section is base64 of packed little-endian uint32 passcodes. This is the
+// format YGOPRODeck / EDOPro "copy deck" produces, so pasting one Just Works.
+static Deck deckFromYdke(const std::string& url) {
+    Deck d;
+    const std::string scheme = "ydke://";
+    std::string body = url.substr(url.find(scheme) + scheme.size());
+    std::vector<std::string> parts; size_t start = 0;
+    for (size_t i = 0; i <= body.size(); ++i)
+        if (i == body.size() || body[i] == '!') {
+            parts.push_back(body.substr(start, i - start));
+            start = i + 1;
+        }
+    auto fill = [](const std::string& b64, std::vector<uint32_t>& out) {
+        std::vector<uint8_t> b = b64decode(b64);
+        for (size_t i = 0; i + 4 <= b.size(); i += 4) {
+            uint32_t code = (uint32_t)b[i] | ((uint32_t)b[i+1] << 8) |
+                            ((uint32_t)b[i+2] << 16) | ((uint32_t)b[i+3] << 24);
+            if (code) out.push_back(code);
+        }
+    };
+    if (parts.size() > 0) fill(parts[0], d.main);
+    if (parts.size() > 1) fill(parts[1], d.extra);
+    if (parts.size() > 2) fill(parts[2], d.side);
+    return d;
+}
+
 // Parse the standard .ydk text format (shared by file load + clipboard paste).
 // Tolerates CRLF line endings so a deck copied from another app pastes cleanly.
+// Also accepts a YDKE share URL (ydke://...) for one-click imports.
 Deck UI::deckFromYdkText(const std::string& text) {
+    if (text.find("ydke://") != std::string::npos)
+        return deckFromYdke(text);
     Deck d;
     std::istringstream f(text);
     std::string line;
