@@ -5,8 +5,8 @@
 // DuelManager, Renderer and UI cannot disagree about where assets live.
 //
 // Why this exists: the app has two on-disk asset trees -
-//   1) project root          : C:\Users\themi\EdoPro\assets
-//   2) build output          : C:\Users\themi\EdoPro\build\windows\Release\assets
+//   1) project root          : <repo>\assets
+//   2) build output          : <repo>\build\windows\Release\assets
 // CMake's POST_BUILD mirrors (1) into (2) after every build, but during
 // debugging it's easy to update (1) and run the (2) copy stale - making it
 // look like a script update never landed. resolve() picks ONE canonical root

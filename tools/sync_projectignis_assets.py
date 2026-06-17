@@ -12,17 +12,17 @@ nothing on disk changes until --apply.
 Examples
     # Dry run - just preview the plan:
     python tools/sync_projectignis_assets.py \\
-        --src C:\\ProjectIgnis --dst C:\\Users\\themi\\EdoPro\\assets
+        --src C:\\ProjectIgnis --dst C:\\path\\to\\YGO-Nova\\assets
 
     # Apply the sync (backs up any existing scripts first):
     python tools/sync_projectignis_assets.py \\
-        --src C:\\ProjectIgnis --dst C:\\Users\\themi\\EdoPro\\assets --apply
+        --src C:\\ProjectIgnis --dst C:\\path\\to\\YGO-Nova\\assets --apply
 
     # Also mirror into the build's Release/assets so a stale Release copy
     # cannot mask the fresh project-root scripts:
     python tools/sync_projectignis_assets.py \\
-        --src C:\\ProjectIgnis --dst C:\\Users\\themi\\EdoPro\\assets --apply \\
-        --mirror-release C:\\Users\\themi\\EdoPro\\build\\windows\\Release\\assets
+        --src C:\\ProjectIgnis --dst C:\\path\\to\\YGO-Nova\\assets --apply \\
+        --mirror-release C:\\path\\to\\YGO-Nova\\build\\windows\\Release\\assets
 
 The tool NEVER writes inside --src (ProjectIgnis stays untouched), never
 modifies ocgcore/ or vendor/, never touches cards.cdb (scripts only).
@@ -120,7 +120,7 @@ def main():
     ap.add_argument("--src", required=True,
                     help="ProjectIgnis root (e.g. C:\\ProjectIgnis)")
     ap.add_argument("--dst", required=True,
-                    help="EdoPro+ assets root (e.g. C:\\Users\\themi\\EdoPro\\assets)")
+                    help="EdoPro+ assets root (e.g. C:\\path\\to\\YGO-Nova\\assets)")
     grp = ap.add_mutually_exclusive_group()
     grp.add_argument("--dry-run", action="store_true",
                      help="preview only (default)")
