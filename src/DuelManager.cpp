@@ -276,11 +276,12 @@ bool DuelManager::process() {
 
     if (m_blocked) return true;   // parked on an unsupported request — see log
 
-    // Per-phase pacing hold: after a phase change we paused here (below); keep
-    // holding until the delay elapses so the player sees each phase. This only
-    // gates WHEN we next advance — engine state + responses are untouched.
-    if (m_phaseDelaySec > 0.0 &&
-        std::chrono::steady_clock::now() < m_phaseHoldUntil) {
+    // Pacing hold: a phase change or AI combo beat parked the pump below; keep
+    // holding until the armed deadline elapses. Honour ANY armed hold (not only
+    // when the phase-pacing slider is up) so AI pacing works even if phase
+    // pacing is turned down. This only gates WHEN we advance — engine state and
+    // responses are untouched.
+    if (std::chrono::steady_clock::now() < m_phaseHoldUntil) {
         return true;
     }
 
@@ -413,9 +414,9 @@ bool DuelManager::process() {
         // This is what actually slows the AI's combos down to watchable speed
         // (the per-decision holds don't, because the cascade resolves between
         // decision points). Skipped under Fast turns / testing rebuild (delay 0).
-        if (m_phaseDelaySec > 0.0 && m_pacedEventThisProcess && !m_done) {
+        if (m_aiComboBeat > 0.0 && m_pacedEventThisProcess && !m_done) {
             m_pacedEventThisProcess = false;
-            double beat = m_phaseDelaySec < 0.45 ? m_phaseDelaySec : 0.45;
+            double beat = m_aiComboBeat;
             m_phaseHoldUntil = std::chrono::steady_clock::now() +
                 std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                     std::chrono::duration<double>(beat));

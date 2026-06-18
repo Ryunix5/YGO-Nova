@@ -3071,6 +3071,7 @@ void UI::testingJumpTo(int applyCount, const char* reason) {
     // rebuild itself via m_testingRebuilding.
     m_testingRebuilding = true;                  // suppress recorder/SFX/anim
     m_dm.setPhaseDelay(0.0);                      // rebuild must run instantly
+    m_dm.setAiComboBeat(0.0);                     // ...including the AI beat
     bool prevLocal = m_dm.localMode();
     if (m_dm.isRunning()) m_dm.endDuel();
     m_dm.setForcedSeed(root.seed);
@@ -4625,6 +4626,13 @@ void UI::drawDuel(int w, int h) {
         (m_net.isOffline() && !m_replayMode && !m_testingRebuilding)
             ? (m_settings.fastTurns ? 0.0 : (double)m_settings.enginePhasePacing)
             : 0.0);
+    // AI "combo beat" — paces each Summon / activation so the opponent's turn is
+    // watchable. Independent of the phase-pacing slider (so turning that down
+    // doesn't make the AI instant); only Fast turns / replay / rebuild / online
+    // switch it off. Fixed at a readable speed.
+    m_dm.setAiComboBeat(
+        (m_net.isOffline() && !m_replayMode && !m_testingRebuilding &&
+         !m_settings.fastTurns) ? 0.5 : 0.0);
 
     // Opponent-action notifications: toast each new summon / activation /
     // attack the opponent makes, so the player can follow the game state even

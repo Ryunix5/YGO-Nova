@@ -265,6 +265,11 @@ public:
     // multiplayer / replay / rebuild). 0 = off (instant, as before).
     void setPhaseDelay(double sec) { m_phaseDelaySec = sec < 0.0 ? 0.0 : sec; }
     double phaseDelay() const { return m_phaseDelaySec; }
+    // AI "combo beat": how long to pause after each Summon / activation so the
+    // opponent's turn is watchable. Independent of the phase-pacing slider so it
+    // is not accidentally disabled; set to 0 by Fast turns.
+    void setAiComboBeat(double sec) { m_aiComboBeat = sec < 0.0 ? 0.0 : sec; }
+    double aiComboBeat() const { return m_aiComboBeat; }
 
     // Engine seat the LOCAL human controls (0 or 1). The responder hands
     // prompts for THIS seat to the UI and routes the other seat to the
@@ -414,6 +419,7 @@ private:
 
     // ── Per-phase pacing (presentation timing only) ───────────────────────
     double                   m_phaseDelaySec = 0.0;
+    double                   m_aiComboBeat   = 0.45;  // per-summon/activation beat
     int                      m_humanSeat = 0;   // engine seat the human controls
     // AI per-turn guard: which (card,effect) the offline AI already activated
     // this turn, so it never re-activates the same effect into an endless loop.
