@@ -8394,6 +8394,37 @@ void UI::drawSelectionPanel(int pw, int ph) {
         break;
     }
 
+    // ── Declare a card name (e.g. Mind Crush, Crush Card Virus) ──────────────
+    case WaitType::AnnounceCard: {
+        ImGui::PushStyleColor(ImGuiCol_Text, {1.f, 0.95f, 0.5f, 1.f});
+        ImGui::TextWrapped("Declare a card");
+        ImGui::PopStyleColor();
+        ImGui::TextDisabled("Type a name, then click a card to declare it.");
+        ImGui::SetNextItemWidth(bw);
+        ImGui::InputTextWithHint("##announce_search", "Card name...",
+                                 m_announceBuf, sizeof(m_announceBuf));
+        if (m_announceBuf[0]) {
+            std::vector<CardInfo> hits = m_db.search(m_announceBuf, 14);
+            ImGui::BeginChild("##announce_results", {bw, 190.f}, true);
+            for (const CardInfo& ci : hits) {
+                std::string lbl = (ci.name.empty()
+                                     ? ("#" + std::to_string(ci.id)) : ci.name)
+                                  + "##acard" + std::to_string(ci.id);
+                if (ImGui::Selectable(lbl.c_str())) {
+                    // Declare this code; the engine validates against its filter.
+                    submitMpChoice(WaitType::AnnounceCard, (int)ci.id);
+                    m_announceBuf[0] = '\0';
+                }
+                if (ImGui::IsItemHovered()) {
+                    m_hoveredCard = ci.id;
+                    m_hoveredInfo = ci;
+                }
+            }
+            ImGui::EndChild();
+        }
+        break;
+    }
+
     case WaitType::SelectPlace: {
         ImGui::PushStyleColor(ImGuiCol_Text, {1.f, 0.95f, 0.5f, 1.f});
         ImGui::TextWrapped("Choose a zone");

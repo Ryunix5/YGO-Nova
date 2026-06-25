@@ -98,7 +98,24 @@ def normalize(buf, peak_db=-3.0):
     return [s * g for s in buf], pk * g
 
 
+def declick(buf, fade_in=0.005, fade_out=0.018):
+    """Short fade in/out so the waveform starts and ends at zero — removes the
+    click/pop that otherwise makes a synthesized one-shot sound cheap."""
+    n = len(buf)
+    if n == 0:
+        return buf
+    fi = min(int(fade_in * SR), n // 2)
+    fo = min(int(fade_out * SR), n // 2)
+    out = list(buf)
+    for i in range(fi):
+        out[i] *= i / fi
+    for i in range(fo):
+        out[n - 1 - i] *= i / fo
+    return out
+
+
 def write_wav(path, buf):
+    buf = declick(buf)             # de-pop every one-shot before writing
     n = len(buf)
     # clamp to [-1, 1) then convert to 16-bit PCM.
     pcm = bytearray(n * 2)

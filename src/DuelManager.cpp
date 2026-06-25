@@ -1781,11 +1781,22 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     }
 
     case MSG_ANNOUNCE_CARD: {
-        // Declaring a specific card name needs the engine's opcode filter to
-        // resolve a legal code — not yet supported. Respond 0 as a best effort
-        // (some effects accept it; others will re-ask and the retry cap stops
-        // the duel cleanly rather than hanging).
-        r8(p); r32(p);
+        // Format: player(u8), opcode_count(u8), then opcode_count * uint64 — an
+        // opcode filter describing which card codes are legal. We don't evaluate
+        // the filter; instead the local human declares a card via a name-search
+        // picker and the engine validates (a wrong pick just draws a retry). AI
+        // / opponent / MP fall back to declaring code 0.
+        uint8_t pid = r8(p) & 1;
+        uint8_t opc = r8(p);
+        for (uint8_t i = 0; i < opc; ++i) r64(p);     // skip the opcode filter
+
+        if (m_localMode && pid == m_humanSeat) {
+            m_selection = {};
+            m_selection.type   = WaitType::AnnounceCard;
+            m_selection.player = pid;
+            addLog("[Declare a card - Player " + std::to_string(pid + 1) + "]");
+            break;
+        }
         int32_t code = 0;
         submitResponse(&code, 4);
         break;
@@ -2233,9 +2244,22 @@ bool DuelManager::autoRespondP2() {
         //   - nothing offered & not finishable -> give up (respond -1).
         // Previously a *cancelable* window made the AI bail immediately, so it
         // never completed an Extra-Deck summon and looped idle<->material.
-        if (m_selection.finishable)      respondInt(-1);   // legal set -> done
-        else if (hasCards)               respondUnselect(0);// take next material
-        else                             respondInt(-1);   // unsatisfiable -> drop
+        if (m_selection.finishable) {
+            respondInt(-1);                                // legal set -> done
+        } else if (hasCards) {
+            // Take the WEAKEST eligible card as material so the AI spends its
+            // cheap monsters first instead of feeding its strongest into a
+            // summon. The engine only offers cards that still allow a legal set,
+            // so any pick converges — weakest is just the smarter one.
+            int pick = 0, worst = 0x7fffffff;
+            for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
+                int v = m_db.getCard(m_selection.cards[i].code).atk;
+                if (v < worst) { worst = v; pick = i; }
+            }
+            respondUnselect(pick);
+        } else {
+            respondInt(-1);                                // unsatisfiable -> drop
+        }
         return true;
     case WaitType::SelectPosition: { int32_t pos = POS_FACEUP_ATTACK; submitResponse(&pos, 4); return true; }
     case WaitType::None:

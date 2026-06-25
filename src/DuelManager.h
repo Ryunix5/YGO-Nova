@@ -68,6 +68,7 @@ enum class WaitType {
     SelectCounter,
     SelectSum,
     SelectUnselect,   // MSG_SELECT_UNSELECT_CARD — summon material selection
+    AnnounceCard,     // MSG_ANNOUNCE_CARD — declare a card by name (search picker)
     Waiting,
     RawPrompt,        // engine awaits input but parser doesn't cover this
                       // MSG_* yet. m_selection.player is best-effort (the

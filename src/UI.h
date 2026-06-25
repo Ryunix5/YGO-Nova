@@ -179,6 +179,9 @@ private:
     // True if any engine-legal idle action targets the card at (player, loc, seq).
     bool hasLegalActionFor(uint8_t player, uint8_t loc, uint32_t seq) const;
 
+    // Duel: "declare a card name" (MSG_ANNOUNCE_CARD) search box.
+    char       m_announceBuf[64] = {};
+
     // Deck builder
     char       m_searchBuf[128] = {};
     std::vector<CardInfo>  m_searchResults;
