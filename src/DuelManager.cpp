@@ -2636,8 +2636,14 @@ void DuelManager::auditDeckScripts(const Deck& deck, int playerNo) {
     auto check = [&](uint32_t code) {
         for (uint32_t s : seen) if (s == code) return;
         seen.push_back(code);
-        if (findCardScript(code).empty())
-            missing.push_back({ code, m_db.getCard(code).name });
+        if (!findCardScript(code).empty()) return;
+        // Follow the alias before declaring a card script-less: ocgcore loads an
+        // alias card's script from its base code, so an aliased reprint (e.g.
+        // Foolish Burial 81439174 -> 81439173) DOES have effects. Only the
+        // literal-code check false-flagged it.
+        uint32_t alias = m_db.getCard(code).alias;
+        if (alias && alias != code && !findCardScript(alias).empty()) return;
+        missing.push_back({ code, m_db.getCard(code).name });
     };
     for (uint32_t c : deck.main)  check(c);
     for (uint32_t c : deck.extra) check(c);
