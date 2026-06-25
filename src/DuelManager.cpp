@@ -1455,8 +1455,22 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         // Format: player(u8), code(u32), positions-mask(u8). Response: int32 of
         // one position bit that is set in the mask.
         uint8_t who = r8(p); uint32_t code = r32(p); uint8_t mask = r8(p);
+
+        // The local human chooses (attack vs defence) via the UI; the opponent
+        // and AI auto-resolve. Online MP keeps auto-resolving (the host drives).
+        if ((who & 1) == m_humanSeat && m_localMode) {
+            m_selection = {};
+            m_selection.type         = WaitType::SelectPosition;
+            m_selection.player       = who & 1;
+            m_selection.positionMask = mask;
+            CardState cs{}; cs.code = code; cs.name = m_db.getCard(code).name;
+            m_selection.cards.push_back(cs);
+            addLog("[Select position - Player " +
+                   std::to_string((who & 1) + 1) + "]");
+            break;
+        }
+
         int32_t pos = POS_FACEUP_ATTACK;
-        // Default (and the human's auto-position): prefer attack, else first.
         if      (mask & 0x1) pos = 0x1; else if (mask & 0x2) pos = 0x2;
         else if (mask & 0x4) pos = 0x4; else if (mask & 0x8) pos = 0x8;
         // AI: put a defensive monster (DEF > ATK, low ATK) face-up in defence.
@@ -1482,7 +1496,37 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     }
 
     case MSG_SELECT_COUNTER: {
-        r16(p); r16(p); r16(p);
+        // Format: player(u8), countertype(u16), count(u16), card_count(u32),
+        //   then per card: code(u32) controler(u8) location(u8) sequence(u8)
+        //   current_counters(u16). Response: one int16 per card = how many to
+        //   remove from it; the sum must equal `count` and each <= its current.
+        uint8_t  pid    = r8(p) & 1;
+        r16(p);                                   // counter type
+        uint16_t count  = r16(p);                 // total counters to remove
+        uint32_t cc     = r32(p);
+        std::vector<uint16_t> avail;
+        avail.reserve(cc);
+        for (uint32_t i = 0; i < cc; ++i) {
+            r32(p);                               // code
+            r8(p); r8(p); r8(p);                  // controler, location, sequence
+            avail.push_back(r16(p));              // current counters on this card
+        }
+        // Greedily spread the removals across the cards (each <= its available).
+        // The engine guarantees total available >= count, so this is always a
+        // valid distribution — it resolves the cost for both seats without a
+        // hard pause. (A picker UI could let the human choose which card later.)
+        std::vector<int16_t> resp(cc ? cc : 1, 0);
+        int remaining = (int)count;
+        for (uint32_t i = 0; i < cc && remaining > 0; ++i) {
+            int take = (int)avail[i];
+            if (take > remaining) take = remaining;
+            resp[i] = (int16_t)take;
+            remaining -= take;
+        }
+        submitResponse(resp.data(), (uint32_t)(cc * sizeof(int16_t)));
+        addLog("[auto] select counter - Player " + std::to_string(pid + 1) +
+               " removed " + std::to_string(count) + " across " +
+               std::to_string(cc) + " card(s)");
         break;
     }
 
@@ -1748,9 +1792,29 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     }
 
     case MSG_ANNOUNCE_NUMBER: {
-        // player, count, [count] numbers. Response is the INDEX of the chosen
-        // number. Pick the first option (e.g. "banish 3" for Pot of Prosperity).
-        r8(p); r8(p);
+        // Format: player(u8), count(u8), then count * uint64 numbers. Response is
+        // the INDEX of the chosen number. The local human picks via the same UI
+        // as SelectOption (identical int-index response); the AI / opponent and
+        // online MP auto-pick option 0 (e.g. "banish 3" for Pot of Prosperity).
+        uint8_t pid = r8(p) & 1;
+        uint8_t cnt = r8(p);
+        std::vector<uint64_t> nums;
+        nums.reserve(cnt);
+        for (int i = 0; i < cnt; ++i) nums.push_back(r64(p));
+
+        if (m_localMode && pid == m_humanSeat && cnt > 1) {
+            m_selection = {};
+            m_selection.type   = WaitType::SelectOption;
+            m_selection.player = pid;
+            for (int i = 0; i < cnt; ++i) {
+                m_selection.options.push_back(i);
+                EffectDesc d; d.text = "Choose " + std::to_string(nums[i]);
+                m_selection.chainEffects.push_back(d);
+            }
+            addLog("[Announce number - Player " + std::to_string(pid + 1) +
+                   "] " + std::to_string((int)cnt) + " choice(s)");
+            break;
+        }
         int32_t idx = 0;
         submitResponse(&idx, 4);
         addLog("[auto] announce number -> option 0");

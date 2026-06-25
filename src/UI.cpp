@@ -8370,6 +8370,30 @@ void UI::drawSelectionPanel(int pw, int ph) {
     }
 
     // ── Choose a zone (after a summon/set/activate) ──────────────────────────
+    // ── Choose a battle position (Summon / Set / flip) ──────────────────────
+    case WaitType::SelectPosition: {
+        ImGui::PushStyleColor(ImGuiCol_Text, {1.f, 0.95f, 0.5f, 1.f});
+        const char* pnm = (sel.cards.empty() || sel.cards[0].name.empty())
+                          ? "this monster" : sel.cards[0].name.c_str();
+        ImGui::TextWrapped("Battle position for %s", pnm);
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+        const int pmask = sel.positionMask;   // POS_FACEUP_ATTACK=1 ... DEF_DOWN=8
+        if (pmask & 0x1)
+            if (ImGui::Button("Face-up Attack##pos_fa", {bw, 30.f}))
+                submitMpChoice(WaitType::SelectPosition, 0x1);
+        if (pmask & 0x4)
+            if (ImGui::Button("Face-up Defense##pos_fd", {bw, 30.f}))
+                submitMpChoice(WaitType::SelectPosition, 0x4);
+        if (pmask & 0x8)
+            if (ImGui::Button("Set (face-down Defense)##pos_dd", {bw, 30.f}))
+                submitMpChoice(WaitType::SelectPosition, 0x8);
+        if (pmask & 0x2)
+            if (ImGui::Button("Face-down Attack##pos_da", {bw, 30.f}))
+                submitMpChoice(WaitType::SelectPosition, 0x2);
+        break;
+    }
+
     case WaitType::SelectPlace: {
         ImGui::PushStyleColor(ImGuiCol_Text, {1.f, 0.95f, 0.5f, 1.f});
         ImGui::TextWrapped("Choose a zone");

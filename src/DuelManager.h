@@ -174,6 +174,8 @@ struct SelectionRequest {
     // SelectPlace: bitmask of occupied/forbidden zones, and how many to pick.
     uint32_t    placeFlag   = 0;
     int         placeCount  = 0;
+    // SelectPosition: bitmask of legal battle positions (POS_FACEUP_ATTACK etc).
+    int         positionMask = 0;
 };
 
 struct Deck {
