@@ -257,6 +257,7 @@ private:
     void testingJumpTo(int applyCount, const char* reason);
     void testingStepBack();
     void testingStepForward();
+    void testingUndoHuman();   // undo to the human's last decision (offline)
     // True when the timeline rewind controls are usable (offline, has root,
     // not in replay). Multiplayer / replay get a friendly disabled note.
     bool testingRewindAvailable() const;

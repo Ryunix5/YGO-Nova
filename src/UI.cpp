@@ -3018,10 +3018,11 @@ std::string UI::testingLabelForResponse() const {
 }
 
 void UI::recordTestingAction(const void* data, uint32_t len) {
-    // Only record live, offline, testing-on responses — never during a
-    // rebuild (those are replays of already-recorded actions) or in MP/replay.
+    // Record every live offline response so Undo (and Testing-Mode rewind)
+    // always works in practice duels — never during a rebuild (those are
+    // replays of already-recorded actions) or in MP/replay.
     if (m_testingRebuilding) return;
-    if (!m_testingMode || !m_net.isOffline() || m_replayMode) return;
+    if (!m_net.isOffline() || m_replayMode) return;
     if (!m_timeline.hasRoot()) return;
 
     const FieldState&       f = m_dm.field();
@@ -3147,6 +3148,29 @@ void UI::testingStepForward() {
     int target = m_timeline.applied() + 1;
     if (target > m_timeline.size()) target = m_timeline.size();
     testingJumpTo(target, "step-forward");
+}
+
+// Undo: rewind to just before the human's most recent decision (skipping the
+// AI's and inline auto-responses in between), so the player simply re-makes
+// their last move. Offline practice only.
+void UI::testingUndoHuman() {
+    if (!testingRewindAvailable()) {
+        pushToast("Undo is available in offline practice duels.",
+                  IM_COL32(232, 182, 72, 255), 2.4);
+        return;
+    }
+    const int applied = m_timeline.applied();
+    int target = -1;
+    for (int i = applied - 1; i >= 0; --i)
+        if (m_timeline.actions()[(size_t)i].player == m_dm.humanSeat()) {
+            target = i; break;
+        }
+    if (target < 0) {
+        pushToast("Nothing to undo yet.", IM_COL32(180, 200, 230, 255), 1.8);
+        return;
+    }
+    testingJumpTo(target, "undo");
+    pushToast("Undid your last move", IM_COL32(140, 215, 255, 255), 1.8);
 }
 
 // ─── Replay playback ────────────────────────────────────────────────────────
@@ -4500,6 +4524,12 @@ void UI::handleDuelHotkeys() {
         else if (m_toolsDrawerOpen) m_toolsDrawerOpen = false;
     }
 
+    // Ctrl+Z — undo your last move (offline practice; testingUndoHuman self-
+    // gates on offline + rewind availability).
+    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) &&
+        ImGui::IsKeyPressed(ImGuiKey_Z, false))
+        testingUndoHuman();
+
     // ── Prompt shortcuts — OFFLINE ONLY ──────────────────────────────────
     // Bound to game decisions, so restricted to offline practice duels where a
     // mis-press only affects a local, rewindable duel — never multiplayer
@@ -4658,6 +4688,7 @@ void UI::drawHelpOverlay(int w, int h) {
     row("Left-click",  "Play a card / pick an action or option");
     row("Right-click", "Zoom a card — big art + full text (Esc to close)");
     row("Hover",       "Preview a card + its text");
+    row("Ctrl+Z",      "Undo your last move (offline practice)");
     row("F1",          "Toggle this help");
     row("F11",         "Toggle fullscreen");
     row("Esc",         "Close the open panel (help / viewer / info / tools)");
@@ -6638,6 +6669,17 @@ void UI::drawCardZone(const char* label, const CardState* card,
             // Right-click → pin a large, readable card view (not a hidden card).
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                 m_zoomCard = card->code;
+            // Battle-Phase aiming line: when hovering a monster that can attack,
+            // draw a line from it to the cursor so it's clear this monster is
+            // about to declare an attack (click = attack).
+            if (isAttackerLegal(card->player, (uint8_t)card->loc, card->seq)) {
+                ImVec2 ctr = {(sp.x + br.x) * 0.5f, (sp.y + br.y) * 0.5f};
+                ImVec2 mp  = ImGui::GetMousePos();
+                ImDrawList* fg = ImGui::GetForegroundDrawList();
+                fg->AddLine(ctr, mp, IM_COL32(255, 110, 80, 230), 3.f);
+                fg->AddCircleFilled(mp, 6.f, IM_COL32(255, 110, 80, 235));
+                fg->AddCircle(mp, 6.f, IM_COL32(255, 220, 200, 230), 16, 1.5f);
+            }
             // Count engine-legal actions for this exact (player, loc, seq).
             int actCount = 0;
             for (const auto& a : currentSelection().idle)
@@ -9183,6 +9225,15 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Skip the pause between phases");
+            // Undo — rewind to your last decision (offline practice).
+            ImGui::SameLine(0.f, 4.f);
+            bool canUndo = testingRewindAvailable() && m_timeline.applied() > 0;
+            if (!canUndo) ImGui::BeginDisabled();
+            if (UIStyle::GhostButton("Undo##undo", {kGhostW, 30.f}))
+                testingUndoHuman();
+            if (!canUndo) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Undo your last move (Ctrl+Z)");
         }
     }
 
