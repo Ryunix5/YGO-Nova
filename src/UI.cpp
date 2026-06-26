@@ -852,13 +852,13 @@ void UI::buildAndSendPromptSnapshotIfRemote(const char* reason) {
         (sel.type == WaitType::SelectYesNo ||
          sel.type == WaitType::SelectEffectYn) && !sel.cards.empty()) {
         p.srcCode = sel.cards[0].code;
-        if (!sel.chainEffects.empty()) {
-            p.srcDesc = !sel.chainEffects[0].text.empty()
-                ? sel.chainEffects[0].text
-                : (sel.chainEffects[0].raw
-                       ? ("desc#" + std::to_string(sel.chainEffects[0].raw))
-                       : std::string());
-        }
+        // Prefer the engine's specific effect line; when it's missing (common
+        // for optional "then you can ..." costs) fall back to the card's full
+        // effect text so the prompt explains what activating actually does
+        // instead of a bare "Activate effect?".
+        p.srcDesc = (!sel.chainEffects.empty() && !sel.chainEffects[0].text.empty())
+            ? sel.chainEffects[0].text
+            : m_db.getCard(sel.cards[0].code).desc;
     }
 
     // Per-waitType title — human-readable header for the client's prompt
@@ -8689,6 +8689,12 @@ void UI::drawSelectionPanel(int pw, int ph) {
                    : sel.cards[0].name);
         std::string eff = sel.chainEffects.empty() ? std::string()
                                                    : sel.chainEffects[0].text;
+        // Many optional "then you can ..." costs (e.g. "discard a card to ...")
+        // arrive with NO specific description, leaving only a bare "Activate
+        // effect?" that doesn't tell the player what they're agreeing to. Fall
+        // back to the card's full effect text so the prompt is always clear.
+        if (eff.empty() && !sel.cards.empty())
+            eff = m_db.getCard(sel.cards[0].code).desc;
         // System/hint strings keep their %ls placeholders ("Activate the
         // Trigger Effect of "%ls" from [%ls]?") — substitute the card name
         // and its location so the line reads like a real sentence.
