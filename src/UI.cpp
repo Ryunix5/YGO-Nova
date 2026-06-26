@@ -4529,6 +4529,38 @@ void UI::handleDuelHotkeys() {
             }
             break;
         }
+        // ── Turn / phase control ────────────────────────────────────────────
+        // Only the engine-permitted transitions fire (toBP / toM2 / toEP), so a
+        // hotkey can never submit an illegal command. submitIdleCmd matches the
+        // bottom-bar buttons: 6=to Battle, 7=End Turn, 2=to Main 2, 3=End BP.
+        case WaitType::SelectIdleCmd: {
+            bool space = ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+            if (sel.toBP && ImGui::IsKeyPressed(ImGuiKey_B, false))
+                submitIdleCmd(6, 0, "Battle Phase");
+            else if (sel.toEP && ImGui::IsKeyPressed(ImGuiKey_E, false))
+                submitIdleCmd(7, 0, "End Turn");
+            else if (space) {                      // advance to the next phase
+                if (sel.toBP)      submitIdleCmd(6, 0, "Battle Phase");
+                else if (sel.toEP) submitIdleCmd(7, 0, "End Turn");
+            }
+            break;
+        }
+        case WaitType::SelectBattleCmd: {
+            bool space = ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+            if (sel.toEP && ImGui::IsKeyPressed(ImGuiKey_E, false))
+                submitIdleCmd(3, 0, "End Battle Phase");
+            else if (sel.toM2 && ImGui::IsKeyPressed(ImGuiKey_M, false))
+                submitIdleCmd(2, 0, "Main Phase 2");
+            else if (space) {                      // advance out of the Battle Phase
+                if (sel.toM2)      submitIdleCmd(2, 0, "Main Phase 2");
+                else if (sel.toEP) submitIdleCmd(3, 0, "End Battle Phase");
+            }
+            break;
+        }
         default: break;   // cards / chains stay click-only (index ambiguity)
     }
 }
@@ -4565,6 +4597,12 @@ void UI::drawHelpOverlay(int w, int h) {
     row("1 - 9",       "Pick option N when choosing an effect");
     row("Y / Enter",   "Yes / activate on a Yes-No prompt");
     row("N",           "No / decline on a Yes-No prompt");
+    ImGui::Dummy({1.f, 4.f});
+    UIStyle::Subtle("Turn control (offline)");
+    row("Space",       "Advance to the next phase");
+    row("B",           "Go to Battle Phase");
+    row("M",           "Go to Main Phase 2");
+    row("E",           "End Turn / End Battle Phase");
     ImGui::Dummy({1.f, 6.f});
     ImGui::TextDisabled("Tip: the bottom bar shows whose turn it is and the");
     ImGui::TextDisabled("phase; the \"Fast\" button skips phase pauses.");
@@ -6394,6 +6432,15 @@ void UI::drawCardZone(const char* label, const CardState* card,
                 dl->AddText({sp.x + 4.f, sp.y + 4.f},
                             IM_COL32(190, 200, 230, 230), nm);
             }
+        }
+
+        // Counter badge — Spell Counters, A-Counters, Bushido Counters, etc.
+        // are public info and many archetypes hinge on them, so show the running
+        // total in the card's top-right corner whenever the card holds any.
+        if (card->counters > 0) {
+            ImVec2 cc = {br.x - 13.f, sp.y + 13.f};
+            UIStyle::CountBadge(dl, cc, (int)card->counters,
+                                IM_COL32(120, 200, 255, 255));
         }
 
         // Faint zone label in the top-left of occupied zones (M1, ST3, FZ, …)

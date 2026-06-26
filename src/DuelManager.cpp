@@ -1908,7 +1908,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
 
 void DuelManager::queryField() {
     if (!m_duel) return;
-    const uint32_t Q_FLAGS = QUERY_CODE | QUERY_POSITION;
+    const uint32_t Q_FLAGS = QUERY_CODE | QUERY_POSITION | QUERY_COUNTERS;
 
     // Parse a location-query buffer. Layout (see ocgcore OCG_DuelQueryLocation
     // + card::get_infos):
@@ -1948,6 +1948,17 @@ void DuelManager::queryField() {
                 p+=4;
                 if(flag==QUERY_CODE&&valBytes>=4) memcpy(&cs.code,p,4);
                 else if(flag==QUERY_POSITION&&valBytes>=4){uint32_t pos;memcpy(&pos,p,4);cs.pos=pos;}
+                else if(flag==QUERY_COUNTERS&&valBytes>=4){
+                    // value: uint32 count, then count * uint32 (low16 = counter
+                    // type, high16 = number of that type). Sum to a total.
+                    uint32_t cc; memcpy(&cc,p,4);
+                    uint32_t total=0;
+                    for(uint32_t i=0;i<cc && (int)(4+i*4+4)<=valBytes;++i){
+                        uint32_t v; memcpy(&v,p+4+i*4,4);
+                        total += (v>>16);
+                    }
+                    cs.counters=(uint16_t)total;
+                }
                 p+=valBytes;
             }
             if(!gotEnd) break;

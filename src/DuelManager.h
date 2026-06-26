@@ -33,6 +33,7 @@ struct CardState {
     uint32_t seq      = 0;
     uint32_t pos      = POS_FACEUP_ATTACK;
     uint8_t  player   = 0;
+    uint16_t counters = 0;   // total counters on the card (all types summed)
     std::string name;
 };
 
