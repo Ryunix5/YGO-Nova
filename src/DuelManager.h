@@ -327,6 +327,10 @@ public:
     const std::string& lastActionDesc()   const { return m_lastActionDesc; }
     uint8_t            lastActionPlayer() const { return m_lastActionPlayer; }
     uint64_t           lastActionSeq()    const { return m_lastActionSeq; }
+    // The card whose effect is currently chaining / resolving (last MSG_CHAINING
+    // / activation). Lets a card-less Yes/No prompt ("then you can discard 1
+    // card?") fall back to that card's text so the player knows what it asks.
+    uint32_t           chainSourceCode()  const { return m_chainSourceCode; }
 
     // Pulls all MSG_ATTACK events the engine has reported since the last
     // call, then clears the queue. The UI animation layer drains this once
@@ -369,6 +373,7 @@ private:
     // a trace when a Summon completes so the very next selection window is
     // logged against it — proving whether the trigger window actually opened.
     uint32_t    m_pendingSummonCode   = 0;  // card from the last MSG_*SUMMONING
+    uint32_t    m_chainSourceCode     = 0;  // card from the last MSG_CHAINING
     std::string m_pendingSummonName;
     int         m_pendingSummonType   = 0;  // 0 Normal, 1 Special, 2 Flip
     uint8_t     m_pendingSummonPlayer = 0;  // controller of that card

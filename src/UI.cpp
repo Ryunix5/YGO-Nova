@@ -850,15 +850,19 @@ void UI::buildAndSendPromptSnapshotIfRemote(const char* reason) {
     p.timing = (uint32_t)sel.timing;
     if (!noticeOnly &&
         (sel.type == WaitType::SelectYesNo ||
-         sel.type == WaitType::SelectEffectYn) && !sel.cards.empty()) {
-        p.srcCode = sel.cards[0].code;
-        // Prefer the engine's specific effect line; when it's missing (common
-        // for optional "then you can ..." costs) fall back to the card's full
-        // effect text so the prompt explains what activating actually does
-        // instead of a bare "Activate effect?".
-        p.srcDesc = (!sel.chainEffects.empty() && !sel.chainEffects[0].text.empty())
-            ? sel.chainEffects[0].text
-            : m_db.getCard(sel.cards[0].code).desc;
+         sel.type == WaitType::SelectEffectYn)) {
+        // EffectYn carries the card; a bare Yes/No does not, so fall back to the
+        // resolving card (last MSG_CHAINING). Prefer the engine's specific line;
+        // when it's missing (optional "then you can ..." costs) show the card's
+        // full effect text instead of a bare "Activate effect?".
+        uint32_t srcCode = !sel.cards.empty() ? sel.cards[0].code
+                                              : m_dm.chainSourceCode();
+        p.srcCode = srcCode;
+        std::string decoded = (!sel.chainEffects.empty() &&
+                               !sel.chainEffects[0].text.empty())
+            ? sel.chainEffects[0].text : std::string();
+        p.srcDesc = !decoded.empty() ? decoded
+                  : (srcCode ? m_db.getCard(srcCode).desc : std::string());
     }
 
     // Per-waitType title — human-readable header for the client's prompt
@@ -8668,14 +8672,28 @@ void UI::drawSelectionPanel(int pw, int ph) {
     }
 
     // ── Yes / No ──────────────────────────────────────────────────────────────
-    case WaitType::SelectYesNo:
-        ImGui::Text("Activate / respond?");
+    case WaitType::SelectYesNo: {
+        // Show the engine's decoded prompt text; when it's empty/generic (common
+        // for optional "then you can discard 1 card?" costs that carry no card
+        // code) fall back to the resolving card's full effect text so the player
+        // knows exactly what they're being asked.
+        std::string yn = sel.chainEffects.empty() ? std::string()
+                                                   : sel.chainEffects[0].text;
+        uint32_t src = m_dm.chainSourceCode();
+        if (yn.empty() && src) yn = m_db.getCard(src).desc;
+        ImGui::Text("Activate this effect?");
+        if (!yn.empty()) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + bw);
+            ImGui::TextDisabled("%s", yn.c_str());
+            ImGui::PopTextWrapPos();
+        }
         drawOpponentActionHint();
         ImGui::Spacing();
         if (ImGui::Button("Yes##yn", {hw, 36.f})) submitMpChoice(WaitType::SelectYesNo, 1);
         ImGui::SameLine(0.f, 8.f);
         if (ImGui::Button("No##yn",  {hw, 36.f})) submitMpChoice(WaitType::SelectYesNo, 0);
         break;
+    }
 
     // ── Effect Yes / No ───────────────────────────────────────────────────────
     // The engine's "do you want to activate THIS effect?" prompt. Show which

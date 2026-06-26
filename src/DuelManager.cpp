@@ -705,6 +705,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         // Drop the captured "last opponent action" so it can never bleed into a
         // new turn's response prompts (e.g. stale "Activating Fuwalos").
         m_lastActionDesc.clear(); m_lastActionPlayer = 0xFF;
+        m_chainSourceCode = 0;   // don't let a prior turn's effect text linger
         addLog("Turn "+std::to_string(m_field.turnCount)+" - Player "+std::to_string(m_field.turnPlayer+1));
         m_snap.save("Turn "+std::to_string(m_field.turnCount), m_field.turnCount, m_field.phase);
         break;
@@ -821,6 +822,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         std::string nm = ci.name.empty()?("#"+std::to_string(code)):ci.name;
         addLog("Activating: "+nm);
         setLastAction(con, "Activating " + nm);
+        m_chainSourceCode = code;         // for card-less Yes/No fallback text
         m_pacedEventThisProcess = true;   // beat: let each activation read
         break;
     }
