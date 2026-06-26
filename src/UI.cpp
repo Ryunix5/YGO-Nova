@@ -8936,9 +8936,10 @@ void UI::drawSelectionPanel(int pw, int ph) {
         const ImU32 kSelCol = IM_COL32(232, 196, 110, 255);   // gold (selected)
         // Height = card + name line + horizontal scrollbar, so the row never
         // needs a vertical scroll — only sideways to see more options.
-        float listH = kCardH + 50.f;
+        float listH = kCardH + 62.f;   // card + name + scrollbar + padding (fits)
         ImGui::BeginChild("##sclist", {bw, listH}, true,
-                          ImGuiWindowFlags_HorizontalScrollbar);
+                          ImGuiWindowFlags_HorizontalScrollbar |
+                          ImGuiWindowFlags_NoScrollWithMouse);
         bool first = true;
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             const auto& c = sel.cards[i];
@@ -9003,6 +9004,13 @@ void UI::drawSelectionPanel(int pw, int ph) {
                 }
             }
         }
+        // The gallery is a single horizontal row — map the mouse wheel to
+        // SIDEWAYS scroll so spinning the wheel pans through the cards.
+        if (ImGui::IsWindowHovered()) {
+            float wh = ImGui::GetIO().MouseWheel + ImGui::GetIO().MouseWheelH;
+            if (wh != 0.f)
+                ImGui::SetScrollX(ImGui::GetScrollX() - wh * (kCardW + 8.f));
+        }
         ImGui::EndChild();
 
         if (!fastSingle) {
@@ -9035,9 +9043,10 @@ void UI::drawSelectionPanel(int pw, int ph) {
         ImGui::Text("Select material (%d-%d):", sel.min, sel.max);
         ImGui::Spacing();
         const float kCardW = 104.f, kCardH = 152.f;
-        float listH = kCardH + 50.f;
+        float listH = kCardH + 62.f;   // card + name + scrollbar + padding (fits)
         ImGui::BeginChild("##uslist", {bw, listH}, true,
-                          ImGuiWindowFlags_HorizontalScrollbar);
+                          ImGuiWindowFlags_HorizontalScrollbar |
+                          ImGuiWindowFlags_NoScrollWithMouse);
         bool first = true;
         for (int i = 0; i < (int)sel.cards.size(); i++) {
             const auto& c = sel.cards[i];
@@ -9069,6 +9078,12 @@ void UI::drawSelectionPanel(int pw, int ph) {
             ImGui::EndGroup();
             ImGui::PopID();
             if (clicked) submitUnselect(i);
+        }
+        // Single horizontal row — map the mouse wheel to sideways scroll.
+        if (ImGui::IsWindowHovered()) {
+            float wh = ImGui::GetIO().MouseWheel + ImGui::GetIO().MouseWheelH;
+            if (wh != 0.f)
+                ImGui::SetScrollX(ImGui::GetScrollX() - wh * (kCardW + 8.f));
         }
         ImGui::EndChild();
         // "Finish" is legal only when the engine said the selection is
