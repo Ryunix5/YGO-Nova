@@ -3387,6 +3387,7 @@ bool UI::draw(int winW, int winH) {
     if (m_screen == Screen::Duel) {
         handleDuelHotkeys();
         drawChainResponsePopup(winW, winH);
+        drawCardZoom(winW, winH);
         drawHelpOverlay(winW, winH);
     }
     // Toasts rendered LAST so they sit above every screen. Uses the
@@ -4492,7 +4493,8 @@ void UI::handleDuelHotkeys() {
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         // Close the top-most open panel only; leave game prompts untouched.
-        if      (m_helpOverlayOpen) m_helpOverlayOpen = false;
+        if      (m_zoomCard)        m_zoomCard = 0;
+        else if (m_helpOverlayOpen) m_helpOverlayOpen = false;
         else if (m_infoCtxCode)     m_infoCtxCode = 0;
         else if (m_viewerLoc != 0)  m_viewerLoc = 0;
         else if (m_toolsDrawerOpen) m_toolsDrawerOpen = false;
@@ -4565,6 +4567,72 @@ void UI::handleDuelHotkeys() {
     }
 }
 
+// Right-click "zoom": a pinned, readable card — big art + full effect text.
+void UI::drawCardZoom(int w, int h) {
+    if (!m_zoomCard) return;
+    const auto& C = UIStyle::C();
+    CardInfo ci = m_db.getCard(m_zoomCard);
+
+    // Dim the field behind the reader.
+    UIStyle::DrawModalBackdrop(ImGui::GetBackgroundDrawList(),
+                               {0.f, 0.f}, {(float)w, (float)h});
+
+    const float imgW = 280.f, imgH = imgW * 1.45f;
+    const float PW = 660.f, PH = imgH + 96.f;
+    ImGui::SetNextWindowPos({w * 0.5f, h * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({PW, PH});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(15, 19, 29, 252));
+    ImGui::PushStyleColor(ImGuiCol_Border,   C.accent);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    ImVec2{16.f, 14.f});
+    ImGui::Begin("##card_zoom", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoSavedSettings);
+
+    void* tex = m_rend.getCardTexture(m_zoomCard);
+    if (tex) ImGui::Image(tex, {imgW, imgH});
+    else     ImGui::Dummy({imgW, imgH});
+    ImGui::SameLine(0.f, 16.f);
+
+    ImGui::BeginGroup();
+    const float colW = PW - imgW - 50.f;
+    if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + colW);
+    ImGui::TextWrapped("%s", ci.name.empty()
+                       ? ("#" + std::to_string(m_zoomCard)).c_str()
+                       : ci.name.c_str());
+    ImGui::PopTextWrapPos();
+    if (UIStyle::fHeader) ImGui::PopFont();
+
+    char typeLine[96] = {0};
+    if (ci.type & TYPE_MONSTER) {
+        if (ci.type & 0x4000000)
+            snprintf(typeLine, sizeof(typeLine), "Monster   ATK %d / LINK-%d",
+                     ci.atk, (int)ci.def);
+        else
+            snprintf(typeLine, sizeof(typeLine), "Monster   Lv %u   ATK %d / DEF %d",
+                     ci.level, ci.atk, ci.def);
+    } else if (ci.type & TYPE_SPELL) snprintf(typeLine, sizeof(typeLine), "Spell");
+    else if (ci.type & TYPE_TRAP)    snprintf(typeLine, sizeof(typeLine), "Trap");
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi), "%s", typeLine);
+    UIStyle::DrawDivider(4.f, 4.f);
+
+    ImGui::BeginChild("##zoom_text", {colW, imgH - 64.f}, false);
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextWrapped("%s", ci.desc.empty() ? "(no card text)" : ci.desc.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::EndChild();
+    ImGui::EndGroup();
+
+    ImGui::Spacing();
+    if (UIStyle::GhostButton("Close  (Esc)", {-1.f, 30.f}))
+        m_zoomCard = 0;
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+}
+
 void UI::drawHelpOverlay(int w, int h) {
     if (!m_helpOverlayOpen) return;
     const auto& C = UIStyle::C();
@@ -4588,6 +4656,7 @@ void UI::drawHelpOverlay(int w, int h) {
         ImGui::TextDisabled("%s", desc);
     };
     row("Left-click",  "Play a card / pick an action or option");
+    row("Right-click", "Zoom a card — big art + full text (Esc to close)");
     row("Hover",       "Preview a card + its text");
     row("F1",          "Toggle this help");
     row("F11",         "Toggle fullscreen");
@@ -6566,6 +6635,9 @@ void UI::drawCardZone(const char* label, const CardState* card,
             m_hoveredInfo = m_db.getCard(card->code);
             setInfoCtx(card->player, (uint8_t)card->loc, card->seq,
                        card->pos);
+            // Right-click → pin a large, readable card view (not a hidden card).
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                m_zoomCard = card->code;
             // Count engine-legal actions for this exact (player, loc, seq).
             int actCount = 0;
             for (const auto& a : currentSelection().idle)
@@ -7495,6 +7567,8 @@ void UI::drawField(int fw, int fh) {
                     m_hoveredInfo=m_db.getCard(c.code);
                     m_hoveredCard=c.code;
                     setInfoCtx(c.player, (uint8_t)c.loc, c.seq, c.pos);
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                        m_zoomCard = c.code;          // pin large card reader
                     // Hover lift — re-draw the card slightly larger and
                     // raised with a shadow so the hand feels tactile. The
                     // outline + glow colour reflects the card's state:

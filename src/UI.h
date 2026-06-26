@@ -141,6 +141,10 @@ private:
     // showing. Only meaningful while m_infoCtxCode == m_hoveredCard (a
     // prompt-button hover changes the card without touching the context).
     uint32_t   m_infoCtxCode = 0;
+    // Right-click "zoom" — a pinned large card reader (big art + full text),
+    // dismissed with Esc / click-away / the close button. 0 = not showing.
+    uint32_t   m_zoomCard    = 0;
+    void       drawCardZoom(int w, int h);
     uint8_t    m_infoCon     = 0;
     uint8_t    m_infoLoc     = 0;
     uint32_t   m_infoSeq     = 0;
