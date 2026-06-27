@@ -3474,6 +3474,7 @@ bool UI::draw(int winW, int winH) {
         drawCardZoom(winW, winH);
         drawHelpOverlay(winW, winH);
         if (m_puzzleMode) drawPuzzleOverlay(winW, winH);
+        drawCardContextMenu();
         drawPauseMenu(winW, winH);
     }
     // Toasts rendered LAST so they sit above every screen. Uses the
@@ -6956,6 +6957,62 @@ bool UI::hasLegalActionFor(uint8_t player, uint8_t loc, uint32_t seq) const {
     return false;
 }
 
+// Right-click card context menu (#6).
+bool UI::tryOpenCardContext(uint8_t con, uint8_t loc, uint32_t seq,
+                            uint32_t code) {
+    if (con != (uint8_t)m_net.localPlayerIndex()) return false;
+    if (!hasLegalActionFor(con, loc, seq)) return false;
+    m_ctxRequest = true;
+    m_ctxCode = code; m_ctxPlayer = con; m_ctxLoc = loc; m_ctxSeq = seq;
+    m_ctxPos = ImGui::GetMousePos();
+    // Also select the card so the action panel mirrors the menu.
+    m_selCode = code; m_selPlayer = con; m_selLoc = loc; m_selSeq = seq;
+    return true;
+}
+
+void UI::drawCardContextMenu() {
+    if (m_ctxRequest) {
+        ImGui::OpenPopup("##cardctx");
+        ImGui::SetNextWindowPos(m_ctxPos);
+        m_ctxRequest = false;
+    }
+    if (!ImGui::BeginPopup("##cardctx")) return;
+    const SelectionRequest& sel = currentSelection();
+    bool any = false;
+    if (sel.type == WaitType::SelectIdleCmd ||
+        sel.type == WaitType::SelectBattleCmd) {
+        for (const IdleAction& a : sel.idle) {
+            if (a.con != m_ctxPlayer || a.loc != m_ctxLoc || a.seq != m_ctxSeq)
+                continue;
+            std::string nm = a.name.empty() ? ("#" + std::to_string(a.code))
+                                            : a.name;
+            const char* verb =
+                a.cmd == 0 ? "Normal Summon"
+              : a.cmd == 1 ? (sel.type == WaitType::SelectBattleCmd
+                                  ? (a.canDirect ? "Attack directly" : "Attack")
+                                  : "Special Summon")
+              : a.cmd == 2 ? "Change Position"
+              : a.cmd == 3 ? "Set (face-down)"
+              : a.cmd == 4 ? "Set Spell/Trap"
+              : a.cmd == 5 ? "Activate effect"
+                           : "Action";
+            std::string lbl = verb;
+            if (a.cmd == 5 && !a.effect.text.empty())
+                lbl += "  —  " + a.effect.text;
+            if (ImGui::Selectable(lbl.c_str())) {
+                submitIdleCmd(a.cmd, a.index, "context menu");
+                ImGui::CloseCurrentPopup();
+            }
+            any = true;
+        }
+    }
+    if (!any) ImGui::TextDisabled("No actions available.");
+    ImGui::Separator();
+    if (ImGui::Selectable("Zoom card")) { m_zoomCard = m_ctxCode;
+                                          ImGui::CloseCurrentPopup(); }
+    ImGui::EndPopup();
+}
+
 bool UI::isAttackerLegal(uint8_t player, uint8_t loc, uint32_t seq,
                          int* outIdx, bool* outCanDirect) const {
     auto& sel = currentSelection();
@@ -7221,9 +7278,13 @@ void UI::drawCardZone(const char* label, const CardState* card,
             m_hoveredInfo = m_db.getCard(card->code);
             setInfoCtx(card->player, (uint8_t)card->loc, card->seq,
                        card->pos);
-            // Right-click → pin a large, readable card view (not a hidden card).
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                m_zoomCard = card->code;
+            // Right-click → a context menu of this card's legal actions if it's
+            // yours and can act; otherwise pin a large card view.
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                if (!tryOpenCardContext(card->player, (uint8_t)card->loc,
+                                        card->seq, card->code))
+                    m_zoomCard = card->code;
+            }
             // Battle-Phase aiming line: when hovering a monster that can attack,
             // draw a line from it to the cursor so it's clear this monster is
             // about to declare an attack (click = attack).
@@ -8198,8 +8259,11 @@ void UI::drawField(int fw, int fh) {
                     m_hoveredInfo=m_db.getCard(c.code);
                     m_hoveredCard=c.code;
                     setInfoCtx(c.player, (uint8_t)c.loc, c.seq, c.pos);
-                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                        m_zoomCard = c.code;          // pin large card reader
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        if (!tryOpenCardContext(c.player, (uint8_t)c.loc,
+                                                c.seq, c.code))
+                            m_zoomCard = c.code;      // pin large card reader
+                    }
                     // Hover lift — re-draw the card slightly larger and
                     // raised with a shadow so the hand feels tactile. The
                     // outline + glow colour reflects the card's state:

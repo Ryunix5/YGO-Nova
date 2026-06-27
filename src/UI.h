@@ -249,6 +249,19 @@ private:
     bool   m_pauseConfirmSurrender = false;
     void   drawPauseMenu(int w, int h);
 
+    // Right-click card context menu (#6): list a card's legal actions at the
+    // cursor. Requested by the field/hand right-click handlers, drawn once/frame.
+    bool     m_ctxRequest = false;     // a right-click asked to open the menu
+    uint32_t m_ctxCode = 0;
+    uint8_t  m_ctxPlayer = 0, m_ctxLoc = 0;
+    uint32_t m_ctxSeq = 0;
+    ImVec2   m_ctxPos = {0, 0};
+    // Open the context menu for a card if it is yours and has legal actions.
+    // Returns true if it took ownership of the right-click (so the caller skips
+    // its zoom). loc uses LOC_* values.
+    bool   tryOpenCardContext(uint8_t con, uint8_t loc, uint32_t seq, uint32_t code);
+    void   drawCardContextMenu();
+
     // Best-of-3 match + side decking (#14). Offline only.
     bool   m_setupMatchMode = false;     // Duel Setup toggle
     bool   m_matchActive    = false;     // a best-of-3 is in progress
