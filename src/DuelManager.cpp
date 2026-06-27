@@ -2201,10 +2201,16 @@ bool DuelManager::aiIdlePhase() {
             case 5: {
                 // Key on the card code alone: the AI activates each card's
                 // effect at most once per turn, which prevents a single card's
-                // ignition effect from re-listing and looping. Also cap total
-                // activations per turn so the AI develops a board instead of
-                // spiralling into a huge, chaotic combo.
-                if ((int)m_aiDoneThisTurn.size() >= 4) break;
+                // ignition effect from re-listing and looping. Also cap the
+                // number of ignition activations per turn so the AI develops a
+                // board instead of spiralling into a huge, chaotic combo. Count
+                // ONLY pure activation keys (code < 2^40) — the same set also
+                // holds Special-Summon (bit 40) and accepted-EffectYn (bit 48)
+                // tags, which must not count against this cap.
+                int activations = 0;
+                for (uint64_t k : m_aiDoneThisTurn)
+                    if (k < (1ull << 40)) ++activations;
+                if (activations >= 6) break;
                 uint64_t key = (uint64_t)a.code;
                 bool used = false;
                 for (uint64_t k : m_aiDoneThisTurn) if (k == key) { used = true; break; }
@@ -2310,10 +2316,31 @@ bool DuelManager::autoRespondP2() {
     case WaitType::SelectIdleCmd:    return aiIdlePhase();
     case WaitType::SelectBattleCmd:  return aiBattlePhase();
     case WaitType::SelectYesNo:      respondYesNo(false); return true;  // generic — decline
-    // Decline optional trigger effects. (Activating them here could re-open the
-    // same window and loop; the AI still uses ignition effects via the Main
-    // Phase activate path, which is per-turn guarded.)
-    case WaitType::SelectEffectYn:   respondYesNo(false); return true;
+    // Optional trigger effect ("activate this effect?"). On the AI's OWN turn
+    // these are almost always engine pieces — on-summon searchers, "then you
+    // can Special Summon", etc. — so accepting them is what makes an archetype
+    // deck actually combo. We accept each distinct card at most once per turn
+    // (guarded via m_aiDoneThisTurn, cleared each turn in aiIdlePhase) so a
+    // self-re-triggering effect can't loop, and the 120-action backstop above
+    // still covers anything pathological. On the OPPONENT's turn we decline:
+    // the heuristic AI has no read on when a hand trap / quick effect is worth
+    // spending, so passing is the safe default.
+    case WaitType::SelectEffectYn: {
+        const int aiSeat = m_selection.player & 1;
+        const bool ownTurn = (m_field.turnPlayer & 1) == aiSeat;
+        uint32_t card = (!m_selection.cards.empty())
+                            ? m_selection.cards[0].code : m_chainSourceCode;
+        uint64_t key = (uint64_t)card | (1ull << 48);   // tag: accepted EffectYn
+        bool used = false;
+        for (uint64_t k : m_aiDoneThisTurn) if (k == key) { used = true; break; }
+        if (ownTurn && card != 0 && !used) {
+            m_aiDoneThisTurn.push_back(key);
+            respondYesNo(true);                          // fire the engine piece
+        } else {
+            respondYesNo(false);
+        }
+        return true;
+    }
     case WaitType::SelectOption:     respondInt(0);        return true;
     case WaitType::SelectCard: {
         if (!hasCards) { respondInt(0); return true; }
