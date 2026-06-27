@@ -2968,6 +2968,7 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
 
     Deck d0 = loadYdk(t0);
     Deck d1 = loadYdk(t1);
+    m_puzzleMode = false;   // a normal practice duel is not a puzzle
     m_dm.setHumanSeat(humanSeat);
     m_net.setSeatOverride(humanSeat);
     if (!m_dm.startDuel(d0, d1, lp, handCount, drawCount)) {
@@ -3432,6 +3433,7 @@ bool UI::draw(int winW, int winH) {
         drawChainResponsePopup(winW, winH);
         drawCardZoom(winW, winH);
         drawHelpOverlay(winW, winH);
+        if (m_puzzleMode) drawPuzzleOverlay(winW, winH);
     }
     // Toasts rendered LAST so they sit above every screen. Uses the
     // foreground draw list so they're not clipped by any active window.
@@ -3814,6 +3816,11 @@ void UI::drawLobby(int w, int h) {
                 m_viewerReplayValid = m_viewerReplay.load(m_replayFiles[0]);
             m_screen = Screen::Replays;
         }
+        if (navItem("PUZZLES", "Solve preset boards — win in one turn", false)) {
+            gAudio().play("click");
+            if (m_puzzles.empty()) loadPuzzles();
+            m_puzzleBrowserOpen = true;
+        }
         if (navItem("MATCH HISTORY", "Win/loss record and stats", false)) {
             gAudio().play("click");
             m_historyOpen = true;
@@ -3914,6 +3921,8 @@ void UI::drawLobby(int w, int h) {
 
     // Match-history popup (opened from the MATCH HISTORY nav item).
     drawHistory();
+    // Puzzle browser popup (opened from the PUZZLES nav item).
+    drawPuzzleBrowser();
 
     // ── Audio settings popup (opened by the top-right Audio button) ────────
     if (m_audioPopupOpen) { ImGui::OpenPopup("Audio Settings"); m_audioPopupOpen = false; }
@@ -8427,6 +8436,43 @@ void UI::drawSelectionPanel(int pw, int ph) {
     // shows the panel.
     const bool clientView =
         m_mpHostAuth && m_net.isClient() && m_mpRemoteDone && !m_dm.isDone();
+    // Puzzle mode owns its own end screen (solved / failed + Retry), so it
+    // never shows the deck-based Rematch flow.
+    if (m_puzzleMode && m_dm.isDone()) {
+        bool solved = (m_dm.winner() == 0);   // human is always seat 0 here
+        if (m_puzzleResult == 0) {
+            m_puzzleResult = solved ? 1 : 2;
+            gAudio().play(solved ? "victory" : "defeat");
+        }
+        if (solved) {
+            if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+            ImGui::TextColored({0.45f, 0.92f, 0.55f, 1.f}, "Puzzle Solved!");
+            if (UIStyle::fHeader) ImGui::PopFont();
+            ImGui::TextWrapped("Nicely done — you found the line.");
+        } else {
+            if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+            ImGui::TextColored({0.95f, 0.55f, 0.45f, 1.f}, "Not solved");
+            if (UIStyle::fHeader) ImGui::PopFont();
+            ImGui::TextWrapped("The opponent survived. Give it another go.");
+        }
+        ImGui::Spacing();
+        if (UIStyle::PrimaryButton("Retry puzzle", {bw, 34.f}))
+            startPuzzleByIndex(m_activePuzzle);
+        if (UIStyle::GhostButton("Puzzle list", {bw, 30.f})) {
+            if (m_dm.isRunning()) m_dm.endDuel();
+            m_puzzleMode = false;
+            m_screen = Screen::Lobby;
+            m_anim.clear(); m_zoneRectsReady = false;
+            m_puzzleBrowserOpen = true;
+        }
+        if (UIStyle::GhostButton("Return to Lobby", {bw, 30.f})) {
+            if (m_dm.isRunning()) m_dm.endDuel();
+            m_puzzleMode = false;
+            m_screen = Screen::Lobby;
+            m_anim.clear(); m_zoneRectsReady = false;
+        }
+        return;
+    }
     if (m_dm.isDone() || clientView) {
         const int  w      = clientView ? m_mpRemoteWinner : m_dm.winner();
         const int  reason = clientView ? m_mpRemoteReason : m_dm.winReason();
@@ -10691,6 +10737,232 @@ void UI::drawHistory() {
     ImGui::SameLine(0.f, 8.f);
     if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
+}
+
+// ── Puzzle / Challenge mode (#4) ─────────────────────────────────────────────
+//
+// Puzzles live in assets/puzzles/*.puzzle as a small line-based format:
+//   name=...        difficulty=...   desc=...    goal=...
+//   lp=8000         opplp=3000
+//   <me|opp> <zone> [pos] <code>     ; one card per line
+// zones: hand mzone szone grave banish deck extra ; pos: atk def set setdef up
+//
+void UI::loadPuzzles() {
+    m_puzzles.clear();
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory("assets/puzzles", ec)) return;
+    std::vector<std::string> files;
+    for (auto& e : fs::directory_iterator("assets/puzzles", ec))
+        if (e.path().extension() == ".puzzle")
+            files.push_back(e.path().string());
+    std::sort(files.begin(), files.end());
+
+    auto zoneOf = [](const std::string& s) -> uint32_t {
+        if (s == "hand")   return LOC_HAND;
+        if (s == "mzone")  return LOC_MZONE;
+        if (s == "szone")  return LOC_SZONE;
+        if (s == "grave")  return LOC_GY;
+        if (s == "banish") return LOC_REM;
+        if (s == "deck")   return LOC_DECK;
+        if (s == "extra")  return LOC_EXTRA;
+        return 0;
+    };
+    auto posOf = [](const std::string& s) -> uint32_t {
+        if (s == "def")    return POS_FACEUP_DEFENSE;
+        if (s == "set" || s == "setdef") return POS_FACEDOWN_DEFENSE;
+        if (s == "up")     return POS_FACEUP_ATTACK | POS_FACEUP_DEFENSE;
+        return POS_FACEUP_ATTACK;   // "atk" / default
+    };
+
+    for (auto& path : files) {
+        std::ifstream f(path);
+        if (!f) continue;
+        PuzzleEntry pe;
+        pe.setup.lpYou = 8000; pe.setup.lpOpp = 8000;
+        std::string line;
+        while (std::getline(f, line)) {
+            // Trim CR + leading space.
+            while (!line.empty() && (line.back()=='\r' || line.back()=='\n'))
+                line.pop_back();
+            size_t s = line.find_first_not_of(" \t");
+            if (s == std::string::npos) continue;
+            line = line.substr(s);
+            if (line[0] == '#' || line[0] == ';') continue;
+            auto eq = line.find('=');
+            if (eq != std::string::npos &&
+                line.find(' ') > eq) {           // key=value line
+                std::string k = line.substr(0, eq), v = line.substr(eq + 1);
+                if      (k == "name")       pe.setup.name = v;
+                else if (k == "goal")       pe.setup.goal = v;
+                else if (k == "difficulty") pe.difficulty = v;
+                else if (k == "desc")       pe.desc = v;
+                else if (k == "lp")         pe.setup.lpYou = (uint32_t)atoi(v.c_str());
+                else if (k == "opplp")      pe.setup.lpOpp = (uint32_t)atoi(v.c_str());
+                continue;
+            }
+            // Card line: tokens separated by whitespace.
+            std::vector<std::string> tok; std::string cur;
+            std::istringstream iss(line);
+            while (iss >> cur) tok.push_back(cur);
+            if (tok.size() < 3) continue;
+            DuelManager::PuzzleCard pc;
+            pc.player = (tok[0] == "opp") ? 1 : 0;
+            pc.loc    = zoneOf(tok[1]);
+            if (!pc.loc) continue;
+            // Optional position token sits between zone and code.
+            if (tok.size() >= 4) {
+                pc.pos  = posOf(tok[2]);
+                pc.code = (uint32_t)strtoul(tok[3].c_str(), nullptr, 10);
+            } else {
+                pc.pos  = posOf("atk");
+                pc.code = (uint32_t)strtoul(tok[2].c_str(), nullptr, 10);
+            }
+            if (pc.code) pe.setup.cards.push_back(pc);
+        }
+        // Anti-deckout filler: give each side a couple of spare deck cards if
+        // the puzzle didn't specify any. (Pot of Greed code — never drawn, the
+        // human goes first with no draw and the opponent stays passive.)
+        bool youHaveDeck = false, oppHaveDeck = false;
+        for (auto& c : pe.setup.cards) {
+            if (c.loc == LOC_DECK) (c.player ? oppHaveDeck : youHaveDeck) = true;
+        }
+        if (!youHaveDeck) { pe.setup.deckYou = {55144522, 55144522}; }
+        if (!oppHaveDeck) { pe.setup.deckOpp = {55144522, 55144522}; }
+        if (!pe.setup.name.empty() && !pe.setup.cards.empty())
+            m_puzzles.push_back(std::move(pe));
+    }
+}
+
+void UI::startPuzzleByIndex(int idx) {
+    if (idx < 0 || idx >= (int)m_puzzles.size()) return;
+    const PuzzleEntry& pe = m_puzzles[idx];
+    // Tear down any prior replay/testing capture so puzzle responses are never
+    // appended to a stale stream (puzzles are not recorded).
+    finalizeReplay("entering puzzle");
+    m_replayMode = false;
+    // Offline, human at seat 0 (goes first), opponent passive so the player
+    // works the board uninterrupted.
+    m_dm.setHumanSeat(0);
+    m_net.clearSeatOverride();
+    m_dm.setLocalMode(true);
+    m_dm.setPassiveAI(true);
+    m_dm.setNoShuffle(true);
+    m_snap.clear();
+    if (!m_dm.startPuzzle(pe.setup)) {
+        pushToast("Puzzle failed to start", IM_COL32(232, 110, 100, 255), 2.6);
+        gAudio().play("error");
+        return;
+    }
+    m_puzzleMode   = true;
+    m_activePuzzle = idx;
+    m_puzzleResult = 0;
+    m_puzzleGoal   = pe.setup.goal;
+    m_screen       = Screen::Duel;
+    m_anim.clear();
+    m_zoneRectsReady  = false;
+    m_sfxObsInited    = false;
+    m_endGameSfxFired = false;
+    gAudio().play("duel_start");
+    pushToast("Puzzle: " + pe.setup.name, IM_COL32(200, 180, 255, 255), 2.6);
+}
+
+void UI::drawPuzzleBrowser() {
+    if (m_puzzleBrowserOpen) { ImGui::OpenPopup("Puzzles"); m_puzzleBrowserOpen = false; }
+    ImGui::SetNextWindowSize({560.f, 0.f}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("Puzzles", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+
+    if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+    ImGui::TextUnformatted("Puzzles & Challenges");
+    if (UIStyle::fHeader) ImGui::PopFont();
+    ImGui::TextDisabled("Preset boards — find the line to win in a single turn.");
+    ImGui::Separator();
+
+    if (m_puzzles.empty()) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("No puzzles found in assets/puzzles/.");
+        ImGui::Spacing();
+        if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    ImGui::BeginChild("##puzzlelist", {-1.f, 360.f}, true);
+    for (int i = 0; i < (int)m_puzzles.size(); ++i) {
+        const PuzzleEntry& pe = m_puzzles[i];
+        ImGui::PushID(i);
+        ImU32 dcol = pe.difficulty == "Hard"   ? IM_COL32(235, 110, 95, 255)
+                   : pe.difficulty == "Medium" ? IM_COL32(235, 185, 60, 255)
+                                               : IM_COL32(110, 210, 130, 255);
+        UIStyle::DrawGlassPanel(ImGui::GetWindowDrawList(),
+            ImGui::GetCursorScreenPos(),
+            {ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x,
+             ImGui::GetCursorScreenPos().y + 78.f});
+        ImGui::BeginGroup();
+        ImGui::Dummy({4.f, 4.f});
+        if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+        ImGui::TextUnformatted(pe.setup.name.c_str());
+        if (UIStyle::fHeader) ImGui::PopFont();
+        ImGui::SameLine(0.f, 8.f);
+        UIStyle::StatusChip(pe.difficulty.empty() ? "Easy" : pe.difficulty.c_str(),
+                            dcol);
+        if (!pe.desc.empty()) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.f);
+            ImGui::TextDisabled("%s", pe.desc.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndGroup();
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - 84.f);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+        if (UIStyle::PrimaryButton("Play", {78.f, 32.f})) {
+            ImGui::CloseCurrentPopup();
+            startPuzzleByIndex(i);
+        }
+        ImGui::Dummy({1.f, 8.f});
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+    if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+// In-progress goal bar — a slim top-centre window showing the objective with
+// Restart / Quit. The solved/failed screen is the Game Over panel.
+void UI::drawPuzzleOverlay(int w, int h) {
+    if (!m_puzzleMode || m_dm.isDone()) return;
+    ImGui::SetNextWindowPos({w * 0.5f, 8.f}, ImGuiCond_Always, {0.5f, 0.f});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(28, 22, 42, 235));
+    ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(210, 130, 240, 230));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.6f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{12.f, 8.f});
+    if (ImGui::Begin("##puzzle_goal", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 210, 255, 255));
+        ImGui::TextUnformatted("PUZZLE");
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.f, 8.f);
+        ImGui::TextUnformatted(m_puzzleGoal.c_str());
+        ImGui::SameLine(0.f, 16.f);
+        if (UIStyle::GhostButton("Restart", {78.f, 22.f}))
+            startPuzzleByIndex(m_activePuzzle);
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Quit", {58.f, 22.f})) {
+            if (m_dm.isRunning()) m_dm.endDuel();
+            m_puzzleMode = false;
+            m_screen = Screen::Lobby;
+            m_anim.clear(); m_zoneRectsReady = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
 }
 
 // ── Banlist / format validation (#15) ────────────────────────────────────────

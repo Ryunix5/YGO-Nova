@@ -224,6 +224,23 @@ private:
     void   loadCardTags();
     void   saveCardTags();
 
+    // Puzzle / Challenge mode (#4): preset boards the player must solve.
+    struct PuzzleEntry {
+        DuelManager::PuzzleSetup setup;
+        std::string difficulty;   // "Easy" / "Medium" / "Hard"
+        std::string desc;         // flavour / hint shown in the browser
+    };
+    std::vector<PuzzleEntry> m_puzzles;
+    bool   m_puzzleBrowserOpen = false;
+    bool   m_puzzleMode    = false;   // active duel is a puzzle
+    int    m_activePuzzle  = -1;      // index into m_puzzles for Retry
+    int    m_puzzleResult  = 0;       // 0 none, 1 solved, 2 failed
+    std::string m_puzzleGoal;
+    void   loadPuzzles();
+    void   drawPuzzleBrowser();
+    void   startPuzzleByIndex(int idx);
+    void   drawPuzzleOverlay(int w, int h);   // goal banner + solved/failed
+
     // Match history + win/loss stats (#8).
     struct MatchRecord { std::string when, myDeck, oppDeck; char result = 'D'; };
     std::vector<MatchRecord> m_matchHistory;

@@ -131,27 +131,7 @@ bool DuelManager::startDuel(const Deck& p0deck, const Deck& p1deck,
         return false;
     }
 
-    static const char* kInitScripts[] = {
-        "constant.lua", "utility.lua",
-        "archetype_setcode_constants.lua", "card_counter_constants.lua",
-        "cards_specific_functions.lua", "debug_utility.lua",
-        "deprecated_functions.lua", "proc_equip.lua", "proc_fusion.lua",
-        "proc_fusion_spell.lua", "proc_gemini.lua", "proc_link.lua",
-        "proc_maximum.lua", "proc_normal.lua", "proc_pendulum.lua",
-        "proc_persistent.lua", "proc_ritual.lua", "proc_rush.lua",
-        "proc_skill.lua", "proc_spirit.lua", "proc_synchro.lua",
-        "proc_union.lua", "proc_workaround.lua", "proc_xyz.lua", nullptr
-    };
-    for (int i = 0; kInitScripts[i]; ++i) {
-        std::string path = std::string("assets/scripts/") + kInitScripts[i];
-        std::ifstream f(path, std::ios::binary);
-        if (!f) { addLog("WARN: missing init script: " + path); continue; }
-        f.seekg(0, std::ios::end);
-        auto sz = (uint32_t)f.tellg(); f.seekg(0);
-        std::string buf(sz, '\0'); f.read(&buf[0], sz);
-        int r = OCG_LoadScript(m_duel, buf.c_str(), sz, kInitScripts[i]);
-        if (!r) addLog(std::string("WARN: script failed: ") + kInitScripts[i]);
-    }
+    loadInitScripts();
 
     // Load a deck:
     //  (1) Route every card by its REAL card type. Fusion/Synchro/Xyz/Link
@@ -240,6 +220,121 @@ bool DuelManager::startDuel(const Deck& p0deck, const Deck& p1deck,
     OCG_StartDuel(m_duel);
     m_running = true;
     addLog("Duel started!");
+    return true;
+}
+
+// Load ocgcore's standard init/proc Lua scripts into the freshly created duel.
+void DuelManager::loadInitScripts() {
+    static const char* kInitScripts[] = {
+        "constant.lua", "utility.lua",
+        "archetype_setcode_constants.lua", "card_counter_constants.lua",
+        "cards_specific_functions.lua", "debug_utility.lua",
+        "deprecated_functions.lua", "proc_equip.lua", "proc_fusion.lua",
+        "proc_fusion_spell.lua", "proc_gemini.lua", "proc_link.lua",
+        "proc_maximum.lua", "proc_normal.lua", "proc_pendulum.lua",
+        "proc_persistent.lua", "proc_ritual.lua", "proc_rush.lua",
+        "proc_skill.lua", "proc_spirit.lua", "proc_synchro.lua",
+        "proc_union.lua", "proc_workaround.lua", "proc_xyz.lua", nullptr
+    };
+    for (int i = 0; kInitScripts[i]; ++i) {
+        std::string path = std::string("assets/scripts/") + kInitScripts[i];
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { addLog("WARN: missing init script: " + path); continue; }
+        f.seekg(0, std::ios::end);
+        auto sz = (uint32_t)f.tellg(); f.seekg(0);
+        std::string buf(sz, '\0'); f.read(&buf[0], sz);
+        int r = OCG_LoadScript(m_duel, buf.c_str(), sz, kInitScripts[i]);
+        if (!r) addLog(std::string("WARN: script failed: ") + kInitScripts[i]);
+    }
+}
+
+// ── Puzzle / Challenge mode ──────────────────────────────────────────────────
+// Build a preset board: place each card directly into its requested zone, set
+// each player's LP, then start. No opening hand is drawn (startingDrawCount=0)
+// — the hand is whatever the puzzle places. The opponent is left passive so the
+// player can work the board uninterrupted. Deck order is fixed (PSEUDO_SHUFFLE)
+// so a puzzle always presents the same draws if the solution needs them.
+bool DuelManager::startPuzzle(const PuzzleSetup& pz) {
+    endDuel();
+    m_field = {};
+
+    uint64_t base = (uint64_t)std::chrono::high_resolution_clock::now()
+                        .time_since_epoch().count();
+    std::mt19937_64 rng(base);
+    m_duelSeed = base;
+
+    OCG_DuelOptions opts{};
+    opts.seed[0] = rng(); opts.seed[1] = rng();
+    opts.seed[2] = rng(); opts.seed[3] = rng();
+    opts.flags = DUEL_PZONE | DUEL_EMZONE | DUEL_FSX_MMZONE |
+                 DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION |
+                 DUEL_PSEUDO_SHUFFLE;
+    addLog("=== Puzzle start: " + pz.name + " ===");
+    opts.team1.startingLP        = pz.lpYou;
+    opts.team1.startingDrawCount = 0;          // hand is placed, not drawn
+    opts.team1.drawCountPerTurn  = 1;
+    opts.team2 = opts.team1;
+    opts.team2.startingLP        = pz.lpOpp;
+    opts.cardReader     = CardDB::cardReaderCb;     opts.payload1 = &m_db;
+    opts.cardReaderDone = CardDB::cardReaderDoneCb; opts.payload4 = &m_db;
+    opts.scriptReader   = scriptReaderCb;           opts.payload2 = this;
+    opts.logHandler     = logHandlerCb;             opts.payload3 = this;
+
+    int status = OCG_CreateDuel(&m_duel, &opts);
+    if (status != OCG_DUEL_CREATION_SUCCESS) {
+        addLog("ERROR: OCG_CreateDuel failed (puzzle)");
+        return false;
+    }
+    loadInitScripts();
+
+    auto reg = [&](uint32_t code, uint8_t player, uint32_t loc,
+                   uint32_t seq, uint32_t pos) {
+        OCG_NewCardInfo info{};
+        info.team = player; info.duelist = 0; info.code = code;
+        info.con  = player; info.loc = loc; info.seq = seq; info.pos = pos;
+        OCG_DuelNewCard(m_duel, &info);
+    };
+
+    // Track per-zone sequence counters so multiple cards in the same
+    // location (hand, GY, deck...) get distinct slots.
+    int handSeq[2] = {0, 0}, graveSeq[2] = {0, 0}, banishSeq[2] = {0, 0};
+    int deckSeq[2] = {0, 0}, extraSeq[2] = {0, 0};
+    int mField[2] = {0, 0}, sField[2] = {0, 0};   // routed counters
+    for (const auto& c : pz.cards) {
+        uint8_t pl = c.player & 1;
+        uint32_t pos = c.pos ? c.pos : POS_FACEUP_ATTACK;
+        uint32_t seq = c.seq;
+        switch (c.loc) {
+            case LOCATION_HAND:    seq = handSeq[pl]++;
+                                   pos = POS_FACEDOWN; break;
+            case LOCATION_GRAVE:   seq = graveSeq[pl]++;
+                                   pos = POS_FACEUP; break;
+            case LOCATION_REMOVED: seq = banishSeq[pl]++; break;
+            case LOCATION_DECK:    seq = deckSeq[pl]++;
+                                   pos = POS_FACEDOWN_DEFENSE; break;
+            case LOCATION_EXTRA:   seq = extraSeq[pl]++;
+                                   pos = POS_FACEDOWN_DEFENSE; break;
+            case LOCATION_MZONE:   if (!c.seq) seq = mField[pl];
+                                   mField[pl] = (int)seq + 1; break;
+            case LOCATION_SZONE:   if (!c.seq) seq = sField[pl];
+                                   sField[pl] = (int)seq + 1; break;
+            default: break;
+        }
+        reg(c.code, pl, c.loc, seq, pos);
+    }
+    // Filler deck so neither side is at 0 cards (avoids instant deckout loss).
+    for (uint32_t code : pz.deckYou) reg(code, 0, LOCATION_DECK, deckSeq[0]++,
+                                         POS_FACEDOWN_DEFENSE);
+    for (uint32_t code : pz.deckOpp) reg(code, 1, LOCATION_DECK, deckSeq[1]++,
+                                         POS_FACEDOWN_DEFENSE);
+
+    m_field.deckCount[0] = deckSeq[0];  m_field.deckCount[1] = deckSeq[1];
+    m_field.extraCount[0] = extraSeq[0]; m_field.extraCount[1] = extraSeq[1];
+    m_field.lp[0] = pz.lpYou; m_field.lp[1] = pz.lpOpp;
+
+    OCG_StartDuel(m_duel);
+    m_running = true;
+    addLog("Puzzle ready — goal: " + pz.goal);
     return true;
 }
 

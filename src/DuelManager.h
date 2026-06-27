@@ -195,6 +195,26 @@ public:
     bool startDuel(const Deck& p0deck, const Deck& p1deck,
                    uint32_t lp = 8000, uint32_t handCount = 5,
                    uint32_t drawCount = 1);
+
+    // ── Puzzle / Challenge mode ──────────────────────────────────────────────
+    // A preset board the human must solve (usually "win this turn"). Cards are
+    // placed directly into the requested zones via OCG_DuelNewCard before
+    // OCG_StartDuel, so no summon triggers fire — the board is static.
+    struct PuzzleCard {
+        uint32_t code = 0;
+        uint8_t  player = 0;     // 0 = human (you), 1 = opponent
+        uint32_t loc = 0;        // LOCATION_*
+        uint32_t pos = 0;        // POS_*
+        uint32_t seq = 0;        // monster/spell zone index; order elsewhere
+    };
+    struct PuzzleSetup {
+        std::string name, goal;
+        uint32_t lpYou = 8000, lpOpp = 8000;
+        std::vector<PuzzleCard> cards;       // hand/field/GY/banish placements
+        std::vector<uint32_t> deckYou, deckOpp;   // remaining deck (anti-deckout)
+    };
+    bool startPuzzle(const PuzzleSetup& p);
+
     void endDuel();
 
     // Run the engine — returns false when duel ends
@@ -485,6 +505,9 @@ private:
     void submitResponse(const void* data, uint32_t len);  // central response setter
     void logRequestOnce(const std::string& s);            // log once per distinct msg
     void addLog(const std::string& s);
+    // Load ocgcore's standard init/proc Lua scripts into the freshly created
+    // duel. Shared by startDuel() and startPuzzle().
+    void loadInitScripts();
     static std::string  msgName(uint8_t type);
     static const char*  waitName(WaitType t);
 
