@@ -10504,6 +10504,18 @@ static double hyperZero(int N, int K, int h) {
     return p;
 }
 
+// #2 — draw a random opening hand of n cards from the current main deck.
+void UI::drawSampleHand(int n) {
+    m_sampleHand.clear();
+    std::vector<uint32_t> deck = m_editDeck.main;
+    if (deck.empty()) return;
+    std::random_device rd; std::mt19937 g(rd());
+    std::shuffle(deck.begin(), deck.end(), g);
+    n = std::min(n, (int)deck.size());
+    m_sampleHand.assign(deck.begin(), deck.begin() + n);
+    gAudio().play("draw");
+}
+
 void UI::drawDeckConsistency() {
     if (m_consistencyOpen) {
         ImGui::OpenPopup("Deck Consistency");
@@ -10519,6 +10531,94 @@ void UI::drawDeckConsistency() {
     if (UIStyle::fHeader) ImGui::PopFont();
     ImGui::TextDisabled("Tag each main-deck card by its role, then read your "
                         "opening odds. A 'Starter' is a 1-card combo.");
+    ImGui::Separator();
+
+    // ── Deck breakdown (#3): type counts + level/rank curve ──────────────────
+    {
+        int mons = 0, spells = 0, traps = 0;
+        int lvlCount[13] = {0};   // levels/ranks 1..12 (index 0 unused)
+        for (uint32_t code : m_editDeck.main) {
+            CardInfo ci = m_db.getCard(code);
+            if (ci.type & TYPE_MONSTER) {
+                mons++;
+                int lv = ci.level;
+                if (lv >= 1 && lv <= 12) lvlCount[lv]++;
+            } else if (ci.type & TYPE_SPELL) spells++;
+            else if (ci.type & TYPE_TRAP)    traps++;
+        }
+        if (UIStyle::fSmall) ImGui::PushFont(UIStyle::fSmall);
+        ImGui::TextDisabled("DECK BREAKDOWN");
+        if (UIStyle::fSmall) ImGui::PopFont();
+        ImGui::TextColored({0.95f, 0.80f, 0.40f, 1.f}, "Monsters %d", mons);
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::TextColored({0.40f, 0.80f, 0.55f, 1.f}, "Spells %d", spells);
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::TextColored({0.85f, 0.40f, 0.65f, 1.f}, "Traps %d", traps);
+        // Compact level/rank histogram.
+        int maxLv = 1;
+        for (int l = 1; l <= 12; ++l) maxLv = std::max(maxLv, lvlCount[l]);
+        ImDrawList* hdl = ImGui::GetWindowDrawList();
+        ImVec2 hp = ImGui::GetCursorScreenPos();
+        float colW = 26.f, gap = 4.f, barMaxH = 34.f;
+        float baseY = hp.y + barMaxH + 2.f;
+        for (int l = 1; l <= 12; ++l) {
+            float x = hp.x + (l - 1) * (colW + gap);
+            float h = (lvlCount[l] > 0)
+                        ? 4.f + barMaxH * (lvlCount[l] / (float)maxLv) : 2.f;
+            ImU32 c = lvlCount[l] > 0 ? IM_COL32(120, 160, 240, 255)
+                                      : IM_COL32(60, 66, 86, 160);
+            hdl->AddRectFilled({x, baseY - h}, {x + colW, baseY}, c, 2.f);
+            char lab[8]; snprintf(lab, sizeof(lab), "%d", l);
+            ImVec2 ts = ImGui::CalcTextSize(lab);
+            hdl->AddText({x + (colW - ts.x) * 0.5f, baseY + 1.f},
+                         IM_COL32(150, 156, 176, 255), lab);
+            if (lvlCount[l] > 0) {
+                char cnt[8]; snprintf(cnt, sizeof(cnt), "%d", lvlCount[l]);
+                ImVec2 cs = ImGui::CalcTextSize(cnt);
+                hdl->AddText({x + (colW - cs.x) * 0.5f, baseY - h - 13.f},
+                             IM_COL32(200, 214, 245, 255), cnt);
+            }
+        }
+        ImGui::Dummy({12 * (colW + gap), barMaxH + 18.f});
+        ImGui::TextDisabled("Level / Rank distribution");
+    }
+    ImGui::Separator();
+
+    // ── Sample opening hand (#2) ─────────────────────────────────────────────
+    {
+        if (UIStyle::fSmall) ImGui::PushFont(UIStyle::fSmall);
+        ImGui::TextDisabled("SAMPLE OPENING HAND");
+        if (UIStyle::fSmall) ImGui::PopFont();
+        if (UIStyle::GhostButton("Draw 5", {90.f, 26.f})) drawSampleHand(5);
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Draw 6", {90.f, 26.f})) drawSampleHand(6);
+        if (!m_sampleHand.empty()) {
+            ImGui::SameLine(0.f, 6.f);
+            if (UIStyle::GhostButton("Redraw", {90.f, 26.f}))
+                drawSampleHand((int)m_sampleHand.size());
+        }
+        if (m_sampleHand.empty()) {
+            ImGui::TextDisabled("Draw a random opening hand to feel the deck.");
+        } else {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 hp = ImGui::GetCursorScreenPos();
+            float cw = 50.f, ch = 73.f, gap = 6.f;
+            for (size_t i = 0; i < m_sampleHand.size(); ++i) {
+                ImVec2 p0 {hp.x + i * (cw + gap), hp.y};
+                ImVec2 p1 {p0.x + cw, p0.y + ch};
+                if (void* tex = m_rend.getCardTexture(m_sampleHand[i]))
+                    dl->AddImageRounded((ImTextureID)tex, p0, p1, {0,0}, {1,1},
+                                        IM_COL32_WHITE, 3.f);
+                else
+                    dl->AddRectFilled(p0, p1, IM_COL32(30, 36, 56, 255), 3.f);
+                dl->AddRect(p0, p1, IM_COL32(70, 84, 130, 220), 3.f, 0, 1.f);
+                if (ImGui::IsMouseHoveringRect(p0, p1))
+                    ImGui::SetTooltip("%s",
+                        m_db.getCard(m_sampleHand[i]).name.c_str());
+            }
+            ImGui::Dummy({m_sampleHand.size() * (cw + gap), ch + 4.f});
+        }
+    }
     ImGui::Separator();
 
     // Distinct main-deck cards (code -> copies), sorted by name.

@@ -220,6 +220,8 @@ private:
     //   0 = Other, 1 = Starter (1-card combo), 2 = Engine, 3 = Non-engine.
     std::unordered_map<uint32_t, int> m_cardTags;
     bool   m_consistencyOpen = false;
+    std::vector<uint32_t> m_sampleHand;   // #2 sample-hand tester (drawn cards)
+    void   drawSampleHand(int n);         // draw n random cards from the main deck
     void   drawDeckConsistency();
     void   loadCardTags();
     void   saveCardTags();
