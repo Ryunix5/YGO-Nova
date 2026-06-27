@@ -439,6 +439,10 @@ private:
     // after the engine boots so we never play "everything moved" at start.
     bool     m_sfxObsInited = false;
     uint32_t m_sfxPrevLP[2]   = {0, 0};
+    // Animated LP: m_lpShown ticks toward the real value; m_lpGhost lingers
+    // above it after damage (fighting-game style drain trail).
+    float    m_lpShown[2]     = {8000.f, 8000.f};
+    float    m_lpGhost[2]     = {8000.f, 8000.f};
     int      m_sfxPrevHand[2] = {0, 0};
     int      m_sfxPrevGY[2]   = {0, 0};
     int      m_sfxPrevBN[2]   = {0, 0};

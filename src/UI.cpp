@@ -5175,6 +5175,8 @@ void UI::drawDuel(int w, int h) {
             // moments ago and we don't want to fire a summon ring per card.
             for (int p = 0; p < 2; ++p) {
                 m_sfxPrevLP[p]   = f.lp[p];
+                m_lpShown[p]     = (float)f.lp[p];   // snap animated LP to start
+                m_lpGhost[p]     = (float)f.lp[p];
                 m_sfxPrevHand[p] = (int)f.hand[p].size();
                 m_sfxPrevGY[p]   = (int)f.gy[p].size();
                 m_sfxPrevBN[p]   = (int)f.banished[p].size();
@@ -5376,6 +5378,8 @@ void UI::drawDuel(int w, int h) {
             // Snapshot for next frame.
             for (int p = 0; p < 2; ++p) {
                 m_sfxPrevLP[p]   = f.lp[p];
+                m_lpShown[p]     = (float)f.lp[p];   // snap animated LP to start
+                m_lpGhost[p]     = (float)f.lp[p];
                 m_sfxPrevHand[p] = (int)f.hand[p].size();
                 m_sfxPrevGY[p]   = (int)f.gy[p].size();
                 m_sfxPrevBN[p]   = (int)f.banished[p].size();
@@ -7606,8 +7610,21 @@ void UI::drawField(int fw, int fh) {
                     IM_COL32(180, 200, 240, 200), tag);
         UIStyle::PopFont();
 
-        // LP number — large, right of label.
-        char lpStr[16]; snprintf(lpStr, 16, "%u", f.lp[pl]);
+        // Animated LP: tick m_lpShown toward the real value; m_lpGhost lingers
+        // above it after damage so the loss is visible as a draining red trail.
+        float dt = ImGui::GetIO().DeltaTime;
+        if (dt > 0.1f) dt = 0.1f;
+        float tgt = (float)f.lp[pl];
+        if (m_lpShown[pl] < tgt) m_lpShown[pl] = tgt;          // healing: snap up
+        else m_lpShown[pl] += (tgt - m_lpShown[pl]) * std::min(1.f, dt * 7.f);
+        if (m_lpShown[pl] < tgt + 0.5f && m_lpShown[pl] > tgt - 0.5f)
+            m_lpShown[pl] = tgt;
+        if (m_lpGhost[pl] < m_lpShown[pl]) m_lpGhost[pl] = m_lpShown[pl];
+        else m_lpGhost[pl] += (m_lpShown[pl] - m_lpGhost[pl]) *
+                              std::min(1.f, dt * 2.6f);
+
+        // LP number — large, right of label, showing the ticking value.
+        char lpStr[16]; snprintf(lpStr, 16, "%d", (int)(m_lpShown[pl] + 0.5f));
         UIStyle::PushFont(UIStyle::fHeader);
         ImVec2 lts = ImGui::CalcTextSize(lpStr);
         dl->AddText({br.x - lts.x - 9.f, pos.y + 4.f},
@@ -7615,12 +7632,19 @@ void UI::drawField(int fw, int fh) {
         UIStyle::PopFont();
 
         // HP bar — thicker, taller track.
-        float frac = f.lp[pl] > 0 ? std::min(f.lp[pl] / 8000.f, 1.f) : 0.f;
+        float frac  = std::min(std::max(m_lpShown[pl], 0.f) / 8000.f, 1.f);
+        float gfrac = std::min(std::max(m_lpGhost[pl], 0.f) / 8000.f, 1.f);
         float trackY0 = pos.y + H - 13.f;
         float trackY1 = pos.y + H - 5.f;
         float trackX0 = pos.x + 9.f, trackX1 = br.x - 9.f;
         dl->AddRectFilled({trackX0, trackY0}, {trackX1, trackY1},
                           IM_COL32(0, 0, 0, 150), 4.f);
+        // Ghost (recent-damage) segment in red behind the live bar.
+        if (gfrac > frac + 0.001f) {
+            float gw = (trackX1 - trackX0) * gfrac;
+            dl->AddRectFilled({trackX0, trackY0}, {trackX0 + gw, trackY1},
+                              IM_COL32(220, 70, 70, 220), 4.f);
+        }
         if (frac > 0.f) {
             ImU32 barCol =
                 frac > 0.66f ? IM_COL32( 78, 210, 100, 250)
