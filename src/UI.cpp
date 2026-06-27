@@ -10417,40 +10417,102 @@ void UI::drawDeckConsistency() {
         });
     }
     const int N = (int)m_editDeck.main.size();
-    const char* kCats[] = { "Other", "Starter", "Engine", "Non-engine" };
 
-    ImGui::BeginChild("##tags", {-1.f, 320.f}, true);
+    // Role palette, shared with the deck-tile badges (S/E/N corner pip).
+    const ImU32 kRoleCol[4] = {
+        IM_COL32(150, 150, 160, 255),   // 0 Other  (grey)
+        IM_COL32( 90, 215, 125, 255),   // 1 Starter (green)
+        IM_COL32(110, 180, 255, 255),   // 2 Engine  (blue)
+        IM_COL32(210, 130, 240, 255),   // 3 Non-eng (purple)
+    };
+    const char* kRoleShort[4] = { "—", "Starter", "Engine", "Non-eng" };
+
+    // Aggregate by role (weighted by copies) up-front so the summary sits on top.
+    int roleCount[4] = {0, 0, 0, 0};
+    for (auto& d : distinct) {
+        auto it = m_cardTags.find(d.first);
+        int t = (it == m_cardTags.end()) ? 0 : it->second;
+        if (t >= 0 && t < 4) roleCount[t] += d.second;
+    }
+    int starters = roleCount[1], engine = roleCount[2], nonEng = roleCount[3];
+
+    // ── Summary chips (counts per role) ──────────────────────────────────────
+    auto roleChip = [&](const char* label, int n, ImU32 col) {
+        ImVec4 c = ImGui::ColorConvertU32ToFloat4(col);
+        ImGui::PushStyleColor(ImGuiCol_Button,        {c.x, c.y, c.z, 0.18f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {c.x, c.y, c.z, 0.18f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {c.x, c.y, c.z, 0.18f});
+        ImGui::PushStyleColor(ImGuiCol_Text, c);
+        char buf[64]; snprintf(buf, sizeof(buf), "%s  %d", label, n);
+        ImGui::Button(buf); ImGui::PopStyleColor(4);
+    };
+    roleChip("Main", N, IM_COL32(200, 200, 210, 255)); ImGui::SameLine();
+    roleChip("Starter", starters, kRoleCol[1]); ImGui::SameLine();
+    roleChip("Engine", engine, kRoleCol[2]); ImGui::SameLine();
+    roleChip("Non-eng", nonEng, kRoleCol[3]);
+    ImGui::Spacing();
+
+    // ── Per-card tagging list (thumbnail · name · role toggles) ──────────────
+    ImGui::BeginChild("##tags", {-1.f, 300.f}, true);
     if (distinct.empty())
         ImGui::TextDisabled("Add cards to the Main Deck to analyse it.");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     for (auto& d : distinct) {
         uint32_t code = d.first;
         ImGui::PushID((int)code);
         int& tag = m_cardTags[code];          // default-inserts 0 (Other)
         std::string nm = m_db.getCard(code).name;
         if (nm.empty()) nm = "#" + std::to_string(code);
+
+        float rowY = ImGui::GetCursorScreenPos().y;
+        // Thumbnail.
+        if (void* tex = m_rend.getCardTexture(code))
+            ImGui::Image(tex, {26.f, 38.f});
+        else
+            ImGui::Dummy({26.f, 38.f});
+        ImGui::SameLine();
+
+        // Name + copies, vertically centred against the thumb.
+        ImGui::BeginGroup();
+        ImGui::Dummy({0.f, 3.f});
         ImGui::Text("%dx", d.second);
-        ImGui::SameLine(40.f);
-        ImGui::SetNextItemWidth(120.f);
-        if (ImGui::Combo("##cat", &tag, kCats, 4)) saveCardTags();
-        ImGui::SameLine(0.f, 8.f);
+        ImGui::SameLine(0.f, 6.f);
+        float nameW = 230.f;
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + nameW);
         ImGui::TextUnformatted(nm.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndGroup();
+
+        // Role toggle buttons, right-aligned.
+        const char* kBtn[4] = { "O", "S", "E", "N" };
+        float btnW = 26.f, gap = 4.f;
+        float startX = ImGui::GetWindowContentRegionMax().x - (btnW * 4 + gap * 3);
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(startX);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 3.f);
+        for (int r = 0; r < 4; ++r) {
+            ImGui::PushID(r);
+            bool active = (tag == r);
+            ImVec4 c = ImGui::ColorConvertU32ToFloat4(kRoleCol[r]);
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                active ? ImVec4{c.x, c.y, c.z, 0.85f} : ImVec4{c.x, c.y, c.z, 0.14f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {c.x, c.y, c.z, 0.55f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {c.x, c.y, c.z, 0.95f});
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                active ? ImVec4{0.06f, 0.06f, 0.08f, 1.f} : ImVec4{c.x, c.y, c.z, 1.f});
+            if (ImGui::Button(kBtn[r], {btnW, 34.f})) { tag = r; saveCardTags(); }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", kRoleShort[r]);
+            ImGui::PopStyleColor(4);
+            ImGui::PopID();
+            if (r < 3) ImGui::SameLine(0.f, gap);
+        }
+        (void)rowY; (void)dl;
+        ImGui::Separator();
         ImGui::PopID();
     }
     ImGui::EndChild();
 
-    // Aggregate by role (weighted by copies).
-    int starters = 0, engine = 0, nonEng = 0;
-    for (auto& d : distinct) {
-        auto it = m_cardTags.find(d.first);
-        int t = (it == m_cardTags.end()) ? 0 : it->second;
-        if      (t == 1) starters += d.second;
-        else if (t == 2) engine   += d.second;
-        else if (t == 3) nonEng   += d.second;
-    }
-
-    ImGui::Separator();
-    ImGui::Text("Main deck %d  ·  Starters %d  ·  Engine %d  ·  Non-engine %d",
-                N, starters, engine, nonEng);
     ImGui::Spacing();
 
     auto rateCol = [](double p) -> ImVec4 {
@@ -10462,14 +10524,25 @@ void UI::drawDeckConsistency() {
     double open6 = 1.0 - hyperZero(N, starters, 6);
     double brick5 = hyperZero(N, starters, 5);
 
-    ImGui::TextUnformatted("Open at least one starter:");
-    ImGui::BulletText("Going first (5 cards):");
-    ImGui::SameLine(); ImGui::TextColored(rateCol(open5), "%.1f%%", open5 * 100.0);
-    ImGui::BulletText("Going second (6 cards):");
-    ImGui::SameLine(); ImGui::TextColored(rateCol(open6), "%.1f%%", open6 * 100.0);
+    // Visual odds bars.
+    auto oddsBar = [&](const char* label, double p) {
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine(190.f);
+        ImVec4 col = rateCol(p);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, col);
+        char ov[16]; snprintf(ov, sizeof(ov), "%.1f%%", p * 100.0);
+        ImGui::ProgressBar((float)p, {-1.f, 18.f}, ov);
+        ImGui::PopStyleColor();
+    };
+    if (UIStyle::fSmall) ImGui::PushFont(UIStyle::fSmall);
+    ImGui::TextDisabled("ODDS TO OPEN AT LEAST ONE STARTER");
+    if (UIStyle::fSmall) ImGui::PopFont();
+    ImGui::Spacing();
+    oddsBar("Going first  (5)", open5);
+    oddsBar("Going second (6)", open6);
     ImGui::Spacing();
     ImGui::TextColored(rateCol(1.0 - brick5),
-        "Brick (0 starters on 5): %.1f%%", brick5 * 100.0);
+        "Brick chance (0 starters on 5 cards): %.1f%%", brick5 * 100.0);
     ImGui::TextDisabled("Tip: 40-card decks usually aim for ~90%%+ to open a starter.");
 
     ImGui::Spacing();
@@ -11239,6 +11312,20 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::TextUnformatted(label);
             ImGui::PopStyleColor();
             if (UIStyle::fHeader) ImGui::PopFont();
+
+            // Live count badge: n / max, red when the section is out of legal
+            // range (main 40-60, extra/side 0-15).
+            {
+                int n = (int)zone.size();
+                int lo = (sec == 'm') ? 40 : 0;
+                int hi = (sec == 'm') ? 60 : 15;
+                bool ok = n >= lo && n <= hi;
+                ImVec4 cc = ok ? ImGui::ColorConvertU32ToFloat4(C.textMuted)
+                               : ImVec4{0.95f, 0.45f, 0.40f, 1.f};
+                ImGui::SameLine(0.f, 10.f);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextColored(cc, "%d / %d", n, hi);
+            }
             if (ImGui::BeginDragDropTarget()) {
                 const ImGuiPayload* p = ImGui::AcceptDragDropPayload("DECK_CARD");
                 if (p && p->DataSize == (int)sizeof(DeckDragPayload)) {
@@ -11365,6 +11452,26 @@ void UI::drawDeckBuilder(int w, int h) {
                             dl->AddText({bc.x - ns.x * 0.5f, bc.y - ns.y * 0.5f},
                                         bcol, n);
                         }
+                    }
+                }
+
+                // Role-tag badge (top-right): Starter / Engine / Non-engine,
+                // set in the Stats panel and persisted globally — so a tagged
+                // card shows its role everywhere it appears.
+                {
+                    auto it = m_cardTags.find(code);
+                    int role = (it == m_cardTags.end()) ? 0 : it->second;
+                    if (role > 0) {
+                        ImVec2 bc = {te.x - 11.f, tp.y + 11.f};
+                        ImU32 rcol = role == 1 ? IM_COL32(90, 215, 125, 255)
+                                   : role == 2 ? IM_COL32(110, 180, 255, 255)
+                                               : IM_COL32(210, 130, 240, 255);
+                        const char* rl = role == 1 ? "S" : role == 2 ? "E" : "N";
+                        dl->AddCircleFilled(bc, 9.f, IM_COL32(18, 18, 24, 240), 16);
+                        dl->AddCircle(bc, 9.f, rcol, 16, 2.f);
+                        ImVec2 ns = ImGui::CalcTextSize(rl);
+                        dl->AddText({bc.x - ns.x * 0.5f, bc.y - ns.y * 0.5f},
+                                    rcol, rl);
                     }
                 }
 
@@ -11562,6 +11669,21 @@ void UI::drawDeckBuilder(int w, int h) {
             if (isExtra) {
                 ImGui::SameLine(0.f, 6.f);
                 UIStyle::StatusChip("Extra Deck", C.accent);
+            }
+            // Role tag chip (set in the Stats panel) — shown next to the stats
+            // so the card's deckbuilding role is visible while browsing.
+            {
+                auto it = m_cardTags.find(code);
+                int role = (it == m_cardTags.end()) ? 0 : it->second;
+                if (role > 0) {
+                    ImU32 rcol = role == 1 ? IM_COL32(90, 215, 125, 255)
+                               : role == 2 ? IM_COL32(110, 180, 255, 255)
+                                           : IM_COL32(210, 130, 240, 255);
+                    const char* rl = role == 1 ? "Starter"
+                                   : role == 2 ? "Engine" : "Non-engine";
+                    ImGui::SameLine(0.f, 6.f);
+                    UIStyle::StatusChip(rl, rcol);
+                }
             }
 
             ImGui::Dummy({1.f, 6.f});
