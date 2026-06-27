@@ -4698,6 +4698,12 @@ void UI::handleDuelHotkeys() {
                 submitMpChoice(sel.type, 1);          // Yes / activate
             else if (ImGui::IsKeyPressed(ImGuiKey_N, false))
                 submitMpChoice(sel.type, 0);          // No / decline
+            // Right-click anywhere = No, for fast declines. Skip when the same
+            // click just pinned a card zoom (right-click-to-zoom still works);
+            // m_zoomCard is set earlier this frame by the field/hand renderers.
+            else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
+                     m_zoomCard == 0)
+                submitMpChoice(sel.type, 0);          // No / decline
             break;
         case WaitType::SelectOption: {
             int n = (int)sel.options.size();
@@ -8883,6 +8889,8 @@ void UI::drawSelectionPanel(int pw, int ph) {
         if (ImGui::Button("Yes##yn", {hw, 36.f})) submitMpChoice(WaitType::SelectYesNo, 1);
         ImGui::SameLine(0.f, 8.f);
         if (ImGui::Button("No##yn",  {hw, 36.f})) submitMpChoice(WaitType::SelectYesNo, 0);
+        if (m_net.isOffline() && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tip: right-click anywhere = No");
         break;
     }
 
@@ -8943,6 +8951,8 @@ void UI::drawSelectionPanel(int pw, int ph) {
         if (ImGui::Button("Yes##eyn", {hw, 36.f})) submitMpChoice(WaitType::SelectEffectYn, 1);
         ImGui::SameLine(0.f, 8.f);
         if (ImGui::Button("No##eyn",  {hw, 36.f})) submitMpChoice(WaitType::SelectEffectYn, 0);
+        if (m_net.isOffline() && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tip: right-click anywhere = No");
         break;
     }
 
