@@ -2524,6 +2524,10 @@ void UI::loadSettings() {
     m_showLegalGlow   = m_settings.showLegalGlow;
     // Push the on-demand card-art download preference into the renderer.
     m_rend.setImageDownload(m_settings.downloadCardImages);
+    // Apply the saved card sleeve, if any (falls back silently to the default
+    // card back when the file is missing).
+    if (!m_settings.cardSleeve.empty())
+        m_rend.setCardBack("assets/sleeves/" + m_settings.cardSleeve);
     // Kick off the in-app update check (no-op unless a repo was baked in).
     m_update.setEnabled(m_settings.checkForUpdates);
     m_update.start(edo::kAppVersion, edo::kUpdateRepo);
@@ -4273,6 +4277,60 @@ void UI::drawLobby(int w, int h) {
         savedToggle("Large card preview",       &m_largePreview);
         savedToggle("Show zone labels",         &m_showZoneLabels);
         savedToggle("Show legal-action glow",   &m_showLegalGlow);
+
+        // — Card sleeve picker — click a thumbnail to set the card back. —
+        UIStyle::SectionHeader("Card sleeve");
+        {
+            namespace fs = std::filesystem;
+            std::vector<std::string> sleeves;
+            sleeves.push_back("");                    // "Default" tile first
+            std::error_code ec;
+            if (fs::is_directory("assets/sleeves", ec))
+                for (auto& e : fs::directory_iterator("assets/sleeves", ec)) {
+                    std::string ext = e.path().extension().string();
+                    for (char& ch : ext) ch = (char)tolower((unsigned char)ch);
+                    if (ext == ".png" || ext == ".jpg")
+                        sleeves.push_back(e.path().filename().string());
+                }
+            if (sleeves.size() > 2)
+                std::sort(sleeves.begin() + 1, sleeves.end());
+
+            const float thumbW = 52.f, thumbH = 74.f;
+            float availW = ImGui::GetContentRegionAvail().x;
+            int perRow = std::max(1, (int)(availW / (thumbW + 10.f)));
+            int col = 0;
+            for (size_t i = 0; i < sleeves.size(); ++i) {
+                const std::string& s = sleeves[i];
+                bool selected = (s == m_settings.cardSleeve);
+                ImGui::PushID((int)i);
+                void* tex = s.empty()
+                    ? m_rend.loadCachedImage("assets/card_back.png")
+                    : m_rend.loadCachedImage("assets/sleeves/" + s);
+                if (!tex) tex = m_rend.getBackTexture();
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##slv", {thumbW, thumbH});
+                bool clicked = ImGui::IsItemClicked();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImVec2 br{p.x + thumbW, p.y + thumbH};
+                if (tex) dl->AddImage(tex, p, br);
+                else     dl->AddRectFilled(p, br, IM_COL32(40, 46, 70, 255), 4.f);
+                if (selected)
+                    dl->AddRect(p, br, IM_COL32(232, 196, 110, 255), 4.f, 0, 3.f);
+                else if (ImGui::IsItemHovered())
+                    dl->AddRect(p, br, IM_COL32(255, 255, 255, 160), 4.f, 0, 1.5f);
+                if (clicked) {
+                    m_settings.cardSleeve = s;
+                    m_rend.setCardBack(s.empty() ? "assets/card_back.png"
+                                                 : ("assets/sleeves/" + s));
+                    saveSettings();
+                }
+                ImGui::PopID();
+                if (++col < perRow && i + 1 < sleeves.size())
+                    ImGui::SameLine(0.f, 10.f);
+                else col = 0;
+            }
+            ImGui::TextDisabled("Drop more PNGs in assets/sleeves/ to add sleeves.");
+        }
         ImGui::Separator();
 
         // — Animations (Stage A) — every change re-syncs the live AnimManager.

@@ -103,6 +103,7 @@ struct Settings {
 #ifndef EDOPRO_DEFAULT_RELAY
 #define EDOPRO_DEFAULT_RELAY ""
 #endif
+    std::string cardSleeve    = "";   // file in assets/sleeves/ ("" = default back)
     std::string mpDisplayName = "Player";
     std::string mpHostIP      = (EDOPRO_DEFAULT_RELAY[0] ? EDOPRO_DEFAULT_RELAY
                                                          : "127.0.0.1");
@@ -213,6 +214,7 @@ struct Settings {
         f << "autoSaveReplays="   << (autoSaveReplays   ? "1" : "0") << "\n";
         f << "\n# Multiplayer\n";
         f << "mpDisplayName="     << mpDisplayName << "\n";
+        f << "cardSleeve="        << cardSleeve    << "\n";
         f << "mpHostIP="          << mpHostIP      << "\n";
         f << "mpPort="            << mpPort        << "\n";
         f << "mpMode="            << mpMode        << "\n";
@@ -266,6 +268,7 @@ private:
         else if (k == "fastTurns")         fastTurns          = boolFromStr(v);
         else if (k == "autoSaveReplays")   autoSaveReplays   = boolFromStr(v);
         else if (k == "mpDisplayName")     mpDisplayName     = v;
+        else if (k == "cardSleeve")        cardSleeve        = v;
         else if (k == "mpHostIP")          mpHostIP          = v;
         else if (k == "mpPort")            mpPort            = intFromStr(v, mpPort);
         else if (k == "mpMode")            mpMode            = v;

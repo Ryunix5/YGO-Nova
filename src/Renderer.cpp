@@ -114,6 +114,28 @@ void Renderer::init() {
     m_fetcher.start();
 }
 
+void* Renderer::loadCachedImage(const std::string& path) {
+    auto it = m_imageCache.find(path);
+    if (it != m_imageCache.end()) return it->second;
+    void* t = loadTexture(path);
+    m_imageCache[path] = t;          // cache even nullptr so it won't retry
+    return t;
+}
+
+bool Renderer::setCardBack(const std::string& path) {
+    void* tex = loadTexture(path);
+    if (!tex) return false;
+    // Free the previous back (procedural fallback or an earlier sleeve) so
+    // switching sleeves repeatedly doesn't leak GL textures.
+    if (m_backTex) {
+        GLuint old = (GLuint)(uintptr_t)m_backTex;
+        glDeleteTextures(1, &old);
+    }
+    m_backTex  = tex;
+    m_backInfo = "card_back (sleeve): " + path;
+    return true;
+}
+
 void Renderer::shutdown() {
     m_fetcher.stop();
     for (auto& [code, tex] : m_cardTextures) {

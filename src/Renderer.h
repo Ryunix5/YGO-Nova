@@ -25,6 +25,12 @@ public:
     // Falls back to the back-of-card texture if art is missing.
     void* getCardTexture(uint32_t code);
     void* getBackTexture() { return m_backTex; }
+    // Swap the card back / sleeve at runtime (player picks one in Settings).
+    // Returns false and keeps the current back if the image can't be loaded.
+    bool  setCardBack(const std::string& path);
+    // Load + cache an arbitrary image by path (sleeve thumbnails, etc.). Returns
+    // the cached texture (or nullptr, also cached, so it won't retry forever).
+    void* loadCachedImage(const std::string& path);
     void* getUnknownTexture() { return m_unknownTex; }
     // Human-readable card-back load status ("card_back loaded: <path>
     // size=WxH" or "procedural fallback; searched: ..."). Surfaced in the
@@ -37,6 +43,7 @@ private:
     void* generateCardBackTexture();   // procedural card back when no asset exists
 
     std::unordered_map<uint32_t, void*> m_cardTextures;
+    std::unordered_map<std::string, void*> m_imageCache;   // arbitrary images
     void* m_backTex    = nullptr;
     void* m_unknownTex = nullptr;
     std::string m_backInfo;            // card-back load diagnostics
