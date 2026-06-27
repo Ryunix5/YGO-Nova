@@ -244,6 +244,18 @@ private:
     void   startPuzzleByIndex(int idx);
     void   drawPuzzleOverlay(int w, int h);   // goal banner + solved/failed
 
+    // Best-of-3 match + side decking (#14). Offline only.
+    bool   m_setupMatchMode = false;     // Duel Setup toggle
+    bool   m_matchActive    = false;     // a best-of-3 is in progress
+    int    m_matchWins[2]   = {0, 0};    // [0] = you, [1] = opponent
+    int    m_matchGameNo    = 1;
+    bool   m_matchGameScored = false;    // current game's result already counted
+    bool   m_matchSiding    = false;     // deck builder is in side-deck mode
+    std::string m_matchPlayerPath;       // your deck for this match (temp once sided)
+    std::string m_matchOppPath;          // opponent deck (fixed across games)
+    std::string m_matchOppName;
+    void   startMatchGame();             // begin the next match game from stored decks
+
     // Match history + win/loss stats (#8).
     struct MatchRecord { std::string when, myDeck, oppDeck; char result = 'D'; };
     std::vector<MatchRecord> m_matchHistory;

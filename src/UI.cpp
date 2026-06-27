@@ -3003,6 +3003,28 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
     return true;
 }
 
+// #14 — start the next game of a best-of-3 match from the stored decks. Each
+// game gets its own coin toss; side-deck edits between games are written to a
+// temp .ydk that m_matchPlayerPath points at.
+void UI::startMatchGame() {
+    m_matchGameScored = false;
+    m_dm.setNoShuffle(m_setupNoShuffle);
+    m_dm.setPassiveAI(m_setupPassiveAI);
+    if (startOfflineDuelWithCoinToss(m_matchPlayerPath, m_matchOppPath,
+                                     (uint32_t)m_setupLP,
+                                     (uint32_t)m_setupHand, 1)) {
+        m_screen = Screen::Duel;
+        gAudio().play("duel_start");
+        pushToast("Match — Game " + std::to_string(m_matchGameNo) +
+                  "  (You " + std::to_string(m_matchWins[0]) + " – " +
+                  std::to_string(m_matchWins[1]) + " Opp)",
+                  IM_COL32(200, 180, 255, 255), 2.8);
+    } else {
+        m_matchActive = false;
+        gAudio().play("error");
+    }
+}
+
 // Build a short label for the response about to be recorded, from the live
 // selection it answers. Called BEFORE the engine consumes the response (the
 // recorder fires before OCG_DuelSetResponse), so m_dm.selection() is valid.
@@ -4602,6 +4624,10 @@ void UI::drawLobby(int w, int h) {
                         &m_setupPassiveAI);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("The opponent just passes, so you can practise combos");
+        ImGui::Checkbox("Best of 3 match (with side decking)", &m_setupMatchMode);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Play a 3-game match; adjust your deck from your Side "
+                              "Deck between games");
 
         ImGui::Dummy({1.f, 8.f});
         bool canStart = (m_deck0Path[0] != '\0') &&
@@ -4626,11 +4652,26 @@ void UI::drawLobby(int w, int h) {
             // Apply the custom options before the duel registers its engine.
             m_dm.setNoShuffle(m_setupNoShuffle);
             m_dm.setPassiveAI(m_setupPassiveAI);
-            // Coin toss decides who takes the first turn; the helper registers
-            // the decks in toss order and wires replay + testing capture.
-            if (startOfflineDuelWithCoinToss(m_deck0Path, oppPath.c_str(),
-                                             (uint32_t)m_setupLP,
-                                             (uint32_t)m_setupHand, 1)) {
+            // Best-of-3: store the decks and run a match; otherwise a single duel.
+            m_matchActive = m_setupMatchMode;
+            bool ok;
+            if (m_matchActive) {
+                m_matchWins[0] = m_matchWins[1] = 0;
+                m_matchGameNo  = 1;
+                m_matchPlayerPath = m_deck0Path;
+                m_matchOppPath    = oppPath;
+                m_matchOppName    = oppName;
+                m_matchSiding     = false;
+                startMatchGame();
+                ok = m_dm.isRunning();
+            } else {
+                // Coin toss decides who takes the first turn; the helper registers
+                // the decks in toss order and wires replay + testing capture.
+                ok = startOfflineDuelWithCoinToss(m_deck0Path, oppPath.c_str(),
+                                                  (uint32_t)m_setupLP,
+                                                  (uint32_t)m_setupHand, 1);
+            }
+            if (ok) {
                 m_screen = Screen::Duel;
                 gAudio().play("duel_start");
                 if (!oppName.empty())
@@ -8485,6 +8526,59 @@ void UI::drawSelectionPanel(int pw, int ph) {
     // shows the panel.
     const bool clientView =
         m_mpHostAuth && m_net.isClient() && m_mpRemoteDone && !m_dm.isDone();
+    // Best-of-3 match owns its own end screen: score the game, then offer Side
+    // Deck / Next Game, or end the match when someone reaches 2 wins.
+    if (m_matchActive && m_dm.isDone()) {
+        const int me = m_net.localPlayerIndex();
+        bool youWon = (m_dm.winner() == me);
+        bool draw   = (m_dm.winner() != 0 && m_dm.winner() != 1);
+        if (!m_matchGameScored) {
+            if (!draw) m_matchWins[youWon ? 0 : 1]++;
+            m_matchGameScored = true;
+            gAudio().play(youWon ? "victory" : "defeat");
+        }
+        bool matchOver = m_matchWins[0] >= 2 || m_matchWins[1] >= 2;
+        if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+        ImGui::TextColored({1.f, 0.85f, 0.25f, 1.f}, "Game %d — %s",
+            m_matchGameNo, draw ? "Draw" : (youWon ? "You win" : "You lose"));
+        if (UIStyle::fHeader) ImGui::PopFont();
+        ImGui::Text("Match score — You %d : %d Opponent",
+                    m_matchWins[0], m_matchWins[1]);
+        ImGui::Spacing();
+        if (matchOver) {
+            bool wonMatch = m_matchWins[0] > m_matchWins[1];
+            ImGui::TextColored(wonMatch ? ImVec4{0.45f,0.92f,0.55f,1.f}
+                                        : ImVec4{0.95f,0.55f,0.45f,1.f},
+                wonMatch ? "You won the match!" : "You lost the match.");
+            ImGui::Spacing();
+            if (UIStyle::GhostButton("Return to Lobby", {bw, 32.f})) {
+                if (m_dm.isRunning()) m_dm.endDuel();
+                m_matchActive = false;
+                m_screen = Screen::Lobby;
+                m_anim.clear(); m_zoneRectsReady = false;
+            }
+        } else {
+            ImGui::TextDisabled("Adjust your deck from your Side Deck, then "
+                                "play the next game.");
+            ImGui::Spacing();
+            if (UIStyle::PrimaryButton("Side Deck", {bw, 34.f})) {
+                if (m_dm.isRunning()) m_dm.endDuel();
+                // Load your match deck into the builder in side-deck mode.
+                m_editDeck  = loadYdk(m_matchPlayerPath);
+                m_savedDeck = m_editDeck;
+                m_matchSiding = true;
+                m_screen = Screen::DeckBuilder;
+                m_anim.clear(); m_zoneRectsReady = false;
+            }
+            if (UIStyle::GhostButton("Next Game (keep deck)", {bw, 30.f})) {
+                if (m_dm.isRunning()) m_dm.endDuel();
+                m_matchGameNo++;
+                m_anim.clear(); m_zoneRectsReady = false;
+                startMatchGame();
+            }
+        }
+        return;
+    }
     // Puzzle mode owns its own end screen (solved / failed + Retry), so it
     // never shows the deck-based Rematch flow.
     if (m_puzzleMode && m_dm.isDone()) {
@@ -10990,7 +11084,8 @@ void UI::startPuzzleByIndex(int idx) {
     // Tear down any prior replay/testing capture so puzzle responses are never
     // appended to a stale stream (puzzles are not recorded).
     finalizeReplay("entering puzzle");
-    m_replayMode = false;
+    m_replayMode  = false;
+    m_matchActive = false;   // a puzzle is not a match
     m_dm.setLocalMode(true);
     m_snap.clear();
 
@@ -11278,6 +11373,32 @@ void UI::drawDeckBuilder(int w, int h) {
         bdl->AddLine({bp.x, bp.y + BAR_H - 1}, {bp.x + w, bp.y + BAR_H - 1},
                      C.borderSoft, 1.f);
 
+        // In match side-deck mode the Back button becomes "Start next game":
+        // it writes the sided deck to a temp file and continues the match.
+        if (m_matchSiding) {
+            char lbl[40];
+            snprintf(lbl, sizeof(lbl), "Start Game %d >", m_matchGameNo + 1);
+            if (UIStyle::PrimaryButton(lbl, {150.f, 32.f})) {
+                const std::string tmp = "assets/decks/.match_player.ydk";
+                saveYdk(m_editDeck, tmp);
+                m_matchPlayerPath = tmp;
+                m_matchSiding = false;
+                m_matchGameNo++;
+                startMatchGame();
+                ImGui::End();
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(2);
+                return;
+            }
+            ImGui::SameLine(0.f, 14.f);
+            if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::ColorConvertU32ToFloat4(C.textHi));
+            ImGui::Text("Side Deck — Game %d  (You %d : %d Opp)",
+                        m_matchGameNo + 1, m_matchWins[0], m_matchWins[1]);
+            ImGui::PopStyleColor();
+            if (UIStyle::fHeader) ImGui::PopFont();
+        } else {
         if (UIStyle::GhostButton("< Back", {110.f, 32.f})) {
             m_screen = Screen::Lobby;
             ImGui::End();
@@ -11291,6 +11412,7 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::TextUnformatted("Deck Builder");
         ImGui::PopStyleColor();
         if (UIStyle::fHeader) ImGui::PopFont();
+        }
 
         // Right cluster: combo + name input + Save + Refresh + the ghost
         // buttons (Sort / Stats / Copy / Paste) — laid out from the right edge.
@@ -13119,8 +13241,11 @@ void UI::refreshDeckFiles() {
     namespace fs = std::filesystem;
     std::error_code ec;
     for (auto& entry : fs::directory_iterator("assets/decks", ec)) {
-        if (entry.path().extension() == ".ydk")
-            m_deckFiles.push_back(entry.path().filename().string());
+        if (entry.path().extension() == ".ydk") {
+            std::string fn = entry.path().filename().string();
+            if (!fn.empty() && fn[0] == '.') continue;   // hide temp/.match files
+            m_deckFiles.push_back(fn);
+        }
     }
     std::sort(m_deckFiles.begin(), m_deckFiles.end());
     if (m_selDeckIdx >= (int)m_deckFiles.size())
