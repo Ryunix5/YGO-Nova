@@ -56,7 +56,12 @@ struct Anim {
         CardTrail,    // a card-sized ghost gliding a → b (draw / send / banish)
         // ── Chain / targeting feedback ─────────────────────────────────────
         ChainPop,     // burst ring + card name + "CHAIN n" badge on activation
-        TargetLock    // converging crosshair reticle on a targeted card
+        TargetLock,   // converging crosshair reticle on a targeted card
+        // ── Comprehension pack ─────────────────────────────────────────────
+        SummonBurst,  // colored ring + type label at a zone (Synchro/Xyz/…)
+        Reveal,       // a card shown large in centre, then shrinks to a zone
+        Vortex,       // purple dimensional swirl (banish)
+        Negate        // shatter shards + red ✕ + "NEGATED" over a card
     };
     Type     type   = Pulse;
     double   start  = 0.0;       // ImGui::GetTime() seconds when queued
@@ -67,7 +72,8 @@ struct Anim {
     float    radius = 24.f;
     int      ivalue = 0;
     char     text[40] = {};      // banner / damage label (widened for banners)
-    void*    tex    = nullptr;   // card texture for BossCard / CardTrail
+    char     text2[40] = {};     // secondary line — ChainPop effect verb, etc.
+    void*    tex    = nullptr;   // card texture for BossCard / CardTrail / Reveal
 };
 
 class AnimManager {
@@ -170,9 +176,42 @@ public:
     // activation (especially the AI's) clearly visible. `link` 0 hides the
     // badge. Rendered on the foreground list by renderTop so it sits on top.
     void chainPop(ImVec2 center, const char* name, int link, ImU32 col,
-                  double dur = 1.25) {
+                  const char* verb = nullptr, double dur = 1.25) {
         Anim it; it.type = Anim::ChainPop; it.start = ImGui::GetTime();
         it.dur = dur; it.a = center; it.color = col; it.ivalue = link;
+        std::snprintf(it.text, sizeof(it.text), "%s", name ? name : "");
+        std::snprintf(it.text2, sizeof(it.text2), "%s", verb ? verb : "");
+        push(it);
+    }
+    // Colored summon-type entrance at a zone — an expanding ring + a type word
+    // (SYNCHRO / XYZ / FUSION / LINK / RITUAL / SUMMON). `r` ~ half the tile.
+    void summonBurst(ImVec2 center, float r, const char* typeLabel, ImU32 col,
+                     double dur = 0.85) {
+        Anim it; it.type = Anim::SummonBurst; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = center; it.radius = r; it.color = col;
+        std::snprintf(it.text, sizeof(it.text), "%s", typeLabel ? typeLabel : "");
+        push(it);
+    }
+    // Reveal a searched/added card: shown large at `from`, then shrinks toward
+    // `to` (the hand). `tex` is the card art; `name` labels it.
+    void reveal(ImVec2 from, ImVec2 to, void* tex, const char* name,
+                double dur = 1.15) {
+        Anim it; it.type = Anim::Reveal; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = from; it.b = to; it.tex = tex;
+        it.color = IM_COL32(120, 200, 255, 255);
+        std::snprintf(it.text, sizeof(it.text), "%s", name ? name : "");
+        push(it);
+    }
+    // Banish vortex — a purple dimensional swirl centred on a card.
+    void vortex(ImVec2 center, double dur = 0.75) {
+        Anim it; it.type = Anim::Vortex; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = center; it.color = IM_COL32(186, 116, 240, 255);
+        push(it);
+    }
+    // Negate — shatter shards + a red ✕ + "NEGATED" over the negated card.
+    void negate(ImVec2 center, const char* name, double dur = 1.05) {
+        Anim it; it.type = Anim::Negate; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = center; it.color = IM_COL32(255, 70, 70, 255);
         std::snprintf(it.text, sizeof(it.text), "%s", name ? name : "");
         push(it);
     }
@@ -325,9 +364,53 @@ public:
                 dl->AddLine({c.x, c.y + 4}, {c.x, c.y + rr + 4}, col, 1.6f);
                 break;
             }
+            case Anim::SummonBurst: {
+                // Expanding colored ring + a couple of trailing rings + the
+                // summon-type word fading above the zone.
+                float r = it.radius * (0.5f + 1.4f * (float)t);
+                dl->AddCircle(it.a, r, withAlpha(it.color, (unsigned)(230 * a)),
+                              40, 3.0f * a + 0.8f);
+                dl->AddCircle(it.a, r * 0.7f,
+                              withAlpha(it.color, (unsigned)(140 * a)), 36, 1.6f);
+                if (it.text[0]) {
+                    ImFont* font = ImGui::GetFont();
+                    float fsz = 16.f;
+                    ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, it.text);
+                    ImVec2 tp { it.a.x - ts.x * 0.5f,
+                                it.a.y - it.radius - 14.f - 10.f * (float)t };
+                    dl->AddText(font, fsz, {tp.x + 1.5f, tp.y + 1.5f},
+                        withAlpha(IM_COL32(0,0,0,255), (unsigned)(170 * a)), it.text);
+                    dl->AddText(font, fsz, tp,
+                        withAlpha(it.color, (unsigned)(255 * a)), it.text);
+                }
+                break;
+            }
+            case Anim::Vortex: {
+                // Concentric spiralling arcs collapsing inward — a banish rift.
+                float spin = (float)t * 8.0f;
+                for (int k = 0; k < 3; ++k) {
+                    float rr = (40.f - k * 10.f) * (1.f - 0.5f * (float)t);
+                    int seg = 20;
+                    for (int s = 0; s < seg; ++s) {
+                        float a0 = spin + k * 1.1f + (float)s / seg * 6.2831853f;
+                        float a1 = a0 + 0.20f;
+                        ImVec2 p0 { it.a.x + std::cos(a0) * rr,
+                                    it.a.y + std::sin(a0) * rr };
+                        ImVec2 p1 { it.a.x + std::cos(a1) * rr,
+                                    it.a.y + std::sin(a1) * rr };
+                        dl->AddLine(p0, p1,
+                            withAlpha(it.color, (unsigned)(220 * a)), 2.0f);
+                    }
+                }
+                dl->AddCircleFilled(it.a, 6.f * (1.f - (float)t) + 2.f,
+                    withAlpha(it.color, (unsigned)(180 * a)), 16);
+                break;
+            }
             case Anim::Banner:
             case Anim::BossCard:
             case Anim::ChainPop:
+            case Anim::Reveal:
+            case Anim::Negate:
                 // Overlay types — drawn by renderTop() on the foreground
                 // list so they sit above the info panel + zones. Skipped
                 // here, but still evicted by the t>=1 check above.
@@ -350,6 +433,8 @@ public:
             if (it.type == Anim::Banner)   drawBanner(dl, winTL, it, t);
             else if (it.type == Anim::BossCard) drawBoss(dl, winTL, it, t);
             else if (it.type == Anim::ChainPop) drawChainPop(dl, it, t);
+            else if (it.type == Anim::Reveal)   drawReveal(dl, it, t);
+            else if (it.type == Anim::Negate)   drawNegate(dl, it, t);
         }
     }
 
@@ -462,7 +547,84 @@ private:
             dl->AddText(font, fsz, tp,
                 withAlpha(IM_COL32(250, 240, 220, 255),
                           (unsigned)(255 * a)), it.text);
+            // Intent verb under the name (e.g. "Negate & Destroy").
+            if (it.text2[0]) {
+                float vs = 13.f;
+                ImVec2 vts = font->CalcTextSizeA(vs, FLT_MAX, 0.f, it.text2);
+                ImVec2 vp { c.x - vts.x * 0.5f, tp.y + ts.y + 1.f };
+                dl->AddText(font, vs, {vp.x + 1.f, vp.y + 1.f},
+                    withAlpha(IM_COL32(0,0,0,255), (unsigned)(170 * a)), it.text2);
+                dl->AddText(font, vs, vp,
+                    withAlpha(it.color, (unsigned)(255 * a)), it.text2);
+            }
         }
+    }
+
+    // ── Reveal: searched card shown large, then shrinking toward the hand ──
+    void drawReveal(ImDrawList* dl, const Anim& it, double t) {
+        // 0–.45 grow+hold at source, .45–1 shrink + glide to destination.
+        float a, scale; ImVec2 c = it.a;
+        if (t < 0.45) { a = (t < 0.12) ? (float)(t / 0.12) : 1.f; scale = 1.f; }
+        else {
+            float k = (float)((t - 0.45) / 0.55);
+            a = 1.f - k * 0.9f; scale = 1.f - 0.7f * k;
+            c.x += (it.b.x - it.a.x) * k; c.y += (it.b.y - it.a.y) * k;
+        }
+        float ch = 150.f * scale, cw = ch * (421.f / 614.f);
+        ImVec2 p0 { c.x - cw * 0.5f, c.y - ch * 0.5f };
+        ImVec2 p1 { c.x + cw * 0.5f, c.y + ch * 0.5f };
+        for (int g = 3; g >= 1; --g)
+            dl->AddRectFilled({p0.x - g*5.f, p0.y - g*5.f},
+                {p1.x + g*5.f, p1.y + g*5.f},
+                withAlpha(it.color, (unsigned)((26 / g) * a)), 8.f);
+        if (it.tex)
+            dl->AddImageRounded((ImTextureID)it.tex, p0, p1, {0,0}, {1,1},
+                withAlpha(IM_COL32_WHITE, (unsigned)(255 * a)), 5.f);
+        else
+            dl->AddRectFilled(p0, p1,
+                withAlpha(IM_COL32(30, 40, 70, 255), (unsigned)(235 * a)), 5.f);
+        dl->AddRect(p0, p1, withAlpha(it.color, (unsigned)(245 * a)), 5.f, 0, 2.f);
+        if (it.text[0] && t < 0.5) {
+            ImFont* font = ImGui::GetFont();
+            float fsz = 16.f;
+            ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, it.text);
+            ImVec2 tp { c.x - ts.x * 0.5f, p0.y - ts.y - 8.f };
+            dl->AddText(font, fsz, {tp.x + 1.5f, tp.y + 1.5f},
+                withAlpha(IM_COL32(0,0,0,255), (unsigned)(180 * a)), it.text);
+            dl->AddText(font, fsz, tp,
+                withAlpha(IM_COL32(170, 220, 255, 255), (unsigned)(255 * a)),
+                it.text);
+        }
+    }
+
+    // ── Negate: shatter shards + red ✕ + "NEGATED" ─────────────────────────
+    void drawNegate(ImDrawList* dl, const Anim& it, double t) {
+        float a = 1.f - (float)t;
+        ImVec2 c = it.a;
+        // Shards flying outward.
+        for (int s = 0; s < 10; ++s) {
+            float ang = (float)s / 10.f * 6.2831853f + 0.3f;
+            float rr = 8.f + 46.f * (float)t;
+            ImVec2 p { c.x + std::cos(ang) * rr, c.y + std::sin(ang) * rr };
+            ImVec2 d { p.x + std::cos(ang) * 8.f, p.y + std::sin(ang) * 8.f };
+            dl->AddLine(p, d, withAlpha(it.color, (unsigned)(220 * a)), 2.2f);
+        }
+        // Red ✕.
+        float x = 22.f;
+        dl->AddLine({c.x - x, c.y - x}, {c.x + x, c.y + x},
+                    withAlpha(it.color, (unsigned)(255 * a)), 4.0f);
+        dl->AddLine({c.x + x, c.y - x}, {c.x - x, c.y + x},
+                    withAlpha(it.color, (unsigned)(255 * a)), 4.0f);
+        // "NEGATED" label.
+        ImFont* font = ImGui::GetFont();
+        float fsz = 18.f;
+        const char* lab = "NEGATED";
+        ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, lab);
+        ImVec2 tp { c.x - ts.x * 0.5f, c.y + x + 6.f };
+        dl->AddText(font, fsz, {tp.x + 1.5f, tp.y + 1.5f},
+            withAlpha(IM_COL32(0,0,0,255), (unsigned)(190 * a)), lab);
+        dl->AddText(font, fsz, tp,
+            withAlpha(IM_COL32(255, 120, 120, 255), (unsigned)(255 * a)), lab);
     }
 
     // ── BossCard: dim field + energy rings + enlarged card + type label ───

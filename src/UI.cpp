@@ -5491,6 +5491,31 @@ void UI::drawDuel(int w, int h) {
                 m_anim.ring(tCtr, ev.direct ? 56.f : 40.f, col, 0.55);
                 m_anim.pulse(tCtr, ev.direct ? 30.f : 24.f, col, 0.40);
 
+                // Combat math caption — "3000 vs 2500" above the clash, so the
+                // outcome reads at a glance. (Direct attacks have no defender.)
+                if (!ev.direct) {
+                    auto cardAt = [&](uint8_t cn, uint8_t lc, uint32_t sq)->uint32_t{
+                        if (cn > 1 || lc != LOC_MZONE) return 0;
+                        for (const auto& m : m_dm.field().monsters[cn])
+                            if (m.seq == sq) return m.code;
+                        return 0;
+                    };
+                    uint32_t aCode = cardAt(ev.attackerCon, ev.attackerLoc, ev.attackerSeq);
+                    uint32_t tCode = cardAt(ev.targetCon, ev.targetLoc, ev.targetSeq);
+                    if (aCode && tCode) {
+                        CardInfo aci = m_db.getCard(aCode), tci = m_db.getCard(tCode);
+                        bool tdef = (ev.targetPos & (POS_FACEUP_DEFENSE |
+                                                     POS_FACEDOWN_DEFENSE)) != 0;
+                        int tval = tdef ? tci.def : tci.atk;
+                        char mathbuf[32];
+                        snprintf(mathbuf, sizeof(mathbuf), "%d vs %d", aci.atk, tval);
+                        ImVec2 mid{ (aCtr.x + tCtr.x) * 0.5f,
+                                    (aCtr.y + tCtr.y) * 0.5f - 20.f };
+                        m_anim.floatText(mid, mathbuf, IM_COL32(255, 236, 180, 255),
+                                         1.10);
+                    }
+                }
+
                 // Attack SFX — single hit per event.
                 gAudio().play("attack");
             }
@@ -5515,21 +5540,48 @@ void UI::drawDuel(int w, int h) {
                                  { *out = mid(m_rectDeck_tl[con], m_rectDeck_br[con]); return true; }
             return false;
         };
+        // Short "intent verb" derived from a card's effect text, so the chain
+        // pop reads "Baronne de Fleur — Negate & Destroy" not just a flash.
+        auto effectVerb = [&](uint32_t code) -> std::string {
+            std::string d = m_db.getCard(code).desc;
+            for (char& ch : d) ch = (char)tolower((unsigned char)ch);
+            bool neg = d.find("negate") != std::string::npos;
+            bool des = d.find("destroy") != std::string::npos;
+            bool ban = d.find("banish") != std::string::npos;
+            if (neg && des) return "Negate & Destroy";
+            if (neg)        return "Negate";
+            if (ban)        return "Banish";
+            if (des)        return "Destroy";
+            if (d.find("special summon") != std::string::npos) return "Special Summon";
+            if (d.find("draw")  != std::string::npos) return "Draw";
+            if (d.find("add 1") != std::string::npos ||
+                d.find("to your hand") != std::string::npos) return "Search";
+            return "";
+        };
         if (m_settings.animationsEnabled) {
             auto chains = m_dm.drainChainEvents();
             int cshown = 0;
+            bool haveSrc = false; ImVec2 srcCenter{};
             for (const ChainEvent& ce : chains) {
                 if (cshown++ >= 4) break;
                 ImVec2 c;
                 if (!centerOf(ce.con, ce.loc, ce.seq, &c)) continue;
-                std::string nm = m_db.getCard(ce.code).name;
-                if (nm.empty()) nm = "#" + std::to_string(ce.code);
+                srcCenter = c; haveSrc = true;   // tether anchor for targets
+                CardInfo ci = m_db.getCard(ce.code);
+                std::string nm = ci.name.empty()
+                    ? ("#" + std::to_string(ce.code)) : ci.name;
                 const ImU32 gold = IM_COL32(255, 212, 96, 255);
-                // Tile flash if on a field zone, then the activation burst.
                 ImVec2 tl, br;
-                if (locInfoToRect(ce.con, ce.loc, ce.seq, &tl, &br))
-                    m_anim.zoneFlash(tl, br, gold, 0.45);
-                m_anim.chainPop(c, nm.c_str(), ce.link, gold, 1.25);
+                bool onField = locInfoToRect(ce.con, ce.loc, ce.seq, &tl, &br);
+                if (onField) m_anim.zoneFlash(tl, br, gold, 0.45);
+                // Trap-spring: a set Trap snapping face-up gets a board jolt.
+                if ((ci.type & TYPE_TRAP) && onField) {
+                    m_anim.emitShake(5.f, 0.25);
+                    gAudio().play("set");
+                }
+                std::string verb = effectVerb(ce.code);
+                m_anim.chainPop(c, nm.c_str(), ce.link, gold,
+                                verb.empty() ? nullptr : verb.c_str(), 1.25);
                 gAudio().play("confirm");
             }
             auto targets = m_dm.drainTargetEvents();
@@ -5538,11 +5590,30 @@ void UI::drawDuel(int w, int h) {
                 if (tshown++ >= 6) break;
                 ImVec2 c;
                 if (!centerOf(te.con, te.loc, te.seq, &c)) continue;
+                // Source → target tether so causality is obvious.
+                if (haveSrc)
+                    m_anim.beam(srcCenter, c, IM_COL32(255, 150, 90, 255), 0.45);
                 m_anim.targetLock(c, IM_COL32(255, 86, 86, 255), 0.85);
+            }
+            // Negated effects — shatter + "NEGATED" on the negated card.
+            for (const NegateEvent& ne : m_dm.drainNegateEvents()) {
+                ImVec2 c;
+                if (!centerOf(ne.con, ne.loc, ne.seq, &c)) continue;
+                m_anim.negate(c, m_db.getCard(ne.code).name.c_str(), 1.05);
+                m_anim.emitShake(6.f, 0.28);
+                gAudio().play("error");
+            }
+            // Chain resolving — a brief spotlight pulse per link (LIFO order).
+            for (const ResolveEvent& re : m_dm.drainResolveEvents()) {
+                ImVec2 c;
+                if (!centerOf(re.con, re.loc, re.seq, &c)) continue;
+                m_anim.pulse(c, 30.f, IM_COL32(120, 200, 255, 255), 0.45);
             }
         } else {
             m_dm.drainChainEvents();    // keep queues from growing when off
             m_dm.drainTargetEvents();
+            m_dm.drainNegateEvents();
+            m_dm.drainResolveEvents();
         }
 
         // ── Card-movement animations ─────────────────────────────────────
@@ -5605,8 +5676,47 @@ void UI::drawDuel(int w, int h) {
                         m_anim.cardTrail(sCtr, dCtr, tex, col, 0.46);
                         m_anim.zoneFlash(dTl, dBr, col, 0.40);
                         m_anim.ring(dCtr, 28.f, col, 0.50);
+                        // Summon-type entrance for a face-up monster.
+                        if (mv.curLoc == LOC_MZONE && !faceDown) {
+                            CardInfo mci = m_db.getCard(mv.code);
+                            const char* lbl; ImU32 scol;
+                            if      (mci.type & TYPE_LINK)    { lbl="LINK";    scol=IM_COL32(80,150,255,255); }
+                            else if (mci.type & TYPE_XYZ)     { lbl="XYZ";     scol=IM_COL32(235,210,90,255); }
+                            else if (mci.type & TYPE_SYNCHRO) { lbl="SYNCHRO"; scol=IM_COL32(225,235,235,255); }
+                            else if (mci.type & TYPE_FUSION)  { lbl="FUSION";  scol=IM_COL32(190,110,235,255); }
+                            else if (mci.type & TYPE_RITUAL)  { lbl="RITUAL";  scol=IM_COL32(120,200,255,255); }
+                            else                              { lbl="SUMMON";  scol=IM_COL32(255,212,96,255); }
+                            float rr = (dBr.x - dTl.x) * 0.6f;
+                            m_anim.summonBurst(dCtr, rr, lbl, scol, 0.85);
+                        }
                         ++shown;
                     }
+                }
+                else if (mv.curLoc == LOC_REM) {          // → Banished
+                    ImVec2 bTl = m_rectBN_tl[cc], bBr = m_rectBN_br[cc];
+                    ImVec2 bCtr{ (bTl.x+bBr.x)*0.5f, (bTl.y+bBr.y)*0.5f };
+                    ImVec2 sTl, sBr;
+                    if ((mv.prevLoc == LOC_MZONE || mv.prevLoc == LOC_SZONE) &&
+                        locInfoToRect(pc, mv.prevLoc, mv.prevSeq, &sTl, &sBr)) {
+                        ImVec2 sCtr{ (sTl.x+sBr.x)*0.5f, (sTl.y+sBr.y)*0.5f };
+                        m_anim.vortex(sCtr, 0.75);
+                        m_anim.cardTrail(sCtr, bCtr,
+                            m_rend.getCardTexture(mv.code),
+                            IM_COL32(186,116,240,255), 0.55);
+                    }
+                    m_anim.vortex(bCtr, 0.75);
+                    ++shown;
+                }
+                else if (mv.prevLoc == LOC_DECK && mv.curLoc == LOC_HAND &&
+                         cc == (uint8_t)m_net.localPlayerIndex()) {
+                    // Search / add-to-hand (your own) — reveal the card centre-
+                    // screen, then shrink toward your hand. Only your side, so an
+                    // opponent's private draw is never exposed.
+                    ImVec2 hCtr{ (float)w * 0.5f, (float)h - 90.f };
+                    ImVec2 center{ (float)w * 0.5f, (float)h * 0.44f };
+                    m_anim.reveal(center, hCtr, m_rend.getCardTexture(mv.code),
+                                  m_db.getCard(mv.code).name.c_str(), 1.15);
+                    ++shown;
                 }
             }
         }

@@ -46,6 +46,9 @@ void DuelManager::endDuel() {
     m_moveEvents.clear();
     m_chainEvents.clear();
     m_targetEvents.clear();
+    m_negateEvents.clear();
+    m_resolveEvents.clear();
+    m_chainStack.clear();
     m_chainLinkCount = 0;
     m_pendingSummonCode   = 0;
     m_pendingSummonName.clear();
@@ -1057,6 +1060,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         ce.code = code; ce.con = con; ce.loc = cloc; ce.seq = cseq;
         ce.link = ++m_chainLinkCount;
         m_chainEvents.push_back(ce);
+        m_chainStack.push_back(ce);   // persistent for negate/resolve mapping
         break;
     }
 
@@ -1876,6 +1880,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
 
     case MSG_CHAIN_END:
         m_chainLinkCount = 0;   // chain resolved — link numbering restarts
+        m_chainStack.clear();
         break;
     case MSG_DAMAGE_STEP_START:
     case MSG_DAMAGE_STEP_END:
@@ -1885,11 +1890,36 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     case MSG_SWAP_GRAVE_DECK:
         break;
 
-    case MSG_CHAINED:
-    case MSG_CHAIN_SOLVING:
-    case MSG_CHAIN_SOLVED:
+    case MSG_CHAIN_SOLVING: {
+        uint8_t link = r8(p);
+        // Spotlight the resolving link's card (chains resolve last-in-first-out).
+        for (const auto& ce : m_chainStack)
+            if (ce.link == (int)link) {
+                ResolveEvent re;
+                re.code = ce.code; re.con = ce.con; re.loc = ce.loc;
+                re.seq = ce.seq;   re.link = ce.link;
+                m_resolveEvents.push_back(re);
+                break;
+            }
+        break;
+    }
     case MSG_CHAIN_NEGATED:
-    case MSG_CHAIN_DISABLED:
+    case MSG_CHAIN_DISABLED: {
+        uint8_t link = r8(p);
+        for (const auto& ce : m_chainStack)
+            if (ce.link == (int)link) {
+                NegateEvent ne;
+                ne.code = ce.code; ne.con = ce.con; ne.loc = ce.loc;
+                ne.seq = ce.seq;
+                m_negateEvents.push_back(ne);
+                addLog("[trace] chain link " + std::to_string(link) +
+                       " NEGATED (" + m_db.getCard(ce.code).name + ")");
+                break;
+            }
+        break;
+    }
+    case MSG_CHAINED:
+    case MSG_CHAIN_SOLVED:
         r8(p);
         break;
 

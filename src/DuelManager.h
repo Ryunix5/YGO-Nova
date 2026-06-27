@@ -155,6 +155,25 @@ struct TargetEvent {
     uint32_t seq = 0;
 };
 
+// An effect on the chain was negated (MSG_CHAIN_NEGATED/DISABLED). The UI plays
+// a shatter + "NEGATED" over the negated card.
+struct NegateEvent {
+    uint32_t code = 0;
+    uint8_t  con  = 0;
+    uint8_t  loc  = 0;
+    uint32_t seq  = 0;
+};
+
+// A chain link is now resolving (MSG_CHAIN_SOLVING) — links resolve last-in,
+// first-out, so the UI can step-spotlight them to teach chain order.
+struct ResolveEvent {
+    uint32_t code = 0;
+    uint8_t  con  = 0;
+    uint8_t  loc  = 0;
+    uint32_t seq  = 0;
+    int      link = 0;
+};
+
 // Parsed MSG_MOVE payload (a card changed location). Drained by the UI to play
 // movement animations (placed on field, sent to GY, milled from deck, etc.).
 struct MoveEvent {
@@ -412,6 +431,16 @@ public:
         out.swap(m_targetEvents);
         return out;
     }
+    std::vector<NegateEvent> drainNegateEvents() {
+        std::vector<NegateEvent> out;
+        out.swap(m_negateEvents);
+        return out;
+    }
+    std::vector<ResolveEvent> drainResolveEvents() {
+        std::vector<ResolveEvent> out;
+        out.swap(m_resolveEvents);
+        return out;
+    }
     int winner() const { return m_winner; }
 
 private:
@@ -471,6 +500,9 @@ private:
     std::vector<MoveEvent>   m_moveEvents;
     std::vector<ChainEvent>  m_chainEvents;
     std::vector<TargetEvent> m_targetEvents;
+    std::vector<NegateEvent> m_negateEvents;
+    std::vector<ResolveEvent> m_resolveEvents;
+    std::vector<ChainEvent>  m_chainStack;   // persistent link→card for this chain
     int                      m_chainLinkCount = 0;   // resets at MSG_CHAIN_END
     // Replay-recording hook + the seed actually used for this duel.
     ResponseRecorder         m_responseRecorder;
