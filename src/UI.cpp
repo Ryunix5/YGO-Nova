@@ -3541,7 +3541,7 @@ void UI::drawLobby(int w, int h) {
     // Subtle diagonal "duel-field perspective" lines on the right half.
     // Original abstract geometry — no derivative imagery.
     {
-        ImU32 line = IM_COL32(80, 110, 170, 28);
+        ImU32 line = IM_COL32(150, 70, 76, 24);
         float ox = W * 0.55f, oy = H * 0.55f;
         for (int i = -8; i <= 8; ++i) {
             float k = (float)i * 0.12f;
@@ -3558,7 +3558,7 @@ void UI::drawLobby(int w, int h) {
             float x = frand() * W;
             float y = frand() * H;
             float r = 0.6f + frand() * 1.6f;
-            ImU32 c = IM_COL32(180, 200, 240, (int)(30 + frand() * 110.f));
+            ImU32 c = IM_COL32(210, 150, 156, (int)(24 + frand() * 90.f));
             bg->AddCircleFilled({x, y}, r, c, 6);
         }
     }
@@ -3570,7 +3570,7 @@ void UI::drawLobby(int w, int h) {
             float r = 80.f + i * 38.f;
             int alpha = 90 - i * 14;
             bg->AddCircle({cx, cy}, r,
-                          IM_COL32(120, 200, 255, alpha), 64, 1.4f);
+                          IM_COL32(200, 70, 76, alpha), 64, 1.4f);
         }
         // Hexagonal lattice — six rotated diamonds around a centre.
         for (int i = 0; i < 6; ++i) {
@@ -3581,33 +3581,33 @@ void UI::drawLobby(int w, int h) {
             float bx = cx + std::cos(a2) * 170.f;
             float by = cy + std::sin(a2) * 170.f;
             bg->AddLine({ax, ay}, {bx, by},
-                        IM_COL32(160, 220, 255, 100), 1.3f);
+                        IM_COL32(205, 80, 86, 100), 1.3f);
         }
         // Centre diamond (suggests a card silhouette in plan view).
         {
             float s = 90.f;
             ImVec2 dp[4] = { {cx, cy - s}, {cx + s, cy},
                              {cx, cy + s}, {cx - s, cy} };
-            bg->AddPolyline(dp, 4, IM_COL32(230, 200, 110, 180),
+            bg->AddPolyline(dp, 4, IM_COL32(214, 64, 70, 190),
                             ImDrawFlags_Closed, 1.6f);
             // Inner small diamond.
             float s2 = s * 0.55f;
             ImVec2 ip[4] = { {cx, cy - s2}, {cx + s2, cy},
                              {cx, cy + s2}, {cx - s2, cy} };
-            bg->AddPolyline(ip, 4, IM_COL32(255, 230, 140, 120),
+            bg->AddPolyline(ip, 4, IM_COL32(255, 120, 120, 130),
                             ImDrawFlags_Closed, 1.f);
         }
-        // Soft warm core glow.
+        // Soft red core glow.
         for (int i = 0; i < 7; ++i)
             bg->AddCircleFilled({cx, cy}, 28.f - i * 3.f,
-                                IM_COL32(255, 215, 120, 22), 32);
+                                IM_COL32(220, 56, 62, 24), 32);
         // Vertical light shaft behind the emblem.
         bg->AddRectFilledMultiColor({cx - 6.f, cy - 260.f},
                                     {cx + 6.f, cy + 260.f},
-                                    IM_COL32(255, 230, 150,   0),
-                                    IM_COL32(255, 230, 150,   0),
-                                    IM_COL32(255, 230, 150, 110),
-                                    IM_COL32(255, 230, 150, 110));
+                                    IM_COL32(220, 60, 66,   0),
+                                    IM_COL32(220, 60, 66,   0),
+                                    IM_COL32(220, 60, 66, 110),
+                                    IM_COL32(220, 60, 66, 110));
     }
 
     // ── Top-left profile / status HUD (glass, no boxy panel) ────────────────
@@ -3622,7 +3622,7 @@ void UI::drawLobby(int w, int h) {
         UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x26000000,
                           UIStyle::M().radL, 3);
         UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
-                                IM_COL32(20, 28, 46, 226));
+                                IM_COL32(28, 15, 18, 230));
         bg->AddLine({a.x + 16.f, a.y + 1.5f}, {b.x - 16.f, a.y + 1.5f},
                     (C.accent & 0x00FFFFFF) | 0x55000000, 1.f);
 
@@ -3635,10 +3635,10 @@ void UI::drawLobby(int w, int h) {
             if (fill) bg->AddConvexPolyFilled(p, 4, col);
             else      bg->AddPolyline(p, 4, col, ImDrawFlags_Closed, th);
         };
-        diamond(25.f, IM_COL32(44, 60, 96, 230), true, 0.f);
+        diamond(25.f, IM_COL32(58, 26, 30, 230), true, 0.f);
         diamond(25.f, (C.accent & 0x00FFFFFF) | 0x99000000, false, 1.5f);
-        diamond(13.f, IM_COL32(255, 210, 120, 235), true, 0.f);
-        diamond(6.f,  IM_COL32(28, 38, 62, 255), true, 0.f);
+        diamond(13.f, IM_COL32(228, 74, 80, 235), true, 0.f);
+        diamond(6.f,  IM_COL32(30, 16, 20, 255), true, 0.f);
 
         // Title in the header face, with a gold version pill + BETA tag on the
         // same baseline.
@@ -3658,10 +3658,10 @@ void UI::drawLobby(int w, int h) {
         const char* beta = "BETA";
         ImVec2 bs = ImGui::CalcTextSize(beta);
         ImVec2 betaA{pB.x + 6.f, py}, betaB{betaA.x + bs.x + 14.f, py + 17.f};
-        bg->AddRectFilled(betaA, betaB, IM_COL32(120, 92, 205, 90), 8.f);
-        bg->AddRect(betaA, betaB, IM_COL32(172, 142, 240, 190), 8.f, 0, 1.f);
+        bg->AddRectFilled(betaA, betaB, IM_COL32(70, 38, 44, 120), 8.f);
+        bg->AddRect(betaA, betaB, IM_COL32(150, 78, 84, 190), 8.f, 0, 1.f);
         bg->AddText({betaA.x + 7.f, betaA.y + 2.f},
-                    IM_COL32(222, 208, 255, 255), beta);
+                    IM_COL32(228, 200, 204, 255), beta);
         UIStyle::PopFont();
 
         // Sub-lines.
@@ -3943,7 +3943,7 @@ void UI::drawLobby(int w, int h) {
         UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x20000000,
                           UIStyle::M().radL, 3);
         UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
-                                IM_COL32(20, 28, 46, 226));
+                                IM_COL32(28, 15, 18, 230));
         bg->AddLine({a.x + 16.f, a.y + 1.5f}, {b.x - 16.f, a.y + 1.5f},
                     (C.accent & 0x00FFFFFF) | 0x55000000, 1.f);
         // Header row: small gold marker + label.

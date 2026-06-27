@@ -22,11 +22,11 @@ static const Colors gC = {
     /*bgRaised*/  IM_COL32( 36,  20,  24, 255),   // input / hover surface
     /*bgPopup*/   IM_COL32( 17,  10,  12, 252),   // popup / modal background
     /*bgGlass*/   IM_COL32( 32,  16,  20, 222),   // tinted glass tile
-    /*border*/    IM_COL32(150,  52,  58, 220),   // visible panel borders (red)
-    /*borderSoft*/IM_COL32( 92,  38,  44, 150),   // inner section dividers
-    /*accent*/    IM_COL32(220,  52,  58, 255),   // crimson red
-    /*accentHi*/  IM_COL32(255,  92,  92, 255),   // red highlight
-    /*accentDim*/ IM_COL32(120,  34,  38, 200),   // red dim
+    /*border*/    IM_COL32(116,  46,  52, 200),   // panel borders (muted crimson)
+    /*borderSoft*/IM_COL32( 76,  34,  40, 140),   // inner section dividers
+    /*accent*/    IM_COL32(198,  54,  60, 255),   // crimson red (a touch deeper)
+    /*accentHi*/  IM_COL32(238,  86,  90, 255),   // red highlight
+    /*accentDim*/ IM_COL32(110,  34,  38, 200),   // red dim
     /*accentText*/IM_COL32(255, 242, 242, 255),   // text on red buttons
     /*primary*/   IM_COL32(198,  30,  38, 255),   // vivid red primary (hero)
     /*primaryHi*/ IM_COL32(230,  56,  62, 255),
