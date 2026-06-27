@@ -5637,11 +5637,24 @@ void UI::drawDuel(int w, int h) {
                 if (!centerOf(re.con, re.loc, re.seq, &c)) continue;
                 m_anim.pulse(c, 30.f, IM_COL32(120, 200, 255, 255), 0.45);
             }
+            // Counter add/remove — a "+N" / "-N" pop on the card.
+            for (const CounterEvent& ce : m_dm.drainCounterEvents()) {
+                ImVec2 c;
+                if (ce.delta == 0 || !centerOf(ce.con, ce.loc, ce.seq, &c))
+                    continue;
+                char cb[12];
+                snprintf(cb, sizeof(cb), "%+d", ce.delta);
+                ImU32 col = ce.delta > 0 ? IM_COL32(120, 200, 255, 255)
+                                         : IM_COL32(235, 150, 90, 255);
+                m_anim.floatText({c.x, c.y - 14.f}, cb, col, 0.9);
+                m_anim.ring(c, 22.f, col, 0.45);
+            }
         } else {
             m_dm.drainChainEvents();    // keep queues from growing when off
             m_dm.drainTargetEvents();
             m_dm.drainNegateEvents();
             m_dm.drainResolveEvents();
+            m_dm.drainCounterEvents();
         }
 
         // ── Card-movement animations ─────────────────────────────────────

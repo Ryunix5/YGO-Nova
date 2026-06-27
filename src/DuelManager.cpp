@@ -48,6 +48,7 @@ void DuelManager::endDuel() {
     m_targetEvents.clear();
     m_negateEvents.clear();
     m_resolveEvents.clear();
+    m_counterEvents.clear();
     m_chainStack.clear();
     m_chainLinkCount = 0;
     m_pendingSummonCode   = 0;
@@ -2028,9 +2029,17 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         break;
 
     case MSG_ADD_COUNTER:
-    case MSG_REMOVE_COUNTER:
-        r16(p); r8(p);r8(p);r32(p);r32(p); r16(p);
+    case MSG_REMOVE_COUNTER: {
+        r16(p);                              // counter type
+        uint8_t con = r8(p), loc = r8(p);
+        uint32_t seq = r32(p); r32(p);       // sequence (+ skip)
+        uint16_t cnt = r16(p);
+        CounterEvent ev;
+        ev.con = con & 1; ev.loc = loc; ev.seq = seq;
+        ev.delta = (type == MSG_ADD_COUNTER) ? (int)cnt : -(int)cnt;
+        m_counterEvents.push_back(ev);
         break;
+    }
 
     case MSG_CREATE_RELATION:
     case MSG_RELEASE_RELATION:

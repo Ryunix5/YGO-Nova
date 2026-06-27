@@ -174,6 +174,14 @@ struct ResolveEvent {
     int      link = 0;
 };
 
+// A counter was added/removed (MSG_ADD/REMOVE_COUNTER). The UI pops a "+N"/"-N".
+struct CounterEvent {
+    uint8_t  con = 0;
+    uint8_t  loc = 0;
+    uint32_t seq = 0;
+    int      delta = 0;
+};
+
 // Parsed MSG_MOVE payload (a card changed location). Drained by the UI to play
 // movement animations (placed on field, sent to GY, milled from deck, etc.).
 struct MoveEvent {
@@ -441,6 +449,11 @@ public:
         out.swap(m_resolveEvents);
         return out;
     }
+    std::vector<CounterEvent> drainCounterEvents() {
+        std::vector<CounterEvent> out;
+        out.swap(m_counterEvents);
+        return out;
+    }
     int winner() const { return m_winner; }
 
 private:
@@ -502,6 +515,7 @@ private:
     std::vector<TargetEvent> m_targetEvents;
     std::vector<NegateEvent> m_negateEvents;
     std::vector<ResolveEvent> m_resolveEvents;
+    std::vector<CounterEvent> m_counterEvents;
     std::vector<ChainEvent>  m_chainStack;   // persistent link→card for this chain
     int                      m_chainLinkCount = 0;   // resets at MSG_CHAIN_END
     // Replay-recording hook + the seed actually used for this duel.
