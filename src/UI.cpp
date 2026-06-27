@@ -5465,9 +5465,31 @@ void UI::drawDuel(int w, int h) {
     float pillX = (FLD_W - pillRowW) * 0.5f;
     if (pillX < 340.f) pillX = 340.f;
     ImGui::SetCursorPos({pillX, (TOP_H - pillH) * 0.5f});
+    // A phase pill is clickable when the engine offers that transition for the
+    // local player's current idle/battle prompt — a third way to advance the
+    // turn alongside the bottom-bar buttons and the Space/B/M/E hotkeys.
+    const SelectionRequest& psel = m_dm.selection();
+    const int kLocalPhase = m_net.localPlayerIndex();
+    const bool myIdle   = psel.type == WaitType::SelectIdleCmd  &&
+                          psel.player == kLocalPhase;
+    const bool myBattle = psel.type == WaitType::SelectBattleCmd &&
+                          psel.player == kLocalPhase;
     for (int pi = 0; pi < 6; ++pi) {
         bool active = phasesLive && (f.phase == kPhases[pi].ph);
-        UIStyle::HudPill(kPhases[pi].name, active, true, {pillW, pillH});
+        uint16_t ph = kPhases[pi].ph;
+        bool clickable =
+            (myIdle   && ph == 0x08  && psel.toBP) ||   // -> Battle Phase
+            (myBattle && ph == 0x100 && psel.toM2) ||   // -> Main Phase 2
+            ((myIdle || myBattle) && ph == 0x200 && psel.toEP);  // -> End
+        if (UIStyle::HudPill(kPhases[pi].name, active, true, {pillW, pillH}) &&
+            clickable) {
+            if      (ph == 0x08)  submitIdleCmd(6, 0, "Battle Phase");
+            else if (ph == 0x100) submitIdleCmd(2, 0, "Main Phase 2");
+            else if (ph == 0x200) submitIdleCmd(myBattle ? 3 : 7, 0,
+                                       myBattle ? "End Battle Phase" : "End Turn");
+        }
+        if (clickable && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Click to advance");
         if (pi < 5) ImGui::SameLine(0.f, pillGap);
     }
     // Park the cursor after the pill row for the top-right button cluster.
@@ -7730,9 +7752,13 @@ void UI::drawChainResponsePopup(int w, int h) {
     // stays clickable so a card can be chosen as the response.
     ImGui::SetNextWindowPos({w * 0.5f, h * 0.13f}, ImGuiCond_Always, {0.5f, 0.f});
     ImGui::SetNextWindowSize({460.f, 0.f});
+    // Pulse the magenta border so the "you can respond" window catches the eye
+    // — easy to miss otherwise during the opponent's turn.
+    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.5f);   // 0..1
     ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(26, 20, 36, 250));
-    ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(224, 124, 214, 255));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.f);
+    ImGui::PushStyleColor(ImGuiCol_Border,
+        IM_COL32(232, 140, 224, (int)(150 + 105 * pulse)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.f + 2.f * pulse);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{18.f, 14.f});
     ImGui::Begin("##chain_response", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -8138,6 +8164,12 @@ void UI::drawSelectionPanel(int pw, int ph) {
             ImGui::PushID((int)i);
             void* tex = m_rend.getCardTexture(rows[i].code);
             ImGui::Image(tex ? tex : (void*)0, {32.f, 47.f});
+            // Right-click the thumbnail to zoom/read the card, like hand+field.
+            if (ImGui::IsItemHovered()) {
+                m_hoveredCard = rows[i].code; m_hoveredInfo = ci;
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                    m_zoomCard = rows[i].code;
+            }
             ImGui::SameLine();
             ImGui::BeginGroup();
             // Name — orange when an action is available; otherwise selectable.
