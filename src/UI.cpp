@@ -23,6 +23,9 @@
 #include <ctime>
 #include <random>
 
+// Forward decls for file-static helpers used before their definition.
+static std::string presetLabel(const std::string& file);
+
 // ─── Card type flags ──────────────────────────────────────────────────────────
 static const uint32_t TYPE_MONSTER  = 0x1;
 static const uint32_t TYPE_SPELL    = 0x2;
@@ -2534,6 +2537,7 @@ void UI::loadSettings() {
     loadCardTags();      // deck-consistency role tags (assets/card_tags.txt)
     loadMatchHistory();  // win/loss log (assets/match_history.txt)
     loadBanlists();      // format/banlist files (assets/lflists/*.lflist.conf)
+    loadPresetDecks();   // bundled AI opponent decks (assets/decks/presets/)
     // Kick off the in-app update check (no-op unless a repo was baked in).
     m_update.setEnabled(m_settings.checkForUpdates);
     m_update.start(edo::kAppVersion, edo::kUpdateRepo);
@@ -4541,6 +4545,30 @@ void UI::drawLobby(int w, int h) {
         deckPicker("Player 2 deck",  "P2", m_deck1Idx,
                    m_deck1Path, sizeof(m_deck1Path));
 
+        // Preset opponent — override P2 with a bundled AI archetype deck.
+        if (!m_presetFiles.empty()) {
+            ImGui::Dummy({1.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.85f, 0.88f, 0.95f, 1.f});
+            ImGui::Text("AI  Preset opponent  (overrides P2)");
+            ImGui::PopStyleColor();
+            std::string curOpp =
+                m_opponentPreset == -1 ? std::string("Off - use P2 deck above")
+              : m_opponentPreset == 0  ? std::string("Random preset")
+              : presetLabel(m_presetFiles[(size_t)m_opponentPreset - 1]);
+            ImGui::SetNextItemWidth(-1.f);
+            if (ImGui::BeginCombo("##oppPreset", curOpp.c_str())) {
+                if (ImGui::Selectable("Off - use P2 deck above", m_opponentPreset == -1))
+                    m_opponentPreset = -1;
+                if (ImGui::Selectable("Random preset", m_opponentPreset == 0))
+                    m_opponentPreset = 0;
+                for (int i = 0; i < (int)m_presetFiles.size(); ++i)
+                    if (ImGui::Selectable(presetLabel(m_presetFiles[(size_t)i]).c_str(),
+                                          m_opponentPreset == i + 1))
+                        m_opponentPreset = i + 1;
+                ImGui::EndCombo();
+            }
+        }
+
         ImGui::Dummy({1.f, 10.f});
         ImGui::Separator();
         ImGui::Dummy({1.f, 4.f});
@@ -4567,20 +4595,38 @@ void UI::drawLobby(int w, int h) {
             ImGui::SetTooltip("The opponent just passes, so you can practise combos");
 
         ImGui::Dummy({1.f, 8.f});
-        bool canStart = (m_deck0Path[0] != '\0') && (m_deck1Path[0] != '\0');
+        bool canStart = (m_deck0Path[0] != '\0') &&
+                        (m_deck1Path[0] != '\0' || m_opponentPreset != -1);
         // Primary "Start Duel" — gold gradient button via UIStyle.
         if (!canStart) ImGui::BeginDisabled();
         if (UIStyle::PrimaryButton("Start Duel", {280.f, 42.f})) {
+            // Resolve the opponent deck: a chosen/random preset overrides P2.
+            std::string oppPath = m_deck1Path;
+            std::string oppName;
+            if (m_opponentPreset == 0 && !m_presetFiles.empty()) {
+                std::random_device rd;
+                size_t r = rd() % m_presetFiles.size();
+                oppPath = "assets/decks/presets/" + m_presetFiles[r];
+                oppName = presetLabel(m_presetFiles[r]);
+            } else if (m_opponentPreset >= 1 &&
+                       m_opponentPreset - 1 < (int)m_presetFiles.size()) {
+                oppPath = "assets/decks/presets/" +
+                          m_presetFiles[(size_t)m_opponentPreset - 1];
+                oppName = presetLabel(m_presetFiles[(size_t)m_opponentPreset - 1]);
+            }
             // Apply the custom options before the duel registers its engine.
             m_dm.setNoShuffle(m_setupNoShuffle);
             m_dm.setPassiveAI(m_setupPassiveAI);
             // Coin toss decides who takes the first turn; the helper registers
             // the decks in toss order and wires replay + testing capture.
-            if (startOfflineDuelWithCoinToss(m_deck0Path, m_deck1Path,
+            if (startOfflineDuelWithCoinToss(m_deck0Path, oppPath.c_str(),
                                              (uint32_t)m_setupLP,
                                              (uint32_t)m_setupHand, 1)) {
                 m_screen = Screen::Duel;
                 gAudio().play("duel_start");
+                if (!oppName.empty())
+                    pushToast("Opponent: " + oppName,
+                              IM_COL32(200, 180, 255, 255), 2.6);
             } else {
                 gAudio().play("error");
             }
@@ -10602,6 +10648,26 @@ int UI::cardLimit(uint32_t code) const {
     const auto& m = m_banlists[(size_t)m_selectedBanlist].limits;
     auto it = m.find(code);
     return it == m.end() ? 3 : it->second;
+}
+
+// Preset opponent decks (#6) — the bundled AI_*.ydk archetype decks.
+void UI::loadPresetDecks() {
+    m_presetFiles.clear();
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory("assets/decks/presets", ec)) return;
+    for (auto& e : fs::directory_iterator("assets/decks/presets", ec))
+        if (e.path().extension() == ".ydk")
+            m_presetFiles.push_back(e.path().filename().string());
+    std::sort(m_presetFiles.begin(), m_presetFiles.end());
+}
+
+// Pretty label for a preset deck file ("AI_BlueEyes.ydk" -> "BlueEyes").
+static std::string presetLabel(const std::string& file) {
+    std::string s = file;
+    if (s.size() > 4 && s.substr(s.size() - 4) == ".ydk") s = s.substr(0, s.size() - 4);
+    if (s.rfind("AI_", 0) == 0) s = s.substr(3);
+    return s.empty() ? file : s;
 }
 
 void UI::drawDeckBuilder(int w, int h) {

@@ -246,6 +246,11 @@ private:
     int    m_setupHand      = 5;
     bool   m_setupNoShuffle = false;
     bool   m_setupPassiveAI = false;
+    // Preset opponent decks (#6): assets/decks/presets/*.ydk.
+    //   m_opponentPreset: -1 = off (use chosen P2 deck), 0 = random, >=1 = file.
+    std::vector<std::string> m_presetFiles;   // filenames in presets/
+    int    m_opponentPreset = -1;
+    void   loadPresetDecks();
 
     // Testing mode
     bool   m_testingMode = false;
