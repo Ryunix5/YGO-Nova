@@ -10727,10 +10727,13 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::PopStyleColor();
         if (UIStyle::fHeader) ImGui::PopFont();
 
-        // Right cluster: combo + name input + Save + Refresh — laid out
-        // from the right edge to feel like a toolbar.
+        // Right cluster: combo + name input + Save + Refresh + the ghost
+        // buttons (Sort / Stats / Copy / Paste) — laid out from the right edge.
+        // EXTRA reserves room for the four trailing ghost buttons so they don't
+        // run off the right edge (which hid the Stats button entirely).
         const float SAVE_W = 96.f, REF_W = 96.f, NAME_W = 220.f, COMBO_W = 220.f;
-        float rightX = w - 12.f - SAVE_W - 6.f - REF_W;
+        const float EXTRA = (52.f+6.f) + (62.f+6.f) + (52.f+6.f) + (56.f+6.f);
+        float rightX = w - 12.f - EXTRA - SAVE_W - 6.f - REF_W;
         ImGui::SameLine(rightX - NAME_W - 6.f - COMBO_W);
 
         ImGui::SetNextItemWidth(COMBO_W);
@@ -11090,6 +11093,15 @@ void UI::drawDeckBuilder(int w, int h) {
                         m_selectedBanlist = i;
                 ImGui::EndCombo();
             }
+            // Legend for the per-card badges (only meaningful with a list).
+            if (m_selectedBanlist >= 0) {
+                ImGui::SameLine(0.f, 14.f);
+                ImGui::TextColored({0.92f, 0.30f, 0.25f, 1.f}, "(/) Forbidden");
+                ImGui::SameLine(0.f, 10.f);
+                ImGui::TextColored({0.92f, 0.40f, 0.30f, 1.f}, "1 Limited");
+                ImGui::SameLine(0.f, 10.f);
+                ImGui::TextColored({0.92f, 0.73f, 0.25f, 1.f}, "2 Semi");
+            }
         }
 
         // Status / validation chips row.
@@ -11330,6 +11342,29 @@ void UI::drawDeckBuilder(int w, int h) {
                         if (nm.size() > 8) nm = nm.substr(0, 7) + ".";
                         dl->AddText({ip.x + 4.f, ip.y + 4.f},
                                     C.textHi, nm.c_str());
+                    }
+                }
+
+                // Banlist status badge (top-left corner): Forbidden / Limited /
+                // Semi-Limited, per the selected format. 3-of cards show nothing.
+                if (m_selectedBanlist >= 0) {
+                    int lim = cardLimit(code);
+                    if (lim < 3) {
+                        ImVec2 bc = {tp.x + 11.f, tp.y + 11.f};
+                        ImU32 bcol = (lim == 0) ? IM_COL32(230, 60, 50, 255)
+                                   : (lim == 1) ? IM_COL32(235, 90, 70, 255)
+                                                : IM_COL32(235, 185, 60, 255);
+                        dl->AddCircleFilled(bc, 9.f, IM_COL32(18, 18, 24, 240), 16);
+                        dl->AddCircle(bc, 9.f, bcol, 16, 2.f);
+                        if (lim == 0) {                       // Forbidden: slash
+                            dl->AddLine({bc.x - 4.5f, bc.y - 4.5f},
+                                        {bc.x + 4.5f, bc.y + 4.5f}, bcol, 2.2f);
+                        } else {                              // 1 / 2 allowed
+                            char n[2] = { (char)('0' + lim), 0 };
+                            ImVec2 ns = ImGui::CalcTextSize(n);
+                            dl->AddText({bc.x - ns.x * 0.5f, bc.y - ns.y * 0.5f},
+                                        bcol, n);
+                        }
                     }
                 }
 
