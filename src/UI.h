@@ -464,6 +464,10 @@ private:
     // New-draw highlight (#B): glow the last m_newDrawCount hand tiles briefly.
     double   m_newDrawAt      = -10.0;
     int      m_newDrawCount   = 0;
+    // Excavate reveal: cards flipped up from the deck, shown fan-style.
+    std::vector<uint32_t> m_excavateCards;
+    double   m_excavateAt     = -10.0;
+    void     drawExcavateReveal(int w, int h);
     int      m_sfxPrevHand[2] = {0, 0};
     int      m_sfxPrevGY[2]   = {0, 0};
     int      m_sfxPrevBN[2]   = {0, 0};

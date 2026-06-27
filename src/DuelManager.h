@@ -182,6 +182,13 @@ struct CounterEvent {
     int      delta = 0;
 };
 
+// Cards revealed from the top of the deck (excavate — MSG_CONFIRM_DECKTOP/CARDS
+// where the source is the deck). The UI flips them up from the deck fan-style.
+struct ExcavateEvent {
+    uint8_t  player = 0;
+    std::vector<uint32_t> codes;
+};
+
 // Parsed MSG_MOVE payload (a card changed location). Drained by the UI to play
 // movement animations (placed on field, sent to GY, milled from deck, etc.).
 struct MoveEvent {
@@ -454,6 +461,11 @@ public:
         out.swap(m_counterEvents);
         return out;
     }
+    std::vector<ExcavateEvent> drainExcavateEvents() {
+        std::vector<ExcavateEvent> out;
+        out.swap(m_excavateEvents);
+        return out;
+    }
     int winner() const { return m_winner; }
 
 private:
@@ -516,6 +528,7 @@ private:
     std::vector<NegateEvent> m_negateEvents;
     std::vector<ResolveEvent> m_resolveEvents;
     std::vector<CounterEvent> m_counterEvents;
+    std::vector<ExcavateEvent> m_excavateEvents;
     std::vector<ChainEvent>  m_chainStack;   // persistent link→card for this chain
     int                      m_chainLinkCount = 0;   // resets at MSG_CHAIN_END
     // Replay-recording hook + the seed actually used for this duel.

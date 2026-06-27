@@ -2741,6 +2741,15 @@ void UI::observePhaseForBanners() {
     if (newPhase == m_animObservedPhase) return;          // no change
     int newIdx = phaseOrderIndex(newPhase);
     if (newIdx < 0) { m_animObservedPhase = newPhase; return; }
+    // Board-break puzzle: don't queue phase banners for the opponent's empty
+    // first turn — just track state so the player isn't held up. (The turn
+    // banner for YOUR turn still fires when it flips back.)
+    if (m_puzzleMode && (int)pf.turnPlayer != m_dm.humanSeat()) {
+        m_animObservedPhase  = newPhase;
+        m_animLastEnqueued   = newPhase;
+        m_animPrevTurnPlayer = pf.turnPlayer;
+        return;
+    }
 
     bool turnChanged = (pf.turnPlayer != m_animPrevTurnPlayer);
     // Turn-start banner — a big "YOUR TURN" / "OPPONENT'S TURN" so whose turn it
@@ -3474,6 +3483,7 @@ bool UI::draw(int winW, int winH) {
         drawCardZoom(winW, winH);
         drawHelpOverlay(winW, winH);
         if (m_puzzleMode) drawPuzzleOverlay(winW, winH);
+        drawExcavateReveal(winW, winH);
         drawCardContextMenu();
         drawPauseMenu(winW, winH);
     }
@@ -5042,6 +5052,12 @@ void UI::drawDuel(int w, int h) {
                  ? m_settings.gameSpeed : 0;
     bool pace = m_net.isOffline() && !m_replayMode && !m_testingRebuilding &&
                 !m_settings.fastTurns;
+    // Board-break puzzles: the opponent's preset board takes turn 1 and does
+    // nothing, so skip ALL pacing while it's not your turn — you land on your
+    // own turn instantly instead of sitting through an empty opponent turn.
+    bool skipOppTurn = m_puzzleMode &&
+        (int)m_dm.field().turnPlayer != m_dm.humanSeat();
+    if (skipOppTurn) pace = false;
     m_dm.setPhaseDelay(pace ? kPhase[gs] : 0.0);
     // AI "combo beat" — paces each Summon / activation so the action is
     // watchable. Fast turns / replay / rebuild / online switch it off.
@@ -5701,12 +5717,20 @@ void UI::drawDuel(int w, int h) {
                 m_anim.floatText({c.x, c.y - 14.f}, cb, col, 0.9);
                 m_anim.ring(c, 22.f, col, 0.45);
             }
+            // Excavate — flip the revealed deck cards up, Master-Duel style.
+            for (const ExcavateEvent& ex : m_dm.drainExcavateEvents()) {
+                if (ex.codes.empty()) continue;
+                m_excavateCards = ex.codes;
+                m_excavateAt    = ImGui::GetTime();
+                gAudio().play("draw");
+            }
         } else {
             m_dm.drainChainEvents();    // keep queues from growing when off
             m_dm.drainTargetEvents();
             m_dm.drainNegateEvents();
             m_dm.drainResolveEvents();
             m_dm.drainCounterEvents();
+            m_dm.drainExcavateEvents();
         }
 
         // ── Card-movement animations ─────────────────────────────────────
@@ -11647,6 +11671,60 @@ void UI::drawPuzzleOverlay(int w, int h) {
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(2);
+}
+
+// ── Excavate reveal — cards flip up from the deck (Master-Duel style) ─────────
+void UI::drawExcavateReveal(int w, int h) {
+    if (m_excavateCards.empty()) return;
+    double age = ImGui::GetTime() - m_excavateAt;
+    const double LIFE = 2.0;
+    if (age < 0.0 || age > LIFE) { m_excavateCards.clear(); return; }
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    int n = (int)m_excavateCards.size();
+    float ch = std::min((float)h * 0.30f, 230.f);
+    float cw = ch * (421.f / 614.f);
+    float gap = 14.f;
+    float totalW = n * cw + (n - 1) * gap;
+    float startX = w * 0.5f - totalW * 0.5f;
+    float cy = h * 0.42f;
+    // Soft dim behind the reveal.
+    float dimA = (age < 0.2) ? (float)(age / 0.2)
+               : (age > LIFE - 0.4) ? (float)((LIFE - age) / 0.4) : 1.f;
+    dl->AddRectFilled({0.f, 0.f}, {(float)w, (float)h},
+                      IM_COL32(4, 2, 3, (unsigned)(150 * dimA)));
+    void* back = m_rend.getBackTexture();
+    for (int i = 0; i < n; ++i) {
+        // Per-card stagger so they flip up one after another.
+        double cd = age - i * 0.12;
+        float flip = cd <= 0.0 ? 0.f
+                   : cd >= 0.32 ? 1.f : (float)(cd / 0.32);   // 0=edge,1=face
+        float cx = startX + i * (cw + gap) + cw * 0.5f;
+        // Flip: horizontal scale 0→1; show back for the first half, face after.
+        float sx = std::abs(flip - 0.5f) * 2.f;   // 1 → 0 → 1 (edge at mid)
+        if (flip <= 0.f) sx = 0.04f;
+        float halfW = cw * 0.5f * (0.06f + 0.94f * sx);
+        ImVec2 p0{cx - halfW, cy - ch * 0.5f}, p1{cx + halfW, cy + ch * 0.5f};
+        bool faceUp = flip > 0.5f;
+        void* tex = faceUp ? m_rend.getCardTexture(m_excavateCards[i]) : back;
+        // Rising offset as it settles.
+        float rise = (flip < 1.f) ? (1.f - flip) * 22.f : 0.f;
+        p0.y -= rise; p1.y -= rise;
+        ImU32 tint = IM_COL32_WHITE & 0x00FFFFFF;
+        tint |= ((unsigned)(255 * dimA) << 24);
+        if (tex)
+            dl->AddImageRounded((ImTextureID)tex, p0, p1, {0,0}, {1,1}, tint, 6.f);
+        else
+            dl->AddRectFilled(p0, p1,
+                IM_COL32(40, 20, 24, (unsigned)(235 * dimA)), 6.f);
+        dl->AddRect(p0, p1, IM_COL32(220, 90, 96, (unsigned)(235 * dimA)),
+                    6.f, 0, 2.f);
+    }
+    // Caption.
+    const char* cap = "Excavating...";
+    ImVec2 ts = ImGui::CalcTextSize(cap);
+    dl->AddText({w * 0.5f - ts.x * 0.5f, cy - ch * 0.5f - 30.f},
+                IM_COL32(245, 210, 210, (unsigned)(255 * dimA)), cap);
 }
 
 // ── In-duel pause menu (#5) ──────────────────────────────────────────────────

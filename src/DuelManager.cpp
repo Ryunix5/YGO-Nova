@@ -49,6 +49,7 @@ void DuelManager::endDuel() {
     m_negateEvents.clear();
     m_resolveEvents.clear();
     m_counterEvents.clear();
+    m_excavateEvents.clear();
     m_chainStack.clear();
     m_chainLinkCount = 0;
     m_pendingSummonCode   = 0;
@@ -1971,8 +1972,16 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     case MSG_CONFIRM_CARDS:
     case MSG_CONFIRM_DECKTOP:
     case MSG_CONFIRM_EXTRATOP: {
-        r8(p); uint32_t cnt=r32(p);
-        for(uint32_t i=0;i<cnt;i++){r32(p);r8(p);r8(p);r32(p);r32(p);}
+        uint8_t pl = r8(p); uint32_t cnt=r32(p);
+        ExcavateEvent ex; ex.player = pl & 1;
+        for(uint32_t i=0;i<cnt;i++){
+            uint32_t code=r32(p);
+            r8(p); uint8_t loc=r8(p); r32(p); r32(p);
+            // Only the deck-top reveal (excavate) gets the flip-up treatment.
+            if ((type == MSG_CONFIRM_DECKTOP) ||
+                (loc & LOCATION_DECK)) ex.codes.push_back(code);
+        }
+        if (!ex.codes.empty()) m_excavateEvents.push_back(ex);
         break;
     }
 
