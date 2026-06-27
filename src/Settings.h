@@ -52,6 +52,11 @@ struct Settings {
     // so the player sees every phase and end-of-phase effects aren't blown
     // past. Seconds; 0 = off (instant). Default 1.0 per user request.
     float  enginePhasePacing     = 1.0f;
+    // Overall duel speed (offline): 0 = Relaxed, 1 = Normal, 2 = Fast. Drives
+    // the per-event "read beat" after each summon/activation + the animation
+    // duration scale, so the player can follow what's happening. Default Relaxed
+    // so events are comprehensible out of the box.
+    int    gameSpeed             = 0;
 
     // Compact prompt rows — show a short effect label in trigger/chain/option
     // prompts and push the FULL decoded text to the right card-info panel on
@@ -193,6 +198,7 @@ struct Settings {
         f << "animReduceMotion="  << (animReduceMotion  ? "1" : "0") << "\n";
         f << "animSpeed="         << animSpeed                       << "\n";
         f << "animPhaseDelay="    << animPhaseDelay                  << "\n";
+        f << "gameSpeed="         << gameSpeed                       << "\n";
         f << "animShowSkippedPhases=" << (animShowSkippedPhases ? "1" : "0") << "\n";
         f << "animPhaseMinDuration="  << animPhaseMinDuration            << "\n";
         f << "enginePhasePacing="     << enginePhasePacing               << "\n";
@@ -251,6 +257,7 @@ private:
         else if (k == "animReduceMotion")  animReduceMotion  = boolFromStr(v);
         else if (k == "animSpeed")         animSpeed         = floatFromStr(v, animSpeed);
         else if (k == "animPhaseDelay")    animPhaseDelay    = floatFromStr(v, animPhaseDelay);
+        else if (k == "gameSpeed")         gameSpeed         = (int)floatFromStr(v, (float)gameSpeed);
         else if (k == "animShowSkippedPhases") animShowSkippedPhases = boolFromStr(v);
         else if (k == "animPhaseMinDuration")  animPhaseMinDuration  = floatFromStr(v, animPhaseMinDuration);
         else if (k == "enginePhasePacing")     enginePhasePacing     = floatFromStr(v, enginePhasePacing);

@@ -2593,7 +2593,13 @@ void UI::syncAnimConfig() {
     c.phaseBanners = m_settings.animPhaseBanners;
     c.screenShake  = m_settings.animScreenShake;
     c.reduceMotion = m_settings.animReduceMotion;
-    c.speed        = m_settings.animSpeed;
+    // Bias animation duration by the game-speed preset (Relaxed = longer holds
+    // so animations are readable; Fast = snappier). 0 (instant) stays instant.
+    const float kAnimMul[3] = { 0.78f, 1.0f, 1.35f };
+    int gs = (m_settings.gameSpeed >= 0 && m_settings.gameSpeed <= 2)
+                 ? m_settings.gameSpeed : 0;
+    c.speed        = (m_settings.animSpeed > 0.f)
+                         ? m_settings.animSpeed * kAnimMul[gs] : 0.f;
     c.phaseDelay   = m_settings.animPhaseDelay;
     m_anim.setConfig(c);
 }
@@ -4389,6 +4395,22 @@ void UI::drawLobby(int w, int h) {
         };
         animToggle("Enable animations",          &m_settings.animationsEnabled);
         if (!m_settings.animationsEnabled) ImGui::BeginDisabled();
+        // Game speed — the headline pacing control (Relaxed slows each
+        // summon/activation so you can read what's happening).
+        ImGui::TextDisabled("Game speed (duel pacing)");
+        struct { const char* l; int v; } kGS[] = {
+            {"Relaxed", 0}, {"Normal", 1}, {"Fast", 2} };
+        for (int i = 0; i < 3; ++i) {
+            bool active = (m_settings.gameSpeed == kGS[i].v);
+            if (UIStyle::SegmentedButton(kGS[i].l, active, true, {112.f, 26.f})) {
+                m_settings.gameSpeed = kGS[i].v;
+                syncAnimConfig(); saveSettings();
+            }
+            if (i < 2) ImGui::SameLine(0.f, 4.f);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Holds briefly after each summon/effect so the "
+                              "board is readable. Offline duels only.");
         animToggle("Big monster summon animation", &m_settings.animBigSummons);
         animToggle("Phase banners",              &m_settings.animPhaseBanners);
         animToggle("Screen shake on big events", &m_settings.animScreenShake);
@@ -4964,17 +4986,19 @@ void UI::drawDuel(int w, int h) {
     // multiplayer (would delay snapshots for both peers), replay playback, and
     // during a Testing-Mode rebuild (must run instantly). Synced every frame
     // so mode changes take effect immediately.
-    m_dm.setPhaseDelay(
-        (m_net.isOffline() && !m_replayMode && !m_testingRebuilding)
-            ? (m_settings.fastTurns ? 0.0 : (double)m_settings.enginePhasePacing)
-            : 0.0);
-    // AI "combo beat" — paces each Summon / activation so the opponent's turn is
-    // watchable. Independent of the phase-pacing slider (so turning that down
-    // doesn't make the AI instant); only Fast turns / replay / rebuild / online
-    // switch it off. Fixed at a readable speed.
-    m_dm.setAiComboBeat(
-        (m_net.isOffline() && !m_replayMode && !m_testingRebuilding &&
-         !m_settings.fastTurns) ? 0.5 : 0.0);
+    // Game-speed presets (Relaxed / Normal / Fast) drive the per-event "read
+    // beat" and phase pacing so the player can follow each summon/activation.
+    //                                    Relaxed  Normal  Fast
+    const double kBeat[3]  = { 0.95,  0.50,  0.20 };
+    const double kPhase[3] = { 1.30,  0.70,  0.20 };
+    int gs = (m_settings.gameSpeed >= 0 && m_settings.gameSpeed <= 2)
+                 ? m_settings.gameSpeed : 0;
+    bool pace = m_net.isOffline() && !m_replayMode && !m_testingRebuilding &&
+                !m_settings.fastTurns;
+    m_dm.setPhaseDelay(pace ? kPhase[gs] : 0.0);
+    // AI "combo beat" — paces each Summon / activation so the action is
+    // watchable. Fast turns / replay / rebuild / online switch it off.
+    m_dm.setAiComboBeat(pace ? kBeat[gs] : 0.0);
 
     // Opponent-action notifications: toast each new summon / activation /
     // attack the opponent makes, so the player can follow the game state even
