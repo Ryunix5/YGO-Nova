@@ -435,9 +435,11 @@ bool DuelManager::startBoardBreak(const PuzzleSetup& board, const Deck& humanDec
         else    addLog("[board-break] attached Xyz material to " +
                        std::to_string(xyzSeqs.size()) + " monster(s)");
     }
-    // A couple of filler cards so the board owner never decks out while passing.
-    reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
-    reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
+    // Anti-deckout filler — only when the board didn't bring its own deck.
+    if (deckSeq0 == 0) {
+        reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
+        reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
+    }
 
     // The human's chosen deck (team 1), shuffled like a normal duel.
     std::vector<uint32_t> mainCards = humanDeck.main, extraCards = humanDeck.extra;
