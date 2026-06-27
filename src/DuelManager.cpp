@@ -395,6 +395,7 @@ bool DuelManager::startBoardBreak(const PuzzleSetup& board, const Deck& humanDec
     // regardless of the file's me/opp tag.
     int handSeq = 0, graveSeq = 0, banishSeq = 0, deckSeq0 = 0, extraSeq0 = 0;
     int mField = 0, sField = 0;
+    std::vector<int> xyzSeqs;   // MZONE seqs of Xyz monsters needing material
     for (const auto& c : board.cards) {
         uint32_t pos = c.pos ? c.pos : POS_FACEUP_ATTACK;
         uint32_t seq = c.seq;
@@ -409,6 +410,27 @@ bool DuelManager::startBoardBreak(const PuzzleSetup& board, const Deck& humanDec
             default: break;
         }
         reg(c.code, 0, c.loc, seq, pos);
+        // Xyz monsters self-destruct on the next Standby Phase if they have no
+        // material to detach. OCG_DuelNewCard can't attach overlay units, so we
+        // record the zone and attach material below via Debug.AddCard.
+        if (c.loc == LOCATION_MZONE && (m_db.getCard(c.code).type & 0x800000))
+            xyzSeqs.push_back((int)seq);
+    }
+    // Attach 2 Xyz materials under each placed Xyz monster. Debug.AddCard to an
+    // already-occupied field zone calls xyz_add(), so the card becomes overlay
+    // material (libdebug.cpp). Numeric literals: loc 0x04 = LOCATION_MZONE,
+    // pos 0x04 = POS_FACEUP_DEFENSE. Material 5053103 = a vanilla Level 4.
+    if (!xyzSeqs.empty()) {
+        std::string chunk;
+        for (int s : xyzSeqs) {
+            chunk += "Debug.AddCard(5053103,0,0,4," + std::to_string(s) + ",4)\n";
+            chunk += "Debug.AddCard(5053103,0,0,4," + std::to_string(s) + ",4)\n";
+        }
+        int r = OCG_LoadScript(m_duel, chunk.c_str(),
+                               (uint32_t)chunk.size(), "puzzle_xyz_material");
+        if (!r) addLog("[board-break] WARN: Xyz-material attach script failed");
+        else    addLog("[board-break] attached Xyz material to " +
+                       std::to_string(xyzSeqs.size()) + " monster(s)");
     }
     // A couple of filler cards so the board owner never decks out while passing.
     reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
