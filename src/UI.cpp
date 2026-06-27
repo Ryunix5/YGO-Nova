@@ -2905,16 +2905,17 @@ bool UI::testingRewindAvailable() const {
 }
 
 void UI::captureTestingRoot(const std::string& team0Path,
-                            const std::string& team1Path) {
+                            const std::string& team1Path,
+                            uint32_t lp, uint32_t handCount, uint32_t drawCount) {
     // Offline only. The seed is now canonical (startDuel consumed it).
     if (!m_net.isOffline()) { m_timeline.clear(); return; }
     edo::TestingRoot root;
     root.seed      = m_dm.duelSeed();
     root.deck0     = loadYdk(team0Path);
     root.deck1     = loadYdk(team1Path);
-    root.lp        = 8000;
-    root.handCount = 5;
-    root.drawCount = 1;
+    root.lp        = lp;
+    root.handCount = handCount;
+    root.drawCount = drawCount;
     auto baseName = [](const std::string& p) {
         std::string s = p;
         auto sl = s.find_last_of("/\\");
@@ -2969,7 +2970,7 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
     // Replay + testing capture the registered (toss) order so playback and
     // rewind reproduce the exact same opening.
     beginReplayRecording(t0, t1);
-    captureTestingRoot(t0, t1);
+    captureTestingRoot(t0, t1, lp, handCount, drawCount);
 
     // Coin-result banner + log. The toast is the quiet record; when enabled the
     // big phase-banner gives it presence at duel start.
@@ -4529,16 +4530,42 @@ void UI::drawLobby(int w, int h) {
 
         ImGui::Dummy({1.f, 10.f});
         ImGui::Separator();
-        ImGui::Dummy({1.f, 6.f});
+        ImGui::Dummy({1.f, 4.f});
 
+        // ── Custom duel options ──────────────────────────────────────────────
+        UIStyle::SectionHeader("Options");
+        ImGui::TextDisabled("Starting LP");
+        struct { const char* l; int v; } kLP[] = {
+            {"8000", 8000}, {"4000", 4000}, {"16000", 16000} };
+        for (int i = 0; i < 3; ++i) {
+            if (UIStyle::SegmentedButton(kLP[i].l, m_setupLP == kLP[i].v, true,
+                                         {84.f, 26.f}))
+                m_setupLP = kLP[i].v;
+            if (i < 2) ImGui::SameLine(0.f, 4.f);
+        }
+        ImGui::SetNextItemWidth(220.f);
+        ImGui::SliderInt("Starting hand", &m_setupHand, 1, 7);
+        ImGui::Checkbox("No shuffle (deck plays in order)", &m_setupNoShuffle);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Draw your deck top-down — for testing exact draws");
+        ImGui::Checkbox("Goldfish — passive opponent (does nothing)",
+                        &m_setupPassiveAI);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The opponent just passes, so you can practise combos");
+
+        ImGui::Dummy({1.f, 8.f});
         bool canStart = (m_deck0Path[0] != '\0') && (m_deck1Path[0] != '\0');
         // Primary "Start Duel" — gold gradient button via UIStyle.
         if (!canStart) ImGui::BeginDisabled();
         if (UIStyle::PrimaryButton("Start Duel", {280.f, 42.f})) {
+            // Apply the custom options before the duel registers its engine.
+            m_dm.setNoShuffle(m_setupNoShuffle);
+            m_dm.setPassiveAI(m_setupPassiveAI);
             // Coin toss decides who takes the first turn; the helper registers
             // the decks in toss order and wires replay + testing capture.
             if (startOfflineDuelWithCoinToss(m_deck0Path, m_deck1Path,
-                                             8000, 5, 1)) {
+                                             (uint32_t)m_setupLP,
+                                             (uint32_t)m_setupHand, 1)) {
                 m_screen = Screen::Duel;
                 gAudio().play("duel_start");
             } else {

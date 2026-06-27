@@ -216,6 +216,11 @@ private:
     int    m_deck0Idx       = -1;   // index into m_deckFiles
     int    m_deck1Idx       = -1;
     bool   m_duelSetupOpen  = false;
+    // Custom duel settings (Duel Setup popup).
+    int    m_setupLP        = 8000;
+    int    m_setupHand      = 5;
+    bool   m_setupNoShuffle = false;
+    bool   m_setupPassiveAI = false;
 
     // Testing mode
     bool   m_testingMode = false;
@@ -241,7 +246,9 @@ private:
     // paths are the decks in REGISTERED order (team 0 = goes first), which the
     // coin toss may swap relative to P1/P2.
     void captureTestingRoot(const std::string& team0Path,
-                            const std::string& team1Path);
+                            const std::string& team1Path,
+                            uint32_t lp = 8000, uint32_t handCount = 5,
+                            uint32_t drawCount = 1);
     // Start an offline duel, flipping a coin (when enabled) to decide who takes
     // the first turn. Registers decks in toss order, sets the local seat, wires
     // replay + testing capture, and shows a coin-result banner. Returns false if

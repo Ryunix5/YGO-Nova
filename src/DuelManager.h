@@ -282,6 +282,13 @@ public:
     // gives the first turn to team 0). Default 0 — unchanged behaviour.
     void setHumanSeat(int s) { m_humanSeat = (s & 1); }
     int  humanSeat() const   { return m_humanSeat; }
+    // Custom duel options (applied at the next startDuel).
+    void setNoShuffle(bool b) { m_noShuffle = b; }   // deck plays in deck order
+    bool noShuffle() const    { return m_noShuffle; }
+    // Goldfish: the AI does nothing on its turn (just passes) so the human can
+    // practise combos. It still answers forced/mandatory prompts.
+    void setPassiveAI(bool b) { m_passiveAI = b; }
+    bool passiveAI() const    { return m_passiveAI; }
 
     bool isRunning() const { return m_duel != nullptr && m_running; }
     bool isDone()    const { return m_done; }
@@ -430,6 +437,8 @@ private:
     double                   m_phaseDelaySec = 0.0;
     double                   m_aiComboBeat   = 0.45;  // per-summon/activation beat
     int                      m_humanSeat = 0;   // engine seat the human controls
+    bool                     m_noShuffle = false;   // DUEL_PSEUDO_SHUFFLE
+    bool                     m_passiveAI = false;   // goldfish opponent
     // AI per-turn guard: which (card,effect) the offline AI already activated
     // this turn, so it never re-activates the same effect into an endless loop.
     int                      m_aiTurnSeen = -1;

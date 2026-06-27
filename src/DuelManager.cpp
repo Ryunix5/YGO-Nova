@@ -96,6 +96,9 @@ bool DuelManager::startDuel(const Deck& p0deck, const Deck& p1deck,
     // needed, adjust this combination.
     opts.flags = DUEL_PZONE | DUEL_EMZONE | DUEL_FSX_MMZONE |
                  DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION;
+    // "No shuffle" (custom duel setting / combo practice): the main deck plays
+    // in registered order. Hands are still randomised by the engine.
+    if (m_noShuffle) opts.flags |= DUEL_PSEUDO_SHUFFLE;
     addLog("=== Duel start ===");
     addLog("Duel seed: " + std::to_string(base));
     {
@@ -2068,6 +2071,9 @@ void DuelManager::validateState() {
 // A per-turn guard stops it re-activating the same effect forever; the engine's
 // own retry cap is the final backstop.
 bool DuelManager::aiIdlePhase() {
+    // Goldfish: a passive opponent develops no board — it ends its turn
+    // immediately so the human can practise combos uninterrupted.
+    if (m_passiveAI) { respondIdleCmd(7, 0); return true; }
     const std::vector<IdleAction>& idle = m_selection.idle;
     const int aiSeat = m_selection.player & 1;
 
@@ -2132,6 +2138,7 @@ bool DuelManager::aiIdlePhase() {
 }
 
 bool DuelManager::aiBattlePhase() {
+    if (m_passiveAI) { respondIdleCmd(3, 0); return true; }   // end Battle Phase
     const std::vector<IdleAction>& idle = m_selection.idle;
     const int aiSeat  = m_selection.player & 1;
     const int oppSeat = aiSeat ^ 1;
