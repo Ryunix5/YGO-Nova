@@ -59,6 +59,7 @@ bool DuelManager::startDuel(const Deck& p0deck, const Deck& p1deck,
                              uint32_t lp, uint32_t handCount, uint32_t drawCount) {
     endDuel();
     m_field = {};   // clear stale board/turn/phase state from any prior duel
+    m_defensiveAI = false;   // only board-break puzzles defend on the human turn
 
     // Seed strategy:
     //   * If a replay forced a seed via setForcedSeed(), consume it once
@@ -257,6 +258,7 @@ void DuelManager::loadInitScripts() {
 bool DuelManager::startPuzzle(const PuzzleSetup& pz) {
     endDuel();
     m_field = {};
+    m_defensiveAI = false;
 
     uint64_t base = (uint64_t)std::chrono::high_resolution_clock::now()
                         .time_since_epoch().count();
@@ -335,6 +337,102 @@ bool DuelManager::startPuzzle(const PuzzleSetup& pz) {
     OCG_StartDuel(m_duel);
     m_running = true;
     addLog("Puzzle ready — goal: " + pz.goal);
+    return true;
+}
+
+// ── Board-break puzzle ───────────────────────────────────────────────────────
+// The opponent (team 0) opens with the preset board and takes the first turn;
+// the human (team 1) goes SECOND with their own deck and a full opening hand,
+// and must break through. The board owner is passive on its own (first) turn,
+// then DEFENDS on the human's turn via m_defensiveAI.
+bool DuelManager::startBoardBreak(const PuzzleSetup& board, const Deck& humanDeck) {
+    endDuel();
+    m_field = {};
+
+    uint64_t base = (uint64_t)std::chrono::high_resolution_clock::now()
+                        .time_since_epoch().count();
+    std::random_device rd; base ^= ((uint64_t)rd() << 32) ^ (uint64_t)rd();
+    std::mt19937_64 rng(base);
+    m_duelSeed = base;
+
+    OCG_DuelOptions opts{};
+    opts.seed[0] = rng(); opts.seed[1] = rng();
+    opts.seed[2] = rng(); opts.seed[3] = rng();
+    opts.flags = DUEL_PZONE | DUEL_EMZONE | DUEL_FSX_MMZONE |
+                 DUEL_TRAP_MONSTERS_NOT_USE_ZONE | DUEL_TRIGGER_ONLY_IN_LOCATION;
+    addLog("=== Board-break: " + board.name + " ===");
+    // team1 = board owner (team 0): no opening hand, board is preset.
+    // team2 = human (team 1): goes second, draws a full opening hand.
+    opts.team1.startingLP        = board.lpOpp;
+    opts.team1.startingDrawCount = 0;
+    opts.team1.drawCountPerTurn  = 1;
+    opts.team2.startingLP        = board.lpYou;
+    opts.team2.startingDrawCount = 5;     // +1 on the human's turn = 6 cards
+    opts.team2.drawCountPerTurn  = 1;
+    opts.cardReader     = CardDB::cardReaderCb;     opts.payload1 = &m_db;
+    opts.cardReaderDone = CardDB::cardReaderDoneCb; opts.payload4 = &m_db;
+    opts.scriptReader   = scriptReaderCb;           opts.payload2 = this;
+    opts.logHandler     = logHandlerCb;             opts.payload3 = this;
+
+    if (OCG_CreateDuel(&m_duel, &opts) != OCG_DUEL_CREATION_SUCCESS) {
+        addLog("ERROR: OCG_CreateDuel failed (board-break)");
+        return false;
+    }
+    loadInitScripts();
+
+    auto reg = [&](uint32_t code, uint8_t player, uint32_t loc,
+                   uint32_t seq, uint32_t pos) {
+        OCG_NewCardInfo info{};
+        info.team = player; info.duelist = 0; info.code = code;
+        info.con  = player; info.loc = loc; info.seq = seq; info.pos = pos;
+        OCG_DuelNewCard(m_duel, &info);
+    };
+
+    // Place the board — every puzzle card belongs to the opponent (team 0),
+    // regardless of the file's me/opp tag.
+    int handSeq = 0, graveSeq = 0, banishSeq = 0, deckSeq0 = 0, extraSeq0 = 0;
+    int mField = 0, sField = 0;
+    for (const auto& c : board.cards) {
+        uint32_t pos = c.pos ? c.pos : POS_FACEUP_ATTACK;
+        uint32_t seq = c.seq;
+        switch (c.loc) {
+            case LOCATION_HAND:    seq = handSeq++;   pos = POS_FACEDOWN; break;
+            case LOCATION_GRAVE:   seq = graveSeq++;  pos = POS_FACEUP;   break;
+            case LOCATION_REMOVED: seq = banishSeq++;                     break;
+            case LOCATION_DECK:    seq = deckSeq0++;  pos = POS_FACEDOWN_DEFENSE; break;
+            case LOCATION_EXTRA:   seq = extraSeq0++; pos = POS_FACEDOWN_DEFENSE; break;
+            case LOCATION_MZONE:   if (!c.seq) seq = mField; mField = (int)seq + 1; break;
+            case LOCATION_SZONE:   if (!c.seq) seq = sField; sField = (int)seq + 1; break;
+            default: break;
+        }
+        reg(c.code, 0, c.loc, seq, pos);
+    }
+    // A couple of filler cards so the board owner never decks out while passing.
+    reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
+    reg(55144522, 0, LOCATION_DECK, deckSeq0++, POS_FACEDOWN_DEFENSE);
+
+    // The human's chosen deck (team 1), shuffled like a normal duel.
+    std::vector<uint32_t> mainCards = humanDeck.main, extraCards = humanDeck.extra;
+    std::shuffle(mainCards.begin(), mainCards.end(), rng);
+    for (uint32_t i = 0; i < mainCards.size();  ++i)
+        reg(mainCards[i],  1, LOCATION_DECK,  i, POS_FACEDOWN_DEFENSE);
+    for (uint32_t i = 0; i < extraCards.size(); ++i)
+        reg(extraCards[i], 1, LOCATION_EXTRA, i, POS_FACEDOWN_DEFENSE);
+
+    m_field.deckCount[0]  = deckSeq0;
+    m_field.deckCount[1]  = (int)mainCards.size();
+    m_field.extraCount[0] = extraSeq0;
+    m_field.extraCount[1] = (int)extraCards.size();
+    m_field.lp[0] = board.lpOpp; m_field.lp[1] = board.lpYou;
+
+    m_humanSeat   = 1;        // you control team 1 and go second
+    m_passiveAI   = true;     // board owner does nothing on its own turn
+    m_defensiveAI = true;     // …but defends on yours
+    m_aiDefenseDoneThisTurn.clear();
+
+    OCG_StartDuel(m_duel);
+    m_running = true;
+    addLog("Board-break ready — break it going second.");
     return true;
 }
 
@@ -2290,6 +2388,7 @@ bool DuelManager::autoRespondP2() {
     if (m_field.turnCount != m_aiActionTurn) {
         m_aiActionTurn = m_field.turnCount;
         m_aiActionsThisTurn = 0;
+        m_aiDefenseDoneThisTurn.clear();   // disruptions refresh each turn
     }
     if (++m_aiActionsThisTurn > 120) {
         if (m_aiActionsThisTurn == 121)
@@ -2371,9 +2470,35 @@ bool DuelManager::autoRespondP2() {
         }
         respondSingleCard(pick); return true;
     }
-    case WaitType::SelectChain:
-        respondChain(forced ? 0 : -1);   // never start a chain unless forced
+    case WaitType::SelectChain: {
+        if (forced) { respondChain(0); return true; }
+        // Defensive AI (board-break puzzles): on the HUMAN's turn the board
+        // owner fires its disruptions. Activate the first chainable effect we
+        // haven't already used this turn, so negates / banishes actually
+        // threaten the player. Each distinct card disrupts at most once per
+        // turn (guarded) and only while it is NOT the AI's own turn, so it
+        // never chains into its own combo or loops. Outside this mode the AI
+        // keeps the safe behaviour: pass unless forced.
+        const int aiSeat = m_selection.player & 1;
+        const bool ownTurn = (m_field.turnPlayer & 1) == aiSeat;
+        if (m_defensiveAI && !ownTurn && !m_selection.cards.empty()) {
+            for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
+                uint32_t code = m_selection.cards[i].code;
+                bool used = false;
+                for (uint32_t k : m_aiDefenseDoneThisTurn)
+                    if (k == code) { used = true; break; }
+                if (used) continue;
+                m_aiDefenseDoneThisTurn.push_back(code);
+                addLog("[defensive-AI] activating disruption: #" +
+                       std::to_string(code) + " [" +
+                       m_db.getCard(code).name + "]");
+                respondChain(i);
+                return true;
+            }
+        }
+        respondChain(-1);                // nothing left to use -> pass
         return true;
+    }
     case WaitType::SelectUnselect:
         // Material selection during the AI's own summon (Synchro/Link/Xyz/
         // Fusion). The engine re-asks one card at a time and only sets

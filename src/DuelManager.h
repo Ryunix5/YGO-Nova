@@ -209,11 +209,17 @@ public:
     };
     struct PuzzleSetup {
         std::string name, goal;
+        bool     boardBreak = false;         // true: you go SECOND vs the board
         uint32_t lpYou = 8000, lpOpp = 8000;
         std::vector<PuzzleCard> cards;       // hand/field/GY/banish placements
         std::vector<uint32_t> deckYou, deckOpp;   // remaining deck (anti-deckout)
     };
     bool startPuzzle(const PuzzleSetup& p);
+    // Board-break: the opponent (team 0) opens with the preset board and goes
+    // first; the human (team 1) goes second with their own `humanDeck`, draws a
+    // full opening hand, and must break the board. The board owner stays passive
+    // on its own turn but DEFENDS on yours (see m_defensiveAI).
+    bool startBoardBreak(const PuzzleSetup& board, const Deck& humanDeck);
 
     void endDuel();
 
@@ -309,6 +315,11 @@ public:
     // practise combos. It still answers forced/mandatory prompts.
     void setPassiveAI(bool b) { m_passiveAI = b; }
     bool passiveAI() const    { return m_passiveAI; }
+    // Defensive AI: on the HUMAN's turn the opponent activates its board's
+    // disruptions (negates / banishes) instead of always passing. Used by
+    // board-break puzzles so a boss board actually fights back.
+    void setDefensiveAI(bool b) { m_defensiveAI = b; }
+    bool defensiveAI() const    { return m_defensiveAI; }
 
     bool isRunning() const { return m_duel != nullptr && m_running; }
     bool isDone()    const { return m_done; }
@@ -459,6 +470,8 @@ private:
     int                      m_humanSeat = 0;   // engine seat the human controls
     bool                     m_noShuffle = false;   // DUEL_PSEUDO_SHUFFLE
     bool                     m_passiveAI = false;   // goldfish opponent
+    bool                     m_defensiveAI = false; // defend on the human's turn
+    std::vector<uint32_t>    m_aiDefenseDoneThisTurn;  // disruptions fired/turn
     // AI per-turn guard: which (card,effect) the offline AI already activated
     // this turn, so it never re-activates the same effect into an endless loop.
     int                      m_aiTurnSeen = -1;

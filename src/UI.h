@@ -235,6 +235,7 @@ private:
     bool   m_puzzleMode    = false;   // active duel is a puzzle
     int    m_activePuzzle  = -1;      // index into m_puzzles for Retry
     int    m_puzzleResult  = 0;       // 0 none, 1 solved, 2 failed
+    int    m_puzzleDeckIdx = 0;       // chosen deck (board-break) into m_deckFiles
     std::string m_puzzleGoal;
     void   loadPuzzles();
     void   drawPuzzleBrowser();

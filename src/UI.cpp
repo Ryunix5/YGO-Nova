@@ -8439,7 +8439,7 @@ void UI::drawSelectionPanel(int pw, int ph) {
     // Puzzle mode owns its own end screen (solved / failed + Retry), so it
     // never shows the deck-based Rematch flow.
     if (m_puzzleMode && m_dm.isDone()) {
-        bool solved = (m_dm.winner() == 0);   // human is always seat 0 here
+        bool solved = (m_dm.winner() == m_dm.humanSeat());   // you won
         if (m_puzzleResult == 0) {
             m_puzzleResult = solved ? 1 : 2;
             gAudio().play(solved ? "victory" : "defeat");
@@ -10797,6 +10797,7 @@ void UI::loadPuzzles() {
                 else if (k == "goal")       pe.setup.goal = v;
                 else if (k == "difficulty") pe.difficulty = v;
                 else if (k == "desc")       pe.desc = v;
+                else if (k == "mode")       pe.setup.boardBreak = (v == "break");
                 else if (k == "lp")         pe.setup.lpYou = (uint32_t)atoi(v.c_str());
                 else if (k == "opplp")      pe.setup.lpOpp = (uint32_t)atoi(v.c_str());
                 continue;
@@ -10841,15 +10842,35 @@ void UI::startPuzzleByIndex(int idx) {
     // appended to a stale stream (puzzles are not recorded).
     finalizeReplay("entering puzzle");
     m_replayMode = false;
-    // Offline, human at seat 0 (goes first), opponent passive so the player
-    // works the board uninterrupted.
-    m_dm.setHumanSeat(0);
     m_net.clearSeatOverride();
     m_dm.setLocalMode(true);
-    m_dm.setPassiveAI(true);
-    m_dm.setNoShuffle(true);
     m_snap.clear();
-    if (!m_dm.startPuzzle(pe.setup)) {
+
+    bool ok = false;
+    if (pe.setup.boardBreak) {
+        // Board-break: load the chosen deck, go SECOND, opponent defends.
+        if (m_deckFiles.empty()) refreshDeckFiles();
+        if (m_deckFiles.empty()) {
+            pushToast("No decks found — build one in the Deck Builder first.",
+                      IM_COL32(232, 182, 72, 255), 3.0);
+            gAudio().play("error");
+            return;
+        }
+        if (m_puzzleDeckIdx < 0 || m_puzzleDeckIdx >= (int)m_deckFiles.size())
+            m_puzzleDeckIdx = 0;
+        Deck humanDeck = loadYdk("assets/decks/" + m_deckFiles[m_puzzleDeckIdx]);
+        // setHumanSeat / passive / defensive are configured inside the engine
+        // call; mirror the seat here so the field + UI read it consistently.
+        ok = m_dm.startBoardBreak(pe.setup, humanDeck);
+        m_dm.setHumanSeat(1);
+    } else {
+        // Classic "solve it this turn" — you go first, opponent passive.
+        m_dm.setHumanSeat(0);
+        m_dm.setPassiveAI(true);
+        m_dm.setNoShuffle(true);
+        ok = m_dm.startPuzzle(pe.setup);
+    }
+    if (!ok) {
         pushToast("Puzzle failed to start", IM_COL32(232, 110, 100, 255), 2.6);
         gAudio().play("error");
         return;
@@ -10877,8 +10898,36 @@ void UI::drawPuzzleBrowser() {
     if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
     ImGui::TextUnformatted("Puzzles & Challenges");
     if (UIStyle::fHeader) ImGui::PopFont();
-    ImGui::TextDisabled("Preset boards — find the line to win in a single turn.");
+    ImGui::TextDisabled("Board-break: pick your deck, go second, draw 6, and "
+                        "break the boss board.");
     ImGui::Separator();
+
+    // Deck picker — the deck you'll bring into board-break challenges.
+    bool anyBreak = false;
+    for (auto& p : m_puzzles) if (p.setup.boardBreak) { anyBreak = true; break; }
+    if (anyBreak) {
+        if (m_deckFiles.empty()) refreshDeckFiles();
+        ImGui::TextUnformatted("Your deck:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.f);
+        if (m_deckFiles.empty()) {
+            ImGui::TextDisabled("(no decks — build one in the Deck Builder)");
+        } else {
+            if (m_puzzleDeckIdx < 0 || m_puzzleDeckIdx >= (int)m_deckFiles.size())
+                m_puzzleDeckIdx = 0;
+            std::string cur = m_deckFiles[m_puzzleDeckIdx];
+            if (ImGui::BeginCombo("##puzzledeck", cur.c_str())) {
+                for (int d = 0; d < (int)m_deckFiles.size(); ++d) {
+                    bool sel = (d == m_puzzleDeckIdx);
+                    if (ImGui::Selectable(m_deckFiles[d].c_str(), sel))
+                        m_puzzleDeckIdx = d;
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::Separator();
+    }
 
     if (m_puzzles.empty()) {
         ImGui::Spacing();
