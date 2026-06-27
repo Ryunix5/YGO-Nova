@@ -3861,7 +3861,27 @@ void UI::drawLobby(int w, int h) {
             if (m_puzzles.empty()) loadPuzzles();
             m_puzzleBrowserOpen = true;
         }
-        if (navItem("MATCH HISTORY", "Win/loss record and stats", false)) {
+        // Win/loss record + current streak from match history (#D).
+        std::string histSub = "Win/loss record and stats";
+        if (!m_matchHistory.empty()) {
+            int wins = 0, losses = 0;
+            for (auto& r : m_matchHistory) {
+                if (r.result == 'W') wins++; else if (r.result == 'L') losses++;
+            }
+            char last = m_matchHistory.back().result;
+            int streak = 0;
+            for (auto it = m_matchHistory.rbegin();
+                 it != m_matchHistory.rend() && it->result == last; ++it)
+                streak++;
+            char sb[80];
+            if (last == 'W' || last == 'L')
+                snprintf(sb, sizeof(sb), "%d W - %d L   ·   %d %s streak",
+                         wins, losses, streak, last == 'W' ? "win" : "loss");
+            else
+                snprintf(sb, sizeof(sb), "%d W - %d L", wins, losses);
+            histSub = sb;
+        }
+        if (navItem("MATCH HISTORY", histSub.c_str(), false)) {
             gAudio().play("click");
             m_historyOpen = true;
         }
@@ -4686,6 +4706,14 @@ void UI::drawLobby(int w, int h) {
             // Apply the custom options before the duel registers its engine.
             m_dm.setNoShuffle(m_setupNoShuffle);
             m_dm.setPassiveAI(m_setupPassiveAI);
+            // Deck-legality heads-up (#E) — non-blocking so casual/test decks
+            // still play, but the player is told why a deck is non-tournament.
+            {
+                std::string issue = deckLegality(loadYdk(m_deck0Path));
+                if (!issue.empty())
+                    pushToast("Heads up — your deck isn't legal: " + issue,
+                              IM_COL32(235, 185, 60, 255), 4.0);
+            }
             // Best-of-3: store the decks and run a match; otherwise a single duel.
             m_matchActive = m_setupMatchMode;
             bool ok;
@@ -5263,6 +5291,11 @@ void UI::drawDuel(int w, int h) {
                 int drawn = (int)f.hand[p].size() - m_sfxPrevHand[p];
                 if (drawn > 0) {
                     gAudio().play("draw");
+                    // Highlight your freshly drawn cards (#B).
+                    if (p == m_net.localPlayerIndex()) {
+                        m_newDrawAt    = ImGui::GetTime();
+                        m_newDrawCount = drawn;
+                    }
                     pushGameLog(
                         "Player " + std::to_string(p + 1) +
                         " drew " + std::to_string(drawn) +
@@ -8138,6 +8171,19 @@ void UI::drawField(int fw, int fh) {
                          hasLegalActionFor(c.player, (uint8_t)c.loc, c.seq))
                     dl->AddRect(hp,hbr,IM_COL32(255,200,90,200),5.f,0,2.2f);
 
+                // Freshly drawn cards (#B): a brief blue pulse on the newest
+                // tiles (drawn cards are appended, so they're the last ones).
+                if (m_newDrawCount > 0 && i >= n - m_newDrawCount) {
+                    double age = ImGui::GetTime() - m_newDrawAt;
+                    if (age >= 0.0 && age < 1.6) {
+                        float fade = 1.f - (float)(age / 1.6);
+                        float pl = 0.5f + 0.5f * sinf((float)ImGui::GetTime()*7.f);
+                        ImU32 g = IM_COL32(120, 210, 255,
+                                           (int)((90 + 110 * pl) * fade));
+                        UIStyle::DrawGlow(dl, hp, hbr, g, 5.f, 3);
+                    }
+                }
+
                 ImGui::SetCursorScreenPos({hx, rY[6]});   // full slot = hit area
                 char hid[24]; snprintf(hid,24,"##h%d",i);
                 bool hClicked = ImGui::InvisibleButton(hid,{cw,hH});
@@ -9173,8 +9219,34 @@ void UI::drawSelectionPanel(int pw, int ph) {
         // Always shown regardless of card selection (they belong to no card).
         if (sel.toBP && ImGui::Button("Go to Battle Phase", {bw, 30.f}))
             submitIdleCmd(6, 0, "Battle Phase");
-        if (sel.toEP && ImGui::Button("End Turn", {bw, 30.f}))
-            submitIdleCmd(7, 0, "End Turn");
+        if (sel.toEP) {
+            // Misclick guard (#A): if you can still Normal Summon, confirm.
+            bool canNormalSummon = false;
+            for (const auto& a : sel.idle)
+                if (a.cmd == 0) { canNormalSummon = true; break; }
+            if (ImGui::Button("End Turn", {bw, 30.f})) {
+                if (canNormalSummon) ImGui::OpenPopup("End turn?##etpop");
+                else submitIdleCmd(7, 0, "End Turn");
+            }
+            ImGui::SetNextWindowPos(
+                {ImGui::GetIO().DisplaySize.x * 0.5f,
+                 ImGui::GetIO().DisplaySize.y * 0.5f},
+                ImGuiCond_Always, {0.5f, 0.5f});
+            if (ImGui::BeginPopupModal("End turn?##etpop", nullptr,
+                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+                ImGui::TextUnformatted("You can still Normal Summon this turn.");
+                ImGui::TextDisabled("End your turn anyway?");
+                ImGui::Dummy({1.f, 8.f});
+                if (UIStyle::PrimaryButton("End Turn", {130.f, 32.f})) {
+                    submitIdleCmd(7, 0, "End Turn");
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine(0.f, 8.f);
+                if (UIStyle::GhostButton("Keep playing", {130.f, 32.f}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
         break;
     }
 
@@ -11646,11 +11718,33 @@ void UI::drawDeckBuilder(int w, int h) {
             if (UIStyle::fHeader) ImGui::PopFont();
         } else {
         if (UIStyle::GhostButton("< Back", {110.f, 32.f})) {
-            m_screen = Screen::Lobby;
-            ImGui::End();
-            ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor(2);
-            return;
+            if (dirty) {
+                ImGui::OpenPopup("Leave deck?##leavedeck");
+            } else {
+                m_screen = Screen::Lobby;
+                ImGui::End();
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(2);
+                return;
+            }
+        }
+        // Unsaved-changes guard (#F). Leaving sets the screen and lets the frame
+        // finish normally (no early return → balanced End/Pop at function exit).
+        ImGui::SetNextWindowPos({(float)w * 0.5f, (float)h * 0.5f},
+                                ImGuiCond_Always, {0.5f, 0.5f});
+        if (ImGui::BeginPopupModal("Leave deck?##leavedeck", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+            ImGui::TextUnformatted("You have unsaved changes to this deck.");
+            ImGui::TextDisabled("Leaving now will discard them.");
+            ImGui::Dummy({1.f, 8.f});
+            if (UIStyle::DangerButton("Leave & discard", {150.f, 32.f})) {
+                m_screen = Screen::Lobby;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine(0.f, 8.f);
+            if (UIStyle::GhostButton("Stay", {110.f, 32.f}))
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
         }
         ImGui::SameLine(0.f, 14.f);
         if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
@@ -11658,6 +11752,19 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::TextUnformatted("Deck Builder");
         ImGui::PopStyleColor();
         if (UIStyle::fHeader) ImGui::PopFont();
+        // Legality chip (#E) — green Legal / red Illegal with the reason.
+        {
+            std::string issue = deckLegality(m_editDeck);
+            ImGui::SameLine(0.f, 12.f);
+            ImGui::AlignTextToFramePadding();
+            if (issue.empty())
+                UIStyle::StatusChip("Legal", IM_COL32(90, 200, 120, 255));
+            else {
+                UIStyle::StatusChip("Illegal", IM_COL32(230, 90, 80, 255));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", issue.c_str());
+            }
+        }
         }
 
         // Right cluster: combo + name input + Save + Refresh + the ghost
@@ -13482,6 +13589,29 @@ void UI::drawMultiplayer(int w, int h) {
 }
 
 // ─── refreshDeckFiles ─────────────────────────────────────────────────────────
+// Deck legality (#E): size limits + per-card copy limit (banlist-aware).
+std::string UI::deckLegality(const Deck& d) {
+    int m = (int)d.main.size(), e = (int)d.extra.size(), s = (int)d.side.size();
+    if (m < 40) return "Main deck has " + std::to_string(m) + " cards (need 40+)";
+    if (m > 60) return "Main deck has " + std::to_string(m) + " cards (max 60)";
+    if (e > 15) return "Extra deck has " + std::to_string(e) + " cards (max 15)";
+    if (s > 15) return "Side deck has " + std::to_string(s) + " cards (max 15)";
+    std::unordered_map<uint32_t,int> cnt;
+    for (uint32_t c : d.main)  cnt[c]++;
+    for (uint32_t c : d.extra) cnt[c]++;
+    for (uint32_t c : d.side)  cnt[c]++;
+    for (auto& kv : cnt) {
+        int lim = cardLimit(kv.first);          // banlist-aware (3 default)
+        if (kv.second > lim) {
+            std::string nm = m_db.getCard(kv.first).name;
+            if (nm.empty()) nm = "#" + std::to_string(kv.first);
+            return nm + ": " + std::to_string(kv.second) + " copies (limit " +
+                   std::to_string(lim) + ")";
+        }
+    }
+    return "";
+}
+
 void UI::refreshDeckFiles() {
     m_deckFiles.clear();
     namespace fs = std::filesystem;

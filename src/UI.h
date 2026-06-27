@@ -443,6 +443,9 @@ private:
     // above it after damage (fighting-game style drain trail).
     float    m_lpShown[2]     = {8000.f, 8000.f};
     float    m_lpGhost[2]     = {8000.f, 8000.f};
+    // New-draw highlight (#B): glow the last m_newDrawCount hand tiles briefly.
+    double   m_newDrawAt      = -10.0;
+    int      m_newDrawCount   = 0;
     int      m_sfxPrevHand[2] = {0, 0};
     int      m_sfxPrevGY[2]   = {0, 0};
     int      m_sfxPrevBN[2]   = {0, 0};
@@ -883,6 +886,9 @@ private:
     // ── Helpers ────────────────────────────────────────────────────────────
     Deck loadYdk(const std::string& path);
     void saveYdk(const Deck& d, const std::string& path);
+    // Deck legality (#E): "" = legal, else a short reason (size / copy / banlist
+    // limit). Uses the currently selected banlist for per-card limits.
+    std::string deckLegality(const Deck& d);
     // .ydk text (de)serialisation — shared by file IO and clipboard share.
     Deck deckFromYdkText(const std::string& text);
     std::string deckToYdkText(const Deck& d);
