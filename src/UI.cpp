@@ -7954,7 +7954,17 @@ void UI::drawChainResponsePopup(int w, int h) {
     ImGui::Dummy({1.f, 10.f});
 
     if (!sel.forced) {
-        if (UIStyle::PrimaryButton("Pass / No Response", {-1.f, 36.f})) {
+        bool pass = UIStyle::PrimaryButton("Pass / No Response", {-1.f, 36.f});
+        // Right-click anywhere = pass, for fast no-responses. Skip when the
+        // same click just pinned a card zoom (right-click-to-zoom on a glowing
+        // card still works); m_zoomCard is set earlier this frame by the field
+        // renderer, which runs before this popup.
+        if (!pass && ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
+            m_zoomCard == 0)
+            pass = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tip: right-click anywhere = pass");
+        if (pass) {
             gAudio().play("cancel");
             submitMpChoice(WaitType::SelectChain, -1);
             clearSelection();
