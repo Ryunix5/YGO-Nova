@@ -73,22 +73,22 @@ void ApplyTheme() {
     ImGuiStyle& s = ImGui::GetStyle();
     auto V4 = [](ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); };
 
-    // Metrics — consistent rounding + breathing room.
-    s.WindowRounding    = 10.f;
-    s.ChildRounding     = 8.f;
-    s.PopupRounding     = 10.f;
-    s.FrameRounding     = 7.f;
-    s.GrabRounding      = 6.f;
-    s.TabRounding       = 6.f;
-    s.ScrollbarRounding = 8.f;
-    s.ScrollbarSize     = 12.f;
+    // Metrics — softer rounding + more breathing room for a premium feel.
+    s.WindowRounding    = 13.f;
+    s.ChildRounding     = 10.f;
+    s.PopupRounding     = 13.f;
+    s.FrameRounding     = 9.f;
+    s.GrabRounding      = 8.f;
+    s.TabRounding       = 8.f;
+    s.ScrollbarRounding = 9.f;
+    s.ScrollbarSize     = 13.f;
     s.WindowBorderSize  = 1.f;
     s.PopupBorderSize   = 1.f;
     s.FrameBorderSize   = 0.f;
-    s.FramePadding      = {10.f, 7.f};
-    s.ItemSpacing       = {8.f, 6.f};
-    s.ItemInnerSpacing  = {6.f, 4.f};
-    s.WindowPadding     = {14.f, 12.f};
+    s.FramePadding      = {12.f, 8.f};
+    s.ItemSpacing       = {9.f, 8.f};
+    s.ItemInnerSpacing  = {7.f, 5.f};
+    s.WindowPadding     = {16.f, 14.f};
 
     ImVec4* c = s.Colors;
     c[ImGuiCol_Text]                 = V4(gC.textHi);
@@ -454,22 +454,31 @@ static void drawButtonLabel(ImDrawList* dl, ImVec2 a, ImVec2 b,
 
 static void paintPrimary(ImDrawList* dl, ImVec2 a, ImVec2 b,
                          bool hovered, bool active, const char* label) {
-    // One clean solid gold — no offset shadow, no double-layer. State just
-    // shifts the fill: brighter on hover, slightly dimmer on press.
-    ImU32 fill = active  ? gC.accentDim
-              : hovered  ? gC.accentHi
-                         : gC.accent;
-    dl->AddRectFilled(a, b, fill, gM.radM);
-    // Subtle inner highlight at the top for a "lit from above" cue that
-    // doesn't read as a shadow.
+    float r = gM.radM;
+    // Hover glow ring for a premium "lit" feel.
+    if (hovered && !active)
+        DrawGlow(dl, a, b, (gC.accentHi & 0x00FFFFFF) | 0x66000000, r, 3);
+    // Drop shadow below for depth.
+    dl->AddRectFilled({a.x + 1.f, a.y + 3.f}, {b.x + 1.f, b.y + 4.f},
+                      IM_COL32(0, 0, 0, 70), r);
+    // Vertical gradient body: bright crimson top → deep red bottom (press
+    // inverts slightly for a tactile "pushed in" cue).
+    ImU32 top = active ? gC.primary   : hovered ? gC.primaryAct : gC.primaryHi;
+    ImU32 bot = active ? gC.primaryHi : hovered ? gC.primary    : gC.primary;
+    dl->AddRectFilledMultiColor(a, b, top, top, bot, bot);
+    // Crisp top sheen.
     float h = b.y - a.y;
     dl->AddRectFilledMultiColor(
-        a, {b.x, a.y + h * 0.5f},
-        IM_COL32(255, 255, 255, 38), IM_COL32(255, 255, 255, 38),
+        {a.x, a.y}, {b.x, a.y + h * 0.46f},
+        IM_COL32(255, 255, 255, 52), IM_COL32(255, 255, 255, 52),
         IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
-    dl->AddRect(a, b, hovered ? gC.accentHi : gC.accent,
-                gM.radM, 0, hovered ? 1.4f : 1.f);
-    drawButtonLabel(dl, a, b, gC.accentText, label);
+    // Hairline inner highlight + bright outer border.
+    dl->AddRect({a.x + 1.f, a.y + 1.f}, {b.x - 1.f, b.y - 1.f},
+                IM_COL32(255, 255, 255, 30), r - 1.f, 0, 1.f);
+    dl->AddRect(a, b, hovered ? IM_COL32(255, 140, 140, 255)
+                              : IM_COL32(255, 110, 110, 220),
+                r, 0, hovered ? 1.6f : 1.2f);
+    drawButtonLabel(dl, a, b, gC.primaryText, label);
 }
 
 static void paintSecondary(ImDrawList* dl, ImVec2 a, ImVec2 b,
