@@ -7622,21 +7622,22 @@ void UI::drawField(int fw, int fh) {
         ImVec2 c  = {ox + gridW * 0.5f, oy + gridH * 0.5f};
         float  rw = gridW * 0.62f, rh = gridH * 0.62f;
         dl->AddRectFilled({c.x - rw, c.y - rh}, {c.x + rw, c.y + rh},
-                          IM_COL32(34, 44, 82, 36), 90.f);
+                          IM_COL32(70, 26, 32, 36), 90.f);
         rw *= 0.78f; rh *= 0.78f;
         dl->AddRectFilled({c.x - rw, c.y - rh}, {c.x + rw, c.y + rh},
-                          IM_COL32(40, 52, 96, 32), 70.f);
+                          IM_COL32(96, 32, 38, 30), 70.f);
     }
-    // Gradient territory tints: top = opponent (warm), bottom = local (cool).
+    // Gradient territory tints: top = opponent (deep red), bottom = you
+    // (brighter crimson) — both red-family but distinct top/bottom.
     dl->AddRectFilledMultiColor({wPos.x, wPos.y}, {wPos.x + fw, midY},
-        IM_COL32(70, 22, 30, 95), IM_COL32(70, 22, 30, 95),
-        IM_COL32(70, 22, 30, 6),  IM_COL32(70, 22, 30, 6));
+        IM_COL32(66, 18, 24, 100), IM_COL32(66, 18, 24, 100),
+        IM_COL32(66, 18, 24, 6),   IM_COL32(66, 18, 24, 6));
     dl->AddRectFilledMultiColor({wPos.x, midY}, {wPos.x + fw, wPos.y + fh},
-        IM_COL32(18, 40, 86, 6),  IM_COL32(18, 40, 86, 6),
-        IM_COL32(18, 40, 86, 95), IM_COL32(18, 40, 86, 95));
+        IM_COL32(120, 34, 40, 6),  IM_COL32(120, 34, 40, 6),
+        IM_COL32(120, 34, 40, 95), IM_COL32(120, 34, 40, 95));
     // Faint geometric column lines across the mat (subtle circuit feel).
     {
-        ImU32 gl = IM_COL32(120, 140, 200, 13);
+        ImU32 gl = IM_COL32(190, 96, 102, 14);
         for (float gx = ox; gx <= ox + gridW + 1.f; gx += zW + GAP_X)
             dl->AddLine({gx, oy - 6.f}, {gx, oy + gridH + 6.f}, gl, 1.f);
         dl->AddLine({ox - 6.f, midY - zH * 0.55f},
@@ -7648,13 +7649,13 @@ void UI::drawField(int fw, int fh) {
     float padX = 8.f, padY = 8.f;
     dl->AddRectFilled({ox - padX, oy - padY},
                       {ox + gridW + padX, oy + gridH + padY},
-                      IM_COL32(13, 17, 30, 215), 12.f);
+                      IM_COL32(18, 10, 12, 218), 12.f);
     dl->AddRect      ({ox - padX, oy - padY},
                       {ox + gridW + padX, oy + gridH + padY},
-                      IM_COL32(96, 120, 190, 165), 12.f, 0, 1.6f);
+                      IM_COL32(168, 60, 66, 175), 12.f, 0, 1.6f);
     dl->AddRect      ({ox - padX + 3.f, oy - padY + 3.f},
                       {ox + gridW + padX - 3.f, oy + gridH + padY - 3.f},
-                      IM_COL32(60, 74, 120, 90), 9.f, 0, 1.f);
+                      IM_COL32(104, 44, 50, 95), 9.f, 0, 1.f);
     // Centre divider — neon gold core with a soft outer glow band.
     dl->AddRectFilled({ox - padX, midY - 4.f},
                       {ox + gridW + padX, midY + 4.f},
@@ -7701,19 +7702,20 @@ void UI::drawField(int fw, int fh) {
         const float W = LP_W, H = LP_H;
         ImVec2 br = {pos.x + W, pos.y + H};
         bool isLocal = (pl == m_net.localPlayerIndex());
-        // P1 = cool blue, P2 = warm red.
-        ImU32 sideFill = (pl == 0)
-            ? IM_COL32( 18,  30,  52, 210)
-            : IM_COL32( 48,  18,  24, 210);
-        ImU32 sideBorder = (pl == 0)
-            ? IM_COL32( 72, 140, 220, 230)
-            : IM_COL32(210,  80,  90, 230);
+        // YOU = crimson red; OPPONENT = slate steel-grey (clear contrast on the
+        // red/black mat).
+        ImU32 sideFill = isLocal
+            ? IM_COL32( 52,  18,  22, 215)
+            : IM_COL32( 28,  28,  34, 215);
+        ImU32 sideBorder = isLocal
+            ? IM_COL32(220,  64,  70, 235)
+            : IM_COL32(130, 140, 156, 230);
         // Soft outer glow on the active-turn player.
         if ((int)f.turnPlayer == pl) {
             dl->AddRectFilled({pos.x - 3.f, pos.y - 3.f},
                               {br.x + 3.f,  br.y + 3.f},
-                              (pl == 0) ? IM_COL32(60,140,240, 40)
-                                        : IM_COL32(240,80,80, 40), 9.f);
+                              isLocal ? IM_COL32(240, 64, 70, 45)
+                                      : IM_COL32(150, 160, 180, 40), 9.f);
         }
         dl->AddRectFilled(pos, br, sideFill, 7.f);
         // Top highlight shimmer.
@@ -7831,19 +7833,18 @@ void UI::drawField(int fw, int fh) {
         if (count > 0 && back) {
             for (int s = 2; s >= 0; s--) {
                 float o = s * 1.2f;
-                dl->AddRectFilled({sp.x+o,sp.y+o},{sp.x+o+zW,sp.y+o+zH}, IM_COL32(18,24,48,220),5.f);
+                dl->AddRectFilled({sp.x+o,sp.y+o},{sp.x+o+zW,sp.y+o+zH}, IM_COL32(32,16,20,220),5.f);
             }
             dl->AddImage((ImTextureID)back, sp, {sp.x+zW,sp.y+zH});
-            // Modern count badge — centred gold-rimmed pill instead of a
-            // black corner box.
+            // Modern count badge — centred red-rimmed pill.
             char cb[8]; snprintf(cb,8,"%d",count);
             ImVec2 ts=ImGui::CalcTextSize(cb);
             float bx=sp.x+(zW-ts.x)*0.5f, by=sp.y+zH-ts.y-7.f;
             dl->AddRectFilled({bx-9.f,by-3.f},{bx+ts.x+9.f,by+ts.y+3.f},
-                              IM_COL32(10,12,22,215),10.f);
+                              IM_COL32(16,9,11,218),10.f);
             dl->AddRect({bx-9.f,by-3.f},{bx+ts.x+9.f,by+ts.y+3.f},
-                        IM_COL32(212,178,102,190),10.f,0,1.f);
-            dl->AddText({bx,by},IM_COL32(255,238,176,255),cb);
+                        IM_COL32(220,92,98,190),10.f,0,1.f);
+            dl->AddText({bx,by},IM_COL32(255,212,212,255),cb);
         } else {
             drawSideZone(lbl, count, sp, zW, zH, COL_DK);
         }
@@ -7881,8 +7882,8 @@ void UI::drawField(int fw, int fh) {
                 ImVec2 hp, hbr;
                 fitCard({hx, rY[0]}, cw, hH, &hp, &hbr);
                 if (back) dl->AddImage((ImTextureID)back,hp,hbr);
-                else { dl->AddRectFilled(hp,hbr,IM_COL32(30,38,65,220),5.f);
-                       dl->AddRect(hp,hbr,IM_COL32(65,78,118,200),5.f); }
+                else { dl->AddRectFilled(hp,hbr,IM_COL32(48,24,28,220),5.f);
+                       dl->AddRect(hp,hbr,IM_COL32(120,56,62,200),5.f); }
             }
         } else {
             char lab[20]; snprintf(lab, 20, "P%d Hand", topP + 1);
@@ -12375,8 +12376,8 @@ void UI::drawDeckBuilder(int w, int h) {
                 ImVec2 te = {tp.x + TILE_W, tp.y + TILE_H};
 
                 // Tile background — subtle raised plate.
-                dl->AddRectFilled(tp, te, IM_COL32(14, 18, 32, 230), 4.f);
-                dl->AddRect(tp, te, IM_COL32(60, 76, 120, 200),
+                dl->AddRectFilled(tp, te, IM_COL32(26, 14, 17, 230), 4.f);
+                dl->AddRect(tp, te, IM_COL32(120, 52, 58, 200),
                             4.f, 0, 1.f);
 
                 // Card image (or coloured placeholder by type).
