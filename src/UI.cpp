@@ -2528,6 +2528,7 @@ void UI::loadSettings() {
     // card back when the file is missing).
     if (!m_settings.cardSleeve.empty())
         m_rend.setCardBack("assets/sleeves/" + m_settings.cardSleeve);
+    loadCardTags();   // deck-consistency role tags (assets/card_tags.txt)
     // Kick off the in-app update check (no-op unless a repo was baked in).
     m_update.setEnabled(m_settings.checkForUpdates);
     m_update.start(edo::kAppVersion, edo::kUpdateRepo);
@@ -10275,6 +10276,134 @@ void UI::drawTestingTimeline() {
 //
 // Hovering any card (search row OR a deck-grid tile) updates the preview
 // panel on the right. Clicking a deck tile removes one copy.
+// ── Deck consistency calculator (#2/#3) ──────────────────────────────────────
+// Per-card role tags are persisted globally in assets/card_tags.txt (one
+// "code=tag" line per tagged card) so a card keeps its role across decks.
+void UI::loadCardTags() {
+    m_cardTags.clear();
+    std::ifstream f("assets/card_tags.txt");
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        try {
+            uint32_t code = (uint32_t)std::stoul(line.substr(0, eq));
+            int tag = std::stoi(line.substr(eq + 1));
+            if (code && tag > 0 && tag <= 3) m_cardTags[code] = tag;
+        } catch (...) {}
+    }
+}
+
+void UI::saveCardTags() {
+    std::ofstream f("assets/card_tags.txt", std::ios::trunc);
+    if (!f) return;
+    for (const auto& kv : m_cardTags)
+        if (kv.second != 0) f << kv.first << "=" << kv.second << "\n";
+}
+
+// P(zero of K "successes" in a hand of h drawn from a deck of N) — the
+// hypergeometric tail, computed as a stable running product (no big factorials).
+static double hyperZero(int N, int K, int h) {
+    if (K <= 0 || h <= 0 || N <= 0) return 1.0;
+    if (h > N) h = N;
+    double p = 1.0;
+    for (int i = 0; i < h; ++i) {
+        int good = N - K - i;                 // non-success cards still in deck
+        if (good <= 0) return 0.0;            // can't avoid drawing a success
+        p *= (double)good / (double)(N - i);
+    }
+    return p;
+}
+
+void UI::drawDeckConsistency() {
+    if (m_consistencyOpen) {
+        ImGui::OpenPopup("Deck Consistency");
+        m_consistencyOpen = false;
+    }
+    ImGui::SetNextWindowSize({660.f, 0.f}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("Deck Consistency", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+
+    if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+    ImGui::TextUnformatted("Deck Consistency");
+    if (UIStyle::fHeader) ImGui::PopFont();
+    ImGui::TextDisabled("Tag each main-deck card by its role, then read your "
+                        "opening odds. A 'Starter' is a 1-card combo.");
+    ImGui::Separator();
+
+    // Distinct main-deck cards (code -> copies), sorted by name.
+    std::vector<std::pair<uint32_t, int>> distinct;
+    {
+        std::unordered_map<uint32_t, int> cnt;
+        for (uint32_t c : m_editDeck.main) cnt[c]++;
+        distinct.assign(cnt.begin(), cnt.end());
+        std::sort(distinct.begin(), distinct.end(), [&](auto& a, auto& b) {
+            return m_db.getCard(a.first).name < m_db.getCard(b.first).name;
+        });
+    }
+    const int N = (int)m_editDeck.main.size();
+    const char* kCats[] = { "Other", "Starter", "Engine", "Non-engine" };
+
+    ImGui::BeginChild("##tags", {-1.f, 320.f}, true);
+    if (distinct.empty())
+        ImGui::TextDisabled("Add cards to the Main Deck to analyse it.");
+    for (auto& d : distinct) {
+        uint32_t code = d.first;
+        ImGui::PushID((int)code);
+        int& tag = m_cardTags[code];          // default-inserts 0 (Other)
+        std::string nm = m_db.getCard(code).name;
+        if (nm.empty()) nm = "#" + std::to_string(code);
+        ImGui::Text("%dx", d.second);
+        ImGui::SameLine(40.f);
+        ImGui::SetNextItemWidth(120.f);
+        if (ImGui::Combo("##cat", &tag, kCats, 4)) saveCardTags();
+        ImGui::SameLine(0.f, 8.f);
+        ImGui::TextUnformatted(nm.c_str());
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    // Aggregate by role (weighted by copies).
+    int starters = 0, engine = 0, nonEng = 0;
+    for (auto& d : distinct) {
+        auto it = m_cardTags.find(d.first);
+        int t = (it == m_cardTags.end()) ? 0 : it->second;
+        if      (t == 1) starters += d.second;
+        else if (t == 2) engine   += d.second;
+        else if (t == 3) nonEng   += d.second;
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Main deck %d  ·  Starters %d  ·  Engine %d  ·  Non-engine %d",
+                N, starters, engine, nonEng);
+    ImGui::Spacing();
+
+    auto rateCol = [](double p) -> ImVec4 {
+        if (p >= 0.85) return {0.45f, 0.85f, 0.50f, 1.f};   // green
+        if (p >= 0.70) return {0.95f, 0.80f, 0.35f, 1.f};   // amber
+        return {0.95f, 0.50f, 0.45f, 1.f};                  // red
+    };
+    double open5 = 1.0 - hyperZero(N, starters, 5);
+    double open6 = 1.0 - hyperZero(N, starters, 6);
+    double brick5 = hyperZero(N, starters, 5);
+
+    ImGui::TextUnformatted("Open at least one starter:");
+    ImGui::BulletText("Going first (5 cards):");
+    ImGui::SameLine(); ImGui::TextColored(rateCol(open5), "%.1f%%", open5 * 100.0);
+    ImGui::BulletText("Going second (6 cards):");
+    ImGui::SameLine(); ImGui::TextColored(rateCol(open6), "%.1f%%", open6 * 100.0);
+    ImGui::Spacing();
+    ImGui::TextColored(rateCol(1.0 - brick5),
+        "Brick (0 starters on 5): %.1f%%", brick5 * 100.0);
+    ImGui::TextDisabled("Tip: 40-card decks usually aim for ~90%%+ to open a starter.");
+
+    ImGui::Spacing();
+    if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 void UI::drawDeckBuilder(int w, int h) {
     // Fullscreen backdrop — same atmosphere as lobby/duel.
     UIStyle::DrawAppBackdrop(ImGui::GetBackgroundDrawList(),
@@ -10405,6 +10534,9 @@ void UI::drawDeckBuilder(int w, int h) {
             sortEditDeck();
             pushToast("Deck sorted", IM_COL32(180, 220, 255, 255), 1.8);
         }
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Stats", {62.f, 32.f}))
+            m_consistencyOpen = true;
 
         // Clipboard share — copy the current deck as .ydk text, or paste one in.
         ImGui::SameLine(0.f, 6.f);
@@ -10438,6 +10570,9 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
     }
+
+    // Deck-consistency calculator popup (opened by the toolbar "Stats" button).
+    drawDeckConsistency();
 
     // ── LEFT — Card Search ──────────────────────────────────────────────────
     {

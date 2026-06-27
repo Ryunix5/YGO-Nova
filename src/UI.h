@@ -216,6 +216,14 @@ private:
     int    m_deck0Idx       = -1;   // index into m_deckFiles
     int    m_deck1Idx       = -1;
     bool   m_duelSetupOpen  = false;
+    // Deck consistency calculator (#2/#3): per-card role tag + popup.
+    //   0 = Other, 1 = Starter (1-card combo), 2 = Engine, 3 = Non-engine.
+    std::unordered_map<uint32_t, int> m_cardTags;
+    bool   m_consistencyOpen = false;
+    void   drawDeckConsistency();
+    void   loadCardTags();
+    void   saveCardTags();
+
     // Custom duel settings (Duel Setup popup).
     int    m_setupLP        = 8000;
     int    m_setupHand      = 5;
