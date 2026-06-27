@@ -3619,12 +3619,13 @@ void UI::drawLobby(int w, int h) {
         ImVec2 b = {a.x + CW, a.y + CH};
         // Premium glass card: soft gold halo, glass surface, top sheen — sits
         // on the backdrop as one material rather than a flat tinted box.
-        UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x26000000,
-                          UIStyle::M().radL, 3);
+        UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x14000000,
+                          UIStyle::M().radL, 2);
         UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
                                 IM_COL32(28, 15, 18, 230));
-        bg->AddLine({a.x + 16.f, a.y + 1.5f}, {b.x - 16.f, a.y + 1.5f},
-                    (C.accent & 0x00FFFFFF) | 0x55000000, 1.f);
+        // Slim left accent bar reads as premium without a loud full border.
+        bg->AddRectFilled({a.x + 2.f, a.y + 12.f}, {a.x + 5.f, b.y - 12.f},
+                          (C.accent & 0x00FFFFFF) | 0xCC000000, 2.f);
 
         // Emblem — concentric gold diamond (the logo motif; the texture icon
         // ships as the app/window icon).
@@ -3807,18 +3808,21 @@ void UI::drawLobby(int w, int h) {
             bool clk = ImGui::IsItemClicked();
             ImDrawList* dl = ImGui::GetWindowDrawList();
             ImVec2 br = {pos.x + sz.x, pos.y + sz.y};
-            // Hover background pill.
-            if (hov)
-                dl->AddRectFilled(pos, br,
-                                  IM_COL32(255, 255, 255, 12), 5.f);
-            // Left accent bar — gold for primary/hover, dimmer idle.
-            ImU32 barCol = (primary || hov) ? C.accent : C.accentDim;
-            float barAlpha = (primary || hov) ? 1.f : 0.3f;
-            (void)barAlpha;
+            // Hover background pill — a soft crimson wash + left-edge fade so
+            // the row reads as selected without a boxy outline.
+            if (hov) {
+                dl->AddRectFilledMultiColor(pos, br,
+                    (C.accent & 0x00FFFFFF) | 0x2A000000,
+                    (C.accent & 0x00FFFFFF) | 0x06000000,
+                    (C.accent & 0x00FFFFFF) | 0x06000000,
+                    (C.accent & 0x00FFFFFF) | 0x2A000000);
+            }
+            // Left accent bar — bright crimson on primary/hover, deep red idle.
+            ImU32 barCol = (primary || hov) ? C.accentHi
+                                            : IM_COL32(96, 40, 46, 210);
             dl->AddRectFilled(
-                {pos.x, pos.y + 10.f},
-                {pos.x + 4.f, pos.y + sz.y - 10.f},
-                (primary || hov) ? barCol : IM_COL32(80, 66, 26, 180), 2.f);
+                {pos.x, pos.y + 9.f},
+                {pos.x + 4.f, pos.y + sz.y - 9.f}, barCol, 2.f);
             // Label.
             if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
             ImU32 textCol = (primary || hov) ? C.textHi : C.textMd;

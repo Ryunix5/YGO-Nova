@@ -196,10 +196,13 @@ void DrawGlassPanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
     dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.30f},
         IM_COL32(255, 255, 255, 16), IM_COL32(255, 255, 255, 16),
         IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
-    dl->AddRect(a, b, gC.border, rounding, 0, 1.2f);
-    // Inner hairline for depth.
-    dl->AddRect({a.x + 1.5f, a.y + 1.5f}, {b.x - 1.5f, b.y - 1.5f},
-                IM_COL32(255, 255, 255, 14), rounding - 1.f, 0, 1.f);
+    // Refined edge: a faint dark "seat" for separation from the backdrop, then
+    // a soft (not loud) crimson border, finished with a top highlight bevel so
+    // the panel reads as a lit surface rather than an outlined box.
+    dl->AddRect(a, b, IM_COL32(0, 0, 0, 80), rounding, 0, 1.0f);
+    dl->AddRect(a, b, (gC.border & 0x00FFFFFF) | 0x66000000, rounding, 0, 1.0f);
+    dl->AddLine({a.x + rounding, a.y + 1.5f}, {b.x - rounding, a.y + 1.5f},
+                IM_COL32(255, 236, 236, 26), 1.f);
 }
 
 void DrawGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color,
@@ -247,10 +250,11 @@ void DrawGamePanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
     dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.22f},
         IM_COL32(255, 255, 255, 20), IM_COL32(255, 255, 255, 20),
         IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 0));
-    ImU32 border = accent ? accent : gC.border;
-    dl->AddRect(a, b, border, rounding, 0, 1.4f);
-    dl->AddRect({a.x + 1.5f, a.y + 1.5f}, {b.x - 1.5f, b.y - 1.5f},
-                IM_COL32(255, 255, 255, 12), rounding - 1.f, 0, 1.f);
+    ImU32 border = accent ? accent : ((gC.border & 0x00FFFFFF) | 0x77000000);
+    dl->AddRect(a, b, IM_COL32(0, 0, 0, 90), rounding, 0, 1.0f);
+    dl->AddRect(a, b, border, rounding, 0, 1.0f);
+    dl->AddLine({a.x + rounding, a.y + 1.5f}, {b.x - rounding, a.y + 1.5f},
+                IM_COL32(255, 236, 236, 24), 1.f);
 }
 
 void CountBadge(ImDrawList* dl, ImVec2 center, int count, ImU32 accent) {
