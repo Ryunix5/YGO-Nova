@@ -3474,6 +3474,7 @@ bool UI::draw(int winW, int winH) {
         drawCardZoom(winW, winH);
         drawHelpOverlay(winW, winH);
         if (m_puzzleMode) drawPuzzleOverlay(winW, winH);
+        drawPauseMenu(winW, winH);
     }
     // Toasts rendered LAST so they sit above every screen. Uses the
     // foreground draw list so they're not clipped by any active window.
@@ -4776,12 +4777,17 @@ void UI::handleDuelHotkeys() {
         m_helpOverlayOpen = !m_helpOverlayOpen;
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-        // Close the top-most open panel only; leave game prompts untouched.
-        if      (m_zoomCard)        m_zoomCard = 0;
+        // Close the top-most open panel first; if nothing else is open, Esc
+        // toggles the pause menu (a running, non-finished duel).
+        if      (m_pauseMenuOpen)   { m_pauseMenuOpen = false;
+                                      m_pauseConfirmSurrender = false; }
+        else if (m_zoomCard)        m_zoomCard = 0;
         else if (m_helpOverlayOpen) m_helpOverlayOpen = false;
         else if (m_infoCtxCode)     m_infoCtxCode = 0;
         else if (m_viewerLoc != 0)  m_viewerLoc = 0;
         else if (m_toolsDrawerOpen) m_toolsDrawerOpen = false;
+        else if (m_dm.isRunning() && !m_dm.isDone())
+            m_pauseMenuOpen = true;
     }
 
     // Ctrl+Z — undo your last move (offline practice; testingUndoHuman self-
@@ -11573,6 +11579,70 @@ void UI::drawPuzzleOverlay(int w, int h) {
             m_screen = Screen::Lobby;
             m_anim.clear(); m_zoneRectsReady = false;
         }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+}
+
+// ── In-duel pause menu (#5) ──────────────────────────────────────────────────
+void UI::drawPauseMenu(int w, int h) {
+    if (!m_pauseMenuOpen) return;
+    if (!m_dm.isRunning() || m_dm.isDone()) { m_pauseMenuOpen = false; return; }
+    const UIStyle::Colors& C = UIStyle::C();
+    ImDrawList* fdl = ImGui::GetForegroundDrawList();
+    // Dim the board behind the menu.
+    fdl->AddRectFilled({0.f, 0.f}, {(float)w, (float)h}, IM_COL32(4, 2, 3, 180));
+
+    ImGui::SetNextWindowPos({w * 0.5f, h * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({320.f, 0.f}, ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(C.bgPopup));
+    ImGui::PushStyleColor(ImGuiCol_Border,   ImGui::ColorConvertU32ToFloat4(C.accent));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{20.f, 18.f});
+    if (ImGui::Begin("##pausemenu", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi), "Paused");
+        if (UIStyle::fHeader) ImGui::PopFont();
+        ImGui::Spacing();
+        if (UIStyle::PrimaryButton("Resume", {-1.f, 38.f})) {
+            m_pauseMenuOpen = false; m_pauseConfirmSurrender = false;
+        }
+        ImGui::Spacing();
+        if (!m_pauseConfirmSurrender) {
+            if (UIStyle::DangerButton("Surrender", {-1.f, 34.f}))
+                m_pauseConfirmSurrender = true;
+        } else {
+            ImGui::TextDisabled("Concede this duel?");
+            if (UIStyle::DangerButton("Yes, surrender", {-1.f, 32.f})) {
+                const int me = m_net.localPlayerIndex();
+                if (m_net.isOffline() || m_net.isHost()) m_dm.forfeit(me);
+                else sendSurrender();
+                gAudio().play("defeat");
+                m_pauseMenuOpen = false; m_pauseConfirmSurrender = false;
+            }
+            if (UIStyle::GhostButton("No, keep playing", {-1.f, 30.f}))
+                m_pauseConfirmSurrender = false;
+        }
+        ImGui::Spacing();
+        if (UIStyle::GhostButton("Quit to Lobby", {-1.f, 32.f})) {
+            finalizeReplay("pause -> lobby");
+            if (m_dm.isRunning()) m_dm.endDuel();
+            if (!m_net.isOffline()) {
+                m_mpInDuel = false;
+                resetMpResponseState();
+                m_net.disconnect("returned to lobby");
+            }
+            m_pauseMenuOpen = false; m_pauseConfirmSurrender = false;
+            m_puzzleMode = false; m_matchActive = false;
+            m_screen = Screen::Lobby;
+            m_anim.clear(); m_zoneRectsReady = false;
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Esc to resume");
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

@@ -244,6 +244,11 @@ private:
     void   startPuzzleByIndex(int idx);
     void   drawPuzzleOverlay(int w, int h);   // goal banner + solved/failed
 
+    // In-duel pause menu (#5): Esc opens Resume / Surrender / Quit to Lobby.
+    bool   m_pauseMenuOpen   = false;
+    bool   m_pauseConfirmSurrender = false;
+    void   drawPauseMenu(int w, int h);
+
     // Best-of-3 match + side decking (#14). Offline only.
     bool   m_setupMatchMode = false;     // Duel Setup toggle
     bool   m_matchActive    = false;     // a best-of-3 is in progress
