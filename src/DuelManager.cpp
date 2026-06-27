@@ -2414,8 +2414,11 @@ bool DuelManager::aiIdlePhase() {
     if (nsIdx  >= 0) { respondIdleCmd(idle[nsIdx].cmd,  idle[nsIdx].index);  return true; }
     if (setIdx >= 0) { respondIdleCmd(idle[setIdx].cmd, idle[setIdx].index); return true; }
     if (m_selection.toBP && !m_field.monsters[aiSeat].empty()) {
+        setLastAction(aiSeat, "attempting to enter the Battle Phase");
         respondIdleCmd(6, 0); return true;   // -> Battle Phase
     }
+    setLastAction(aiSeat, std::string("attempting to end the ") +
+                  ((m_field.phase == 0x100) ? "Main Phase 2" : "Main Phase"));
     respondIdleCmd(7, 0); return true;        // -> End Phase
 }
 
@@ -2453,6 +2456,7 @@ bool DuelManager::aiBattlePhase() {
             respondIdleCmd(1, idle[bestIdx].index); return true;
         }
     }
+    setLastAction(aiSeat, "attempting to end the Battle Phase");
     respondIdleCmd(3, 0); return true;            // -> End Battle Phase
 }
 
