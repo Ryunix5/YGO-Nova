@@ -10842,7 +10842,6 @@ void UI::startPuzzleByIndex(int idx) {
     // appended to a stale stream (puzzles are not recorded).
     finalizeReplay("entering puzzle");
     m_replayMode = false;
-    m_net.clearSeatOverride();
     m_dm.setLocalMode(true);
     m_snap.clear();
 
@@ -10859,13 +10858,16 @@ void UI::startPuzzleByIndex(int idx) {
         if (m_puzzleDeckIdx < 0 || m_puzzleDeckIdx >= (int)m_deckFiles.size())
             m_puzzleDeckIdx = 0;
         Deck humanDeck = loadYdk("assets/decks/" + m_deckFiles[m_puzzleDeckIdx]);
-        // setHumanSeat / passive / defensive are configured inside the engine
-        // call; mirror the seat here so the field + UI read it consistently.
-        ok = m_dm.startBoardBreak(pe.setup, humanDeck);
+        // You control team 1 and go second — the UI must view the field and
+        // route input from seat 1, or the board shows on your side and the
+        // engine looks "stuck waiting for opponent".
         m_dm.setHumanSeat(1);
+        m_net.setSeatOverride(1);
+        ok = m_dm.startBoardBreak(pe.setup, humanDeck);
     } else {
         // Classic "solve it this turn" — you go first, opponent passive.
         m_dm.setHumanSeat(0);
+        m_net.clearSeatOverride();
         m_dm.setPassiveAI(true);
         m_dm.setNoShuffle(true);
         ok = m_dm.startPuzzle(pe.setup);
