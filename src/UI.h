@@ -233,6 +233,14 @@ private:
     void   loadMatchHistory();
     void   drawHistory();
 
+    // Banlist / format validation (#15).
+    struct Banlist { std::string name;
+                     std::unordered_map<uint32_t, int> limits; };  // code->0..3
+    std::vector<Banlist> m_banlists;
+    int    m_selectedBanlist = -1;   // -1 = no list (max 3 each)
+    void   loadBanlists();
+    int    cardLimit(uint32_t code) const;   // copies allowed under current list
+
     // Custom duel settings (Duel Setup popup).
     int    m_setupLP        = 8000;
     int    m_setupHand      = 5;

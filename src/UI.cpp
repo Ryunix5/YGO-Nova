@@ -2533,6 +2533,7 @@ void UI::loadSettings() {
         m_rend.setCardBack("assets/sleeves/" + m_settings.cardSleeve);
     loadCardTags();      // deck-consistency role tags (assets/card_tags.txt)
     loadMatchHistory();  // win/loss log (assets/match_history.txt)
+    loadBanlists();      // format/banlist files (assets/lflists/*.lflist.conf)
     // Kick off the in-app update check (no-op unless a repo was baked in).
     m_update.setEnabled(m_settings.checkForUpdates);
     m_update.start(edo::kAppVersion, edo::kUpdateRepo);
@@ -10553,6 +10554,56 @@ void UI::drawHistory() {
     ImGui::EndPopup();
 }
 
+// ── Banlist / format validation (#15) ────────────────────────────────────────
+void UI::loadBanlists() {
+    m_banlists.clear();
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory("assets/lflists", ec)) return;
+    std::vector<std::string> files;
+    for (auto& e : fs::directory_iterator("assets/lflists", ec))
+        if (e.path().filename().string().find(".lflist.conf") != std::string::npos)
+            files.push_back(e.path().string());
+    std::sort(files.begin(), files.end());
+    for (auto& path : files) {
+        std::ifstream f(path);
+        if (!f) continue;
+        Banlist bl;
+        std::string fn = fs::path(path).filename().string();
+        auto p = fn.find(".lflist.conf");
+        bl.name = (p != std::string::npos) ? fn.substr(0, p) : fn;
+        bool gotName = false;
+        std::string line;
+        while (std::getline(f, line)) {
+            size_t s = line.find_first_not_of(" \t");
+            if (s == std::string::npos) continue;
+            if (line[s] == '!') {
+                if (!gotName) { bl.name = line.substr(s + 1); gotName = true; }
+                continue;
+            }
+            if (line[s] == '#' || !isdigit((unsigned char)line[s])) continue;
+            uint64_t code = 0; size_t i = s;
+            while (i < line.size() && isdigit((unsigned char)line[i]))
+                code = code * 10 + (line[i++] - '0');
+            while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+            int limit = 3;
+            if (i < line.size() && isdigit((unsigned char)line[i]))
+                limit = line[i] - '0';
+            if (code && limit >= 0 && limit <= 3)
+                bl.limits[(uint32_t)code] = limit;
+        }
+        if (!bl.limits.empty()) m_banlists.push_back(std::move(bl));
+    }
+}
+
+int UI::cardLimit(uint32_t code) const {
+    if (m_selectedBanlist < 0 || m_selectedBanlist >= (int)m_banlists.size())
+        return 3;
+    const auto& m = m_banlists[(size_t)m_selectedBanlist].limits;
+    auto it = m.find(code);
+    return it == m.end() ? 3 : it->second;
+}
+
 void UI::drawDeckBuilder(int w, int h) {
     // Fullscreen backdrop — same atmosphere as lobby/duel.
     UIStyle::DrawAppBackdrop(ImGui::GetBackgroundDrawList(),
@@ -10955,6 +11006,26 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::Dummy({1.f, 30.f});
         }
 
+        // Format / banlist selector — validates copies against the chosen list.
+        {
+            const char* cur = (m_selectedBanlist >= 0 &&
+                               m_selectedBanlist < (int)m_banlists.size())
+                ? m_banlists[(size_t)m_selectedBanlist].name.c_str()
+                : "No banlist (3 each)";
+            ImGui::TextDisabled("Format");
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::SetNextItemWidth(220.f);
+            if (ImGui::BeginCombo("##banlist", cur)) {
+                if (ImGui::Selectable("No banlist (3 each)", m_selectedBanlist < 0))
+                    m_selectedBanlist = -1;
+                for (int i = 0; i < (int)m_banlists.size(); ++i)
+                    if (ImGui::Selectable(m_banlists[(size_t)i].name.c_str(),
+                                          m_selectedBanlist == i))
+                        m_selectedBanlist = i;
+                ImGui::EndCombo();
+            }
+        }
+
         // Status / validation chips row.
         int mainCount  = (int)m_editDeck.main.size();
         int extraCount = (int)m_editDeck.extra.size();
@@ -10964,11 +11035,23 @@ void UI::drawDeckBuilder(int w, int h) {
         bool errHighMain  = (mainCount > 60);
         bool errHighExtra = (extraCount > 15);
         bool errCopyLimit = false;
+        std::vector<std::string> banViol;     // over-limit cards (current list)
         {
             std::unordered_map<uint32_t, int> all;
-            for (auto c : m_editDeck.main)  if (++all[c]  > 3) errCopyLimit = true;
-            for (auto c : m_editDeck.extra) if (++all[c]  > 3) errCopyLimit = true;
-            for (auto c : m_editDeck.side)  if (++all[c]  > 3) errCopyLimit = true;
+            for (auto c : m_editDeck.main)  all[c]++;
+            for (auto c : m_editDeck.extra) all[c]++;
+            for (auto c : m_editDeck.side)  all[c]++;
+            for (auto& kv : all) {
+                int lim = cardLimit(kv.first);
+                if (kv.second > lim) {
+                    errCopyLimit = true;
+                    std::string nm = m_db.getCard(kv.first).name;
+                    if (nm.empty()) nm = "#" + std::to_string(kv.first);
+                    banViol.push_back(nm + "  " + std::to_string(kv.second) +
+                                      "/" + std::to_string(lim));
+                }
+            }
+            std::sort(banViol.begin(), banViol.end());
         }
 
         char chip[64];
@@ -10988,7 +11071,15 @@ void UI::drawDeckBuilder(int w, int h) {
             UIStyle::StatusChip("Saved", C.textMuted);
         if (errCopyLimit) {
             ImGui::SameLine(0.f, 6.f);
-            UIStyle::StatusChip("Copy limit exceeded", C.danger);
+            UIStyle::StatusChip(m_selectedBanlist >= 0 ? "Banlist violation"
+                                                       : "Copy limit exceeded",
+                                C.danger);
+            if (ImGui::IsItemHovered() && !banViol.empty()) {
+                ImGui::BeginTooltip();
+                ImGui::TextDisabled("Over the limit:");
+                for (auto& v : banViol) ImGui::TextUnformatted(v.c_str());
+                ImGui::EndTooltip();
+            }
         }
         if (!m_db.isOpen()) {
             ImGui::SameLine(0.f, 6.f);
