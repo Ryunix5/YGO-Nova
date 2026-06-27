@@ -5455,6 +5455,55 @@ void UI::drawDuel(int w, int h) {
             }
         }
 
+        // ── Chain-activation + targeting animations ──────────────────────
+        // Resolve any card's (con,loc,seq) to a screen centre — field zones
+        // via the cached rects, GY/banished/deck via their pile tiles.
+        auto centerOf = [&](uint8_t con, uint8_t loc, uint32_t seq,
+                            ImVec2* out) -> bool {
+            ImVec2 tl, br;
+            if (locInfoToRect(con, loc, seq, &tl, &br)) {
+                *out = {(tl.x + br.x) * 0.5f, (tl.y + br.y) * 0.5f};
+                return true;
+            }
+            if (con > 1) return false;
+            auto mid = [](ImVec2 a, ImVec2 b) {
+                return ImVec2{(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}; };
+            if (loc == LOC_GY)   { *out = mid(m_rectGY_tl[con], m_rectGY_br[con]); return true; }
+            if (loc == LOC_REM)  { *out = mid(m_rectBN_tl[con], m_rectBN_br[con]); return true; }
+            if (loc == LOC_DECK || loc == LOC_HAND)
+                                 { *out = mid(m_rectDeck_tl[con], m_rectDeck_br[con]); return true; }
+            return false;
+        };
+        if (m_settings.animationsEnabled) {
+            auto chains = m_dm.drainChainEvents();
+            int cshown = 0;
+            for (const ChainEvent& ce : chains) {
+                if (cshown++ >= 4) break;
+                ImVec2 c;
+                if (!centerOf(ce.con, ce.loc, ce.seq, &c)) continue;
+                std::string nm = m_db.getCard(ce.code).name;
+                if (nm.empty()) nm = "#" + std::to_string(ce.code);
+                const ImU32 gold = IM_COL32(255, 212, 96, 255);
+                // Tile flash if on a field zone, then the activation burst.
+                ImVec2 tl, br;
+                if (locInfoToRect(ce.con, ce.loc, ce.seq, &tl, &br))
+                    m_anim.zoneFlash(tl, br, gold, 0.45);
+                m_anim.chainPop(c, nm.c_str(), ce.link, gold, 1.25);
+                gAudio().play("confirm");
+            }
+            auto targets = m_dm.drainTargetEvents();
+            int tshown = 0;
+            for (const TargetEvent& te : targets) {
+                if (tshown++ >= 6) break;
+                ImVec2 c;
+                if (!centerOf(te.con, te.loc, te.seq, &c)) continue;
+                m_anim.targetLock(c, IM_COL32(255, 86, 86, 255), 0.85);
+            }
+        } else {
+            m_dm.drainChainEvents();    // keep queues from growing when off
+            m_dm.drainTargetEvents();
+        }
+
         // ── Card-movement animations ─────────────────────────────────────
         // A card sent to the GY (destroyed / milled / sent) glides from its
         // source to the GY tile; a card placed on the field (summon / set)

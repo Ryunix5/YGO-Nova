@@ -44,6 +44,9 @@ void DuelManager::endDuel() {
     m_missingScripts.clear();
     m_attackEvents.clear();
     m_moveEvents.clear();
+    m_chainEvents.clear();
+    m_targetEvents.clear();
+    m_chainLinkCount = 0;
     m_pendingSummonCode   = 0;
     m_pendingSummonName.clear();
     m_lastActionDesc.clear();
@@ -1011,7 +1014,8 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     case MSG_CHAINING: {
         uint32_t code=r32(p);
         uint8_t con = r8(p) & 1;             // controller of the chaining card
-        r8(p);r32(p);r32(p);
+        uint8_t cloc = r8(p);                // current location of the card
+        uint32_t cseq = r32(p); r32(p);      // sequence (+ skip position)
         r8(p);r8(p);r32(p);
         p+=8; r32(p);
         CardInfo ci=m_db.getCard(code);
@@ -1020,6 +1024,12 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         setLastAction(con, "Activating " + nm);
         m_chainSourceCode = code;         // for card-less Yes/No fallback text
         m_pacedEventThisProcess = true;   // beat: let each activation read
+        // Presentational chain event — the UI flashes the activating card and
+        // shows a chain-link badge so an effect (esp. the AI's) is visible.
+        ChainEvent ce;
+        ce.code = code; ce.con = con; ce.loc = cloc; ce.seq = cseq;
+        ce.link = ++m_chainLinkCount;
+        m_chainEvents.push_back(ce);
         break;
     }
 
@@ -1838,6 +1848,8 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         break;
 
     case MSG_CHAIN_END:
+        m_chainLinkCount = 0;   // chain resolved — link numbering restarts
+        break;
     case MSG_DAMAGE_STEP_START:
     case MSG_DAMAGE_STEP_END:
     case MSG_REVERSE_DECK:
@@ -1909,7 +1921,12 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     case MSG_BECOME_TARGET:
     case MSG_BE_CHAIN_TARGET: {
         uint32_t cnt=r32(p);
-        for(uint32_t i=0;i<cnt;i++){r8(p);r8(p);r32(p);r32(p);}
+        for(uint32_t i=0;i<cnt;i++){
+            uint8_t con=r8(p), loc=r8(p);
+            uint32_t seq=r32(p); r32(p);   // position (skip)
+            TargetEvent te; te.con=con&1; te.loc=loc; te.seq=seq;
+            m_targetEvents.push_back(te);
+        }
         break;
     }
 

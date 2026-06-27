@@ -137,6 +137,24 @@ struct AttackEvent {
     bool     direct       = false;
 };
 
+// A card activated and went on the chain (MSG_CHAINING). The UI flashes the
+// activating card + shows a chain-link badge so disruptions are visible.
+struct ChainEvent {
+    uint32_t code = 0;
+    uint8_t  con  = 0;
+    uint8_t  loc  = 0;
+    uint32_t seq  = 0;
+    int      link = 0;       // chain link number (1-based)
+};
+
+// A card became the target of an effect (MSG_BECOME_TARGET). The UI draws a
+// targeting reticle on it.
+struct TargetEvent {
+    uint8_t  con = 0;
+    uint8_t  loc = 0;
+    uint32_t seq = 0;
+};
+
 // Parsed MSG_MOVE payload (a card changed location). Drained by the UI to play
 // movement animations (placed on field, sent to GY, milled from deck, etc.).
 struct MoveEvent {
@@ -384,6 +402,16 @@ public:
         out.swap(m_moveEvents);
         return out;
     }
+    std::vector<ChainEvent> drainChainEvents() {
+        std::vector<ChainEvent> out;
+        out.swap(m_chainEvents);
+        return out;
+    }
+    std::vector<TargetEvent> drainTargetEvents() {
+        std::vector<TargetEvent> out;
+        out.swap(m_targetEvents);
+        return out;
+    }
     int winner() const { return m_winner; }
 
 private:
@@ -441,6 +469,9 @@ private:
     // layer. Bounded by the message loop — at most a handful per turn.
     std::vector<AttackEvent> m_attackEvents;
     std::vector<MoveEvent>   m_moveEvents;
+    std::vector<ChainEvent>  m_chainEvents;
+    std::vector<TargetEvent> m_targetEvents;
+    int                      m_chainLinkCount = 0;   // resets at MSG_CHAIN_END
     // Replay-recording hook + the seed actually used for this duel.
     ResponseRecorder         m_responseRecorder;
     uint64_t                 m_duelSeed = 0;

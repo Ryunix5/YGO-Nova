@@ -53,7 +53,10 @@ struct Anim {
         // ── Stage A additions ─────────────────────────────────────────────
         Banner,       // centre-screen phase banner (slide-in / hold / fade)
         BossCard,     // enlarged card entrance with energy ring + type label
-        CardTrail     // a card-sized ghost gliding a → b (draw / send / banish)
+        CardTrail,    // a card-sized ghost gliding a → b (draw / send / banish)
+        // ── Chain / targeting feedback ─────────────────────────────────────
+        ChainPop,     // burst ring + card name + "CHAIN n" badge on activation
+        TargetLock    // converging crosshair reticle on a targeted card
     };
     Type     type   = Pulse;
     double   start  = 0.0;       // ImGui::GetTime() seconds when queued
@@ -160,6 +163,24 @@ public:
         it.color = col; it.tex = tex;
         std::snprintf(it.text, sizeof(it.text), "%s",
                       typeLabel ? typeLabel : "");
+        push(it);
+    }
+    // Chain activation burst: a gold ring snaps out from the activating card
+    // with its name + a "CHAIN n" link badge floating above. Makes an effect
+    // activation (especially the AI's) clearly visible. `link` 0 hides the
+    // badge. Rendered on the foreground list by renderTop so it sits on top.
+    void chainPop(ImVec2 center, const char* name, int link, ImU32 col,
+                  double dur = 1.25) {
+        Anim it; it.type = Anim::ChainPop; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = center; it.color = col; it.ivalue = link;
+        std::snprintf(it.text, sizeof(it.text), "%s", name ? name : "");
+        push(it);
+    }
+    // Targeting reticle: four corner brackets converge inward onto a card with
+    // a crosshair + spin, signalling "this card got targeted".
+    void targetLock(ImVec2 center, ImU32 col, double dur = 0.85) {
+        Anim it; it.type = Anim::TargetLock; it.start = ImGui::GetTime();
+        it.dur = dur; it.a = center; it.color = col;
         push(it);
     }
     // Card-sized ghost gliding from a → b (draw, send-to-GY, banish trail).
@@ -273,8 +294,40 @@ public:
                     withAlpha(it.color, (unsigned)(235 * a)), 3.f, 0, 1.5f);
                 break;
             }
+            case Anim::TargetLock: {
+                // Four corner brackets converge from wide to a tight box,
+                // plus a crosshair + a slowly spinning ring. Reads as a lock-on.
+                float conv = (t < 0.4f) ? (float)(t / 0.4) : 1.f;   // 0→1 settle
+                float spread = 46.f - 24.f * conv;                  // box half-size
+                float br = 11.f;                                    // bracket arm
+                ImU32 col = withAlpha(it.color, (unsigned)(255 * a));
+                ImVec2 c = it.a;
+                ImVec2 cn[4] = {
+                    {c.x - spread, c.y - spread}, {c.x + spread, c.y - spread},
+                    {c.x + spread, c.y + spread}, {c.x - spread, c.y + spread} };
+                // Corner brackets (L-shapes pointing inward).
+                float th = 2.4f;
+                dl->AddLine(cn[0], {cn[0].x + br, cn[0].y}, col, th);
+                dl->AddLine(cn[0], {cn[0].x, cn[0].y + br}, col, th);
+                dl->AddLine(cn[1], {cn[1].x - br, cn[1].y}, col, th);
+                dl->AddLine(cn[1], {cn[1].x, cn[1].y + br}, col, th);
+                dl->AddLine(cn[2], {cn[2].x - br, cn[2].y}, col, th);
+                dl->AddLine(cn[2], {cn[2].x, cn[2].y - br}, col, th);
+                dl->AddLine(cn[3], {cn[3].x + br, cn[3].y}, col, th);
+                dl->AddLine(cn[3], {cn[3].x, cn[3].y - br}, col, th);
+                // Spinning ring + crosshair.
+                float rr = spread * 0.62f;
+                dl->AddCircle(c, rr, withAlpha(it.color, (unsigned)(160 * a)),
+                              24, 1.6f);
+                dl->AddLine({c.x - rr - 4, c.y}, {c.x - 4, c.y}, col, 1.6f);
+                dl->AddLine({c.x + 4, c.y}, {c.x + rr + 4, c.y}, col, 1.6f);
+                dl->AddLine({c.x, c.y - rr - 4}, {c.x, c.y - 4}, col, 1.6f);
+                dl->AddLine({c.x, c.y + 4}, {c.x, c.y + rr + 4}, col, 1.6f);
+                break;
+            }
             case Anim::Banner:
             case Anim::BossCard:
+            case Anim::ChainPop:
                 // Overlay types — drawn by renderTop() on the foreground
                 // list so they sit above the info panel + zones. Skipped
                 // here, but still evicted by the t>=1 check above.
@@ -296,6 +349,7 @@ public:
             if (t < 0.0 || t >= 1.0) continue;
             if (it.type == Anim::Banner)   drawBanner(dl, winTL, it, t);
             else if (it.type == Anim::BossCard) drawBoss(dl, winTL, it, t);
+            else if (it.type == Anim::ChainPop) drawChainPop(dl, it, t);
         }
     }
 
@@ -368,6 +422,47 @@ private:
         dl->AddText(font, fsz, tp,
             withAlpha(IM_COL32(248, 240, 220, 255),
                       (unsigned)(255 * alpha)), it.text);
+    }
+
+    // ── ChainPop: activation burst — gold ring + card name + CHAIN n badge ─
+    void drawChainPop(ImDrawList* dl, const Anim& it, double t) {
+        float a = 1.f - (float)t;
+        ImVec2 c = it.a;   // absolute screen centre of the activating card
+        // Burst ring snapping outward.
+        float r = 18.f + 40.f * (float)t;
+        dl->AddCircle(c, r, withAlpha(it.color, (unsigned)(230 * a)), 28,
+                      3.0f * a + 0.6f);
+        dl->AddCircleFilled(c, 10.f * (1.f - (float)t) + 3.f,
+                            withAlpha(it.color, (unsigned)(120 * a)), 20);
+        // "CHAIN n" badge — small rounded plate above the card, rising.
+        float rise = 10.f + 26.f * (float)t;
+        ImFont* font = ImGui::GetFont();
+        if (it.ivalue > 0) {
+            char badge[20];
+            std::snprintf(badge, sizeof(badge), "CHAIN %d", it.ivalue);
+            float fsz = 15.f;
+            ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, badge);
+            ImVec2 bc { c.x, c.y - rise - 30.f };
+            ImVec2 p0 { bc.x - ts.x * 0.5f - 8.f, bc.y - ts.y * 0.5f - 3.f };
+            ImVec2 p1 { bc.x + ts.x * 0.5f + 8.f, bc.y + ts.y * 0.5f + 3.f };
+            dl->AddRectFilled(p0, p1, withAlpha(IM_COL32(14, 12, 24, 255),
+                              (unsigned)(235 * a)), 5.f);
+            dl->AddRect(p0, p1, withAlpha(it.color, (unsigned)(245 * a)),
+                        5.f, 0, 1.6f);
+            dl->AddText(font, fsz, {bc.x - ts.x * 0.5f, bc.y - ts.y * 0.5f},
+                        withAlpha(it.color, (unsigned)(255 * a)), badge);
+        }
+        // Card name below the badge.
+        if (it.text[0]) {
+            float fsz = 17.f;
+            ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, it.text);
+            ImVec2 tp { c.x - ts.x * 0.5f, c.y - rise - 12.f };
+            dl->AddText(font, fsz, {tp.x + 1.5f, tp.y + 1.5f},
+                withAlpha(IM_COL32(0,0,0,255), (unsigned)(190 * a)), it.text);
+            dl->AddText(font, fsz, tp,
+                withAlpha(IM_COL32(250, 240, 220, 255),
+                          (unsigned)(255 * a)), it.text);
+        }
     }
 
     // ── BossCard: dim field + energy rings + enlarged card + type label ───
