@@ -2743,6 +2743,18 @@ void UI::observePhaseForBanners() {
     if (newIdx < 0) { m_animObservedPhase = newPhase; return; }
 
     bool turnChanged = (pf.turnPlayer != m_animPrevTurnPlayer);
+    // Turn-start banner — a big "YOUR TURN" / "OPPONENT'S TURN" so whose turn it
+    // is reads instantly. Shown before the phase banners (push their pacing out
+    // so they don't overlap).
+    if (turnChanged && m_animLastEnqueued != 0) {
+        bool mine = ((int)pf.turnPlayer == m_net.localPlayerIndex());
+        m_anim.emitPhaseBanner(mine ? "YOUR TURN" : "OPPONENT'S TURN",
+                               ImGui::GetIO().DisplaySize,
+                               mine ? IM_COL32(110, 220, 140, 255)
+                                    : IM_COL32(255, 150, 90, 255));
+        m_phaseQueueNextAt = ImGui::GetTime() + 0.75;
+        if (gAudio().isLoaded("phase")) gAudio().play("phase");
+    }
     if (m_debugLog)
         m_dm.logEvent(std::string("[PHASE OBSERVE] old=") +
                       phaseBannerText(m_animObservedPhase) +
@@ -6178,6 +6190,69 @@ void UI::drawDuel(int w, int h) {
     // Foreground list so they sit above the field, info panel and HUD. The
     // duel window is full-screen at (0,0), so the top-left origin is (0,0).
     m_anim.renderTop(ImGui::GetForegroundDrawList(), {0.f, 0.f});
+
+    // ── "Opponent is thinking…" indicator ───────────────────────────────────
+    // Shown while the AI is acting on its own turn and you have no prompt, so a
+    // long combo (or a Relaxed-speed beat) never looks like the game froze.
+    {
+        const SelectionRequest& sel = currentSelection();
+        bool humanPrompt = DuelManager::isRealSelect(sel.type) &&
+                           sel.player == (uint8_t)m_net.localPlayerIndex();
+        bool oppThinking = m_net.isOffline() && m_dm.isRunning() &&
+            !m_dm.isDone() &&
+            (int)m_dm.field().turnPlayer != m_net.localPlayerIndex() &&
+            !humanPrompt;
+        if (oppThinking) {
+            ImDrawList* fdl = ImGui::GetForegroundDrawList();
+            int dots = 1 + ((int)(ImGui::GetTime() * 2.0) % 3);
+            char txt[40] = "Opponent is thinking";
+            for (int d = 0; d < dots; ++d) strncat(txt, ".", sizeof(txt) - 1);
+            ImVec2 ts = ImGui::CalcTextSize(txt);
+            float pad = 12.f, bw = ts.x + 24.f + pad * 2, bh = ts.y + 12.f;
+            ImVec2 p0 { (float)w * 0.5f - bw * 0.5f, 44.f };
+            ImVec2 p1 { p0.x + bw, p0.y + bh };
+            float pulse = 0.6f + 0.4f * sinf((float)ImGui::GetTime() * 4.f);
+            fdl->AddRectFilled(p0, p1, IM_COL32(26, 22, 40, 230), 8.f);
+            fdl->AddRect(p0, p1,
+                IM_COL32(255, 150, 90, (int)(120 + 110 * pulse)), 8.f, 0, 1.6f);
+            // Little spinner.
+            float cx = p0.x + pad + 8.f, cy = (p0.y + p1.y) * 0.5f;
+            float ang = (float)ImGui::GetTime() * 6.f;
+            for (int s = 0; s < 8; ++s) {
+                float a = ang + s / 8.f * 6.2831853f;
+                fdl->AddCircleFilled({cx + cosf(a) * 7.f, cy + sinf(a) * 7.f},
+                    1.8f, IM_COL32(255, 180, 120, (unsigned)(40 + s * 24)), 6);
+            }
+            fdl->AddText({p0.x + pad + 24.f, p0.y + 6.f},
+                         IM_COL32(245, 220, 200, 255), txt);
+        }
+    }
+
+    // ── Recent-actions strip ────────────────────────────────────────────────
+    // A transient feed of the last few game-log lines at the top-left, fading
+    // by age, so you can catch what just happened without the toast scrolling
+    // away. Disappears when nothing has happened recently.
+    if (m_dm.isRunning() && !m_gameLog.empty()) {
+        ImDrawList* fdl = ImGui::GetForegroundDrawList();
+        double now = ImGui::GetTime();
+        float y = 74.f;
+        int shown = 0;
+        for (auto it = m_gameLog.rbegin();
+             it != m_gameLog.rend() && shown < 3; ++it) {
+            double age = now - it->at;
+            if (age > 7.0) break;                 // only recent lines
+            float a = (age < 5.0) ? 1.f : (float)(1.0 - (age - 5.0) / 2.0);
+            if (a <= 0.f) continue;
+            ImU32 col = it->color ? it->color : IM_COL32(210, 218, 235, 255);
+            col = (col & 0x00FFFFFFu) | ((unsigned)(a * 230) << 24);
+            ImU32 sh  = IM_COL32(0, 0, 0, (unsigned)(a * 150));
+            const char* s = it->text.c_str();
+            fdl->AddText({13.f, y + 1.f}, sh,  s);
+            fdl->AddText({12.f, y},       col, s);
+            y += 18.f;
+            ++shown;
+        }
+    }
 
     // ── Right: FLOATING card-info overlay ───────────────────────────────────
     // Drawn as a separate glass window on top of the field's right margin.
