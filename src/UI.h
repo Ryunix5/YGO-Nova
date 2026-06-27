@@ -224,6 +224,15 @@ private:
     void   loadCardTags();
     void   saveCardTags();
 
+    // Match history + win/loss stats (#8).
+    struct MatchRecord { std::string when, myDeck, oppDeck; char result = 'D'; };
+    std::vector<MatchRecord> m_matchHistory;
+    bool   m_historyOpen = false;
+    void   recordMatch(const std::string& myDeck, const std::string& oppDeck,
+                       char result);
+    void   loadMatchHistory();
+    void   drawHistory();
+
     // Custom duel settings (Duel Setup popup).
     int    m_setupLP        = 8000;
     int    m_setupHand      = 5;

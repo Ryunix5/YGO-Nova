@@ -13,11 +13,14 @@
 #include <sstream>
 #include <algorithm>
 #include <unordered_map>
+#include <map>
+#include <array>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
 #include <cctype>
 #include <chrono>
+#include <ctime>
 #include <random>
 
 // ─── Card type flags ──────────────────────────────────────────────────────────
@@ -2528,7 +2531,8 @@ void UI::loadSettings() {
     // card back when the file is missing).
     if (!m_settings.cardSleeve.empty())
         m_rend.setCardBack("assets/sleeves/" + m_settings.cardSleeve);
-    loadCardTags();   // deck-consistency role tags (assets/card_tags.txt)
+    loadCardTags();      // deck-consistency role tags (assets/card_tags.txt)
+    loadMatchHistory();  // win/loss log (assets/match_history.txt)
     // Kick off the in-app update check (no-op unless a repo was baked in).
     m_update.setEnabled(m_settings.checkForUpdates);
     m_update.start(edo::kAppVersion, edo::kUpdateRepo);
@@ -3722,10 +3726,10 @@ void UI::drawLobby(int w, int h) {
     // ── Left vertical navigation: DUEL / DECK / QUIT ────────────────────────
     {
         const float NAV_X = 48.f;
-        const float NAV_Y = H * 0.30f;
+        const float NAV_Y = H * 0.26f;
         const float NAV_W = 300.f;
         ImGui::SetNextWindowPos({NAV_X, NAV_Y});
-        ImGui::SetNextWindowSize({NAV_W, 370.f});
+        ImGui::SetNextWindowSize({NAV_W, 430.f});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
@@ -3804,6 +3808,10 @@ void UI::drawLobby(int w, int h) {
             if (!m_replayFiles.empty())
                 m_viewerReplayValid = m_viewerReplay.load(m_replayFiles[0]);
             m_screen = Screen::Replays;
+        }
+        if (navItem("MATCH HISTORY", "Win/loss record and stats", false)) {
+            gAudio().play("click");
+            m_historyOpen = true;
         }
         if (navItem("LAN MULTIPLAYER", "Direct match on your local network",
                     false)) {
@@ -3898,6 +3906,9 @@ void UI::drawLobby(int w, int h) {
         bg->AddText({W - fsz.x - 26.f, H - 26.f}, C.textMuted, foot);
     }
     UIStyle::PopFont();
+
+    // Match-history popup (opened from the MATCH HISTORY nav item).
+    drawHistory();
 
     // ── Audio settings popup (opened by the top-right Audio button) ────────
     if (m_audioPopupOpen) { ImGui::OpenPopup("Audio Settings"); m_audioPopupOpen = false; }
@@ -4977,6 +4988,21 @@ void UI::drawDuel(int w, int h) {
         // auto-save don't double-write.
         finalizeReplay(w == 0 ? "P1 victory" :
                         w == 1 ? "P2 victory" : "draw");
+        // Log the result to match history (offline real duels only — not
+        // replays or Testing-Mode rebuilds). The human is always the P1-deck
+        // side, so w==0 is a win for them.
+        if (m_net.isOffline() && !m_replayMode && !m_testingRebuilding) {
+            auto base = [](const char* p) -> std::string {
+                std::string s = p ? p : "";
+                auto sl = s.find_last_of("/\\");
+                if (sl != std::string::npos) s = s.substr(sl + 1);
+                if (s.size() > 4 && s.substr(s.size() - 4) == ".ydk")
+                    s = s.substr(0, s.size() - 4);
+                return s.empty() ? std::string("Deck") : s;
+            };
+            recordMatch(base(m_deck0Path), base(m_deck1Path),
+                        w == 0 ? 'W' : w == 1 ? 'L' : 'D');
+        }
         // Multiplayer duel resolved naturally — drop the in-duel flag so
         // returning to lobby / multiplayer screen behaves correctly, and
         // clear the auto-resolve suppression so the next live duel keeps
@@ -10400,6 +10426,129 @@ void UI::drawDeckConsistency() {
     ImGui::TextDisabled("Tip: 40-card decks usually aim for ~90%%+ to open a starter.");
 
     ImGui::Spacing();
+    if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+// ── Match history + win/loss stats (#8) ──────────────────────────────────────
+void UI::recordMatch(const std::string& myDeck, const std::string& oppDeck,
+                     char result) {
+    MatchRecord r;
+    std::time_t t = std::time(nullptr);
+    std::tm tmv{};
+#ifdef _WIN32
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    char buf[24];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tmv);
+    r.when = buf; r.myDeck = myDeck; r.oppDeck = oppDeck; r.result = result;
+    m_matchHistory.push_back(r);
+    auto san = [](std::string s) {
+        for (char& c : s) if (c == '|' || c == '\n' || c == '\r') c = ' ';
+        return s;
+    };
+    std::ofstream f("assets/match_history.txt", std::ios::app);
+    if (f) f << r.when << "|" << san(myDeck) << "|" << san(oppDeck) << "|"
+             << result << "\n";
+}
+
+void UI::loadMatchHistory() {
+    m_matchHistory.clear();
+    std::ifstream f("assets/match_history.txt");
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        std::vector<std::string> parts; size_t start = 0;
+        for (size_t i = 0; i <= line.size(); ++i)
+            if (i == line.size() || line[i] == '|') {
+                parts.push_back(line.substr(start, i - start)); start = i + 1;
+            }
+        if (parts.size() >= 4 && !parts[3].empty()) {
+            MatchRecord r;
+            r.when = parts[0]; r.myDeck = parts[1]; r.oppDeck = parts[2];
+            r.result = parts[3][0];
+            m_matchHistory.push_back(r);
+        }
+    }
+}
+
+void UI::drawHistory() {
+    if (m_historyOpen) { ImGui::OpenPopup("Match History"); m_historyOpen = false; }
+    ImGui::SetNextWindowSize({640.f, 0.f}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("Match History", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+
+    if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+    ImGui::TextUnformatted("Match History");
+    if (UIStyle::fHeader) ImGui::PopFont();
+
+    if (m_matchHistory.empty()) {
+        ImGui::TextDisabled("No duels recorded yet. Finish an offline duel "
+                            "and your result lands here.");
+        ImGui::Spacing();
+        if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    int W = 0, L = 0, D = 0;
+    std::map<std::string, std::array<int, 3>> perDeck;   // myDeck -> {W,L,D}
+    for (const auto& r : m_matchHistory) {
+        int idx = (r.result == 'W') ? 0 : (r.result == 'L') ? 1 : 2;
+        if (idx == 0) ++W; else if (idx == 1) ++L; else ++D;
+        perDeck[r.myDeck][idx]++;
+    }
+    int decided = W + L;
+    double overall = decided ? (double)W / decided * 100.0 : 0.0;
+    ImGui::Text("Overall:  %d-%d-%d   (%.0f%% win rate)", W, L, D, overall);
+    ImGui::Separator();
+
+    ImGui::TextDisabled("By deck");
+    if (ImGui::BeginTable("##bydeck", 3,
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+        ImGui::TableSetupColumn("Deck");
+        ImGui::TableSetupColumn("W-L-D", ImGuiTableColumnFlags_WidthFixed, 90.f);
+        ImGui::TableSetupColumn("Win %", ImGuiTableColumnFlags_WidthFixed, 60.f);
+        ImGui::TableHeadersRow();
+        for (auto& kv : perDeck) {
+            int dw = kv.second[0], dl = kv.second[1], dd = kv.second[2];
+            int dec = dw + dl;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(kv.first.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%d-%d-%d", dw, dl, dd);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.0f%%", dec ? (double)dw / dec * 100.0 : 0.0);
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Recent");
+    ImGui::BeginChild("##recent", {-1.f, 170.f}, true);
+    for (int i = (int)m_matchHistory.size() - 1, shown = 0;
+         i >= 0 && shown < 30; --i, ++shown) {
+        const MatchRecord& r = m_matchHistory[i];
+        ImVec4 col = r.result == 'W' ? ImVec4{0.45f, 0.85f, 0.5f, 1.f}
+                   : r.result == 'L' ? ImVec4{0.95f, 0.5f, 0.45f, 1.f}
+                                     : ImVec4{0.8f, 0.8f, 0.8f, 1.f};
+        const char* rl = r.result == 'W' ? "WIN " : r.result == 'L' ? "LOSS" : "DRAW";
+        ImGui::TextColored(col, "%s", rl);
+        ImGui::SameLine(0.f, 8.f);
+        ImGui::Text("%s   %s  vs  %s", r.when.c_str(),
+                    r.myDeck.c_str(), r.oppDeck.c_str());
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+    if (UIStyle::DangerButton("Clear history", {150.f, 30.f})) {
+        m_matchHistory.clear();
+        std::ofstream f("assets/match_history.txt", std::ios::trunc);  // wipe
+    }
+    ImGui::SameLine(0.f, 8.f);
     if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
