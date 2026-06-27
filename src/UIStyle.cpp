@@ -12,31 +12,35 @@ namespace UIStyle {
 // Master Duel-inspired premium palette: deep navy/indigo surfaces, warm gold
 // accent, cyan/blue highlights, restrained reds for damage. The whole app
 // reads these tokens via UIStyle::C() so palette tweaks are one-stop.
+// ── Red & Black theme ────────────────────────────────────────────────────────
+// Deep near-black surfaces with a faint red bias, crimson accents, and a vivid
+// red hero/primary. One change here reskins the whole app (every screen reads
+// UIStyle::C()).
 static const Colors gC = {
-    /*bgDeep*/    IM_COL32(  6,   9,  18, 255),   // app background (near-black navy)
-    /*bgPanel*/   IM_COL32( 17,  22,  36, 255),   // panel surface
-    /*bgRaised*/  IM_COL32( 26,  34,  56, 255),   // input / hover surface
-    /*bgPopup*/   IM_COL32( 13,  18,  32, 252),   // popup / modal background
-    /*bgGlass*/   IM_COL32( 22,  30,  52, 220),   // tinted glass tile
-    /*border*/    IM_COL32( 70,  90, 130, 220),   // visible panel borders
-    /*borderSoft*/IM_COL32( 48,  62,  92, 145),   // inner section dividers
-    /*accent*/    IM_COL32(232, 182,  72, 255),   // warm gold
-    /*accentHi*/  IM_COL32(255, 214, 108, 255),   // gold highlight
-    /*accentDim*/ IM_COL32(126, 100,  40, 200),   // gold dim
-    /*accentText*/IM_COL32( 22,  16,   6, 255),   // text on gold buttons
-    /*primary*/   IM_COL32( 48, 110, 210, 255),   // cyan-blue primary
-    /*primaryHi*/ IM_COL32( 76, 144, 240, 255),
-    /*primaryAct*/IM_COL32( 96, 168, 252, 255),
-    /*primaryText*/IM_COL32(232, 240, 252, 255),
-    /*danger*/    IM_COL32(224,  82,  82, 255),
-    /*success*/   IM_COL32( 90, 210, 130, 255),
-    /*warning*/   IM_COL32(238, 182,  72, 255),
-    /*textHi*/    IM_COL32(242, 246, 252, 255),
-    /*textMd*/    IM_COL32(186, 198, 220, 255),
-    /*textLo*/    IM_COL32(124, 140, 168, 255),
-    /*textMuted*/ IM_COL32( 84, 100, 128, 255),
-    /*shadow*/    IM_COL32(  0,   0,   0, 140),
-    /*glowGold*/  IM_COL32(255, 214, 116, 232),
+    /*bgDeep*/    IM_COL32( 10,   7,   8, 255),   // app background (near-black)
+    /*bgPanel*/   IM_COL32( 22,  14,  16, 255),   // panel surface
+    /*bgRaised*/  IM_COL32( 36,  20,  24, 255),   // input / hover surface
+    /*bgPopup*/   IM_COL32( 17,  10,  12, 252),   // popup / modal background
+    /*bgGlass*/   IM_COL32( 32,  16,  20, 222),   // tinted glass tile
+    /*border*/    IM_COL32(150,  52,  58, 220),   // visible panel borders (red)
+    /*borderSoft*/IM_COL32( 92,  38,  44, 150),   // inner section dividers
+    /*accent*/    IM_COL32(220,  52,  58, 255),   // crimson red
+    /*accentHi*/  IM_COL32(255,  92,  92, 255),   // red highlight
+    /*accentDim*/ IM_COL32(120,  34,  38, 200),   // red dim
+    /*accentText*/IM_COL32(255, 242, 242, 255),   // text on red buttons
+    /*primary*/   IM_COL32(198,  30,  38, 255),   // vivid red primary (hero)
+    /*primaryHi*/ IM_COL32(230,  56,  62, 255),
+    /*primaryAct*/IM_COL32(252,  78,  84, 255),
+    /*primaryText*/IM_COL32(255, 244, 244, 255),
+    /*danger*/    IM_COL32(244,  86,  80, 255),
+    /*success*/   IM_COL32( 92, 206, 126, 255),
+    /*warning*/   IM_COL32(236, 184,  72, 255),
+    /*textHi*/    IM_COL32(247, 240, 241, 255),
+    /*textMd*/    IM_COL32(214, 190, 194, 255),
+    /*textLo*/    IM_COL32(166, 130, 136, 255),
+    /*textMuted*/ IM_COL32(120,  92,  98, 255),
+    /*shadow*/    IM_COL32(  0,   0,   0, 150),
+    /*glowGold*/  IM_COL32(255,  96,  96, 232),   // red glow (repurposed)
     /*glowCyan*/  IM_COL32(112, 220, 255, 232),
     /*glowGreen*/ IM_COL32(110, 240, 130, 232),
     /*glowMagenta*/IM_COL32(244, 132, 232, 232),
@@ -94,56 +98,56 @@ void ApplyTheme() {
     c[ImGuiCol_PopupBg]              = V4(gC.bgPopup);
     c[ImGuiCol_Border]               = V4(gC.borderSoft);
     c[ImGuiCol_BorderShadow]         = {0.f, 0.f, 0.f, 0.f};
-    c[ImGuiCol_FrameBg]              = V4(IM_COL32( 22,  29,  48, 255));
-    c[ImGuiCol_FrameBgHovered]       = V4(IM_COL32( 30,  40,  66, 255));
-    c[ImGuiCol_FrameBgActive]        = V4(IM_COL32( 38,  50,  82, 255));
-    c[ImGuiCol_TitleBg]              = V4(IM_COL32( 12,  16,  28, 255));
-    c[ImGuiCol_TitleBgActive]        = V4(IM_COL32( 18,  24,  40, 255));
-    c[ImGuiCol_TitleBgCollapsed]     = V4(IM_COL32( 12,  16,  28, 200));
-    c[ImGuiCol_MenuBarBg]            = V4(IM_COL32( 14,  18,  32, 255));
-    c[ImGuiCol_ScrollbarBg]          = V4(IM_COL32( 10,  13,  24, 160));
-    c[ImGuiCol_ScrollbarGrab]        = V4(IM_COL32( 52,  66, 104, 200));
-    c[ImGuiCol_ScrollbarGrabHovered] = V4(IM_COL32( 70,  88, 136, 230));
-    c[ImGuiCol_ScrollbarGrabActive]  = V4(IM_COL32( 92, 114, 170, 255));
+    c[ImGuiCol_FrameBg]              = V4(IM_COL32( 32,  18,  22, 255));
+    c[ImGuiCol_FrameBgHovered]       = V4(IM_COL32( 46,  24,  30, 255));
+    c[ImGuiCol_FrameBgActive]        = V4(IM_COL32( 60,  30,  36, 255));
+    c[ImGuiCol_TitleBg]              = V4(IM_COL32( 16,  10,  12, 255));
+    c[ImGuiCol_TitleBgActive]        = V4(IM_COL32( 30,  15,  18, 255));
+    c[ImGuiCol_TitleBgCollapsed]     = V4(IM_COL32( 16,  10,  12, 200));
+    c[ImGuiCol_MenuBarBg]            = V4(IM_COL32( 18,  11,  13, 255));
+    c[ImGuiCol_ScrollbarBg]          = V4(IM_COL32( 12,   7,   9, 160));
+    c[ImGuiCol_ScrollbarGrab]        = V4(IM_COL32( 92,  42,  48, 200));
+    c[ImGuiCol_ScrollbarGrabHovered] = V4(IM_COL32(124,  54,  60, 230));
+    c[ImGuiCol_ScrollbarGrabActive]  = V4(IM_COL32(164,  66,  72, 255));
     c[ImGuiCol_CheckMark]            = V4(gC.accentHi);
     c[ImGuiCol_SliderGrab]           = V4(gC.accent);
     c[ImGuiCol_SliderGrabActive]     = V4(gC.accentHi);
-    c[ImGuiCol_Button]               = V4(IM_COL32( 30,  42,  70, 255));
-    c[ImGuiCol_ButtonHovered]        = V4(IM_COL32( 40,  55,  88, 255));
-    c[ImGuiCol_ButtonActive]         = V4(IM_COL32( 48,  64, 100, 255));
-    c[ImGuiCol_Header]               = V4(IM_COL32( 34,  46,  78, 220));
-    c[ImGuiCol_HeaderHovered]        = V4(IM_COL32( 44,  58,  96, 235));
-    c[ImGuiCol_HeaderActive]         = V4(IM_COL32( 54,  70, 112, 255));
+    c[ImGuiCol_Button]               = V4(IM_COL32( 48,  24,  30, 255));
+    c[ImGuiCol_ButtonHovered]        = V4(IM_COL32( 66,  32,  38, 255));
+    c[ImGuiCol_ButtonActive]         = V4(IM_COL32( 84,  38,  46, 255));
+    c[ImGuiCol_Header]               = V4(IM_COL32( 54,  26,  32, 220));
+    c[ImGuiCol_HeaderHovered]        = V4(IM_COL32( 70,  32,  40, 235));
+    c[ImGuiCol_HeaderActive]         = V4(IM_COL32( 88,  40,  48, 255));
     c[ImGuiCol_Separator]            = V4(gC.borderSoft);
     c[ImGuiCol_SeparatorHovered]     = V4(gC.border);
     c[ImGuiCol_SeparatorActive]      = V4(gC.accent);
-    c[ImGuiCol_ResizeGrip]           = V4(IM_COL32( 52,  66, 104, 120));
-    c[ImGuiCol_ResizeGripHovered]    = V4(IM_COL32( 70,  88, 136, 180));
+    c[ImGuiCol_ResizeGrip]           = V4(IM_COL32( 92,  42,  48, 120));
+    c[ImGuiCol_ResizeGripHovered]    = V4(IM_COL32(124,  54,  60, 180));
     c[ImGuiCol_ResizeGripActive]     = V4(gC.accent);
-    c[ImGuiCol_Tab]                  = V4(IM_COL32( 22,  29,  48, 255));
-    c[ImGuiCol_TabHovered]           = V4(IM_COL32( 40,  55,  88, 255));
-    c[ImGuiCol_TabActive]            = V4(IM_COL32( 38,  50,  82, 255));
-    c[ImGuiCol_TabDimmed]            = V4(IM_COL32( 18,  24,  40, 255));
-    c[ImGuiCol_TabDimmedSelected]    = V4(IM_COL32( 28,  37,  60, 255));
-    c[ImGuiCol_TextSelectedBg]       = V4(IM_COL32( 60,  90, 160, 110));
+    c[ImGuiCol_Tab]                  = V4(IM_COL32( 32,  18,  22, 255));
+    c[ImGuiCol_TabHovered]           = V4(IM_COL32( 66,  32,  38, 255));
+    c[ImGuiCol_TabActive]            = V4(IM_COL32( 60,  30,  36, 255));
+    c[ImGuiCol_TabDimmed]            = V4(IM_COL32( 22,  13,  16, 255));
+    c[ImGuiCol_TabDimmedSelected]    = V4(IM_COL32( 40,  20,  24, 255));
+    c[ImGuiCol_TextSelectedBg]       = V4(IM_COL32(170,  52,  58, 110));
     c[ImGuiCol_NavCursor]            = V4(gC.accent);
     c[ImGuiCol_ModalWindowDimBg]     = {0.02f, 0.03f, 0.06f, 0.62f};
 }
 
 // ── Panels ───────────────────────────────────────────────────────────────────
 void DrawAppBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
-    // Vertical gradient navy → almost black + a soft warm centre vignette so
-    // empty space stops looking like a flat XP canvas.
+    // Vertical gradient dark-red → near black + a soft crimson centre vignette
+    // so empty space reads as deliberate, not a flat canvas.
     dl->AddRectFilledMultiColor(a, b,
-        IM_COL32( 18,  22,  34, 255),     // tl
-        IM_COL32( 22,  26,  40, 255),     // tr
-        IM_COL32(  6,   8,  14, 255),     // br
-        IM_COL32(  4,   5,  10, 255));    // bl
+        IM_COL32( 26,  12,  15, 255),     // tl
+        IM_COL32( 30,  13,  16, 255),     // tr
+        IM_COL32(  8,   4,   6, 255),     // br
+        IM_COL32(  6,   3,   4, 255));    // bl
     const float cx = (a.x + b.x) * 0.5f;
     const float cy = (a.y + b.y) * 0.55f;
     const float r  = (b.x - a.x) * 0.55f;
-    dl->AddCircleFilled({cx, cy}, r, IM_COL32(80, 50, 14, 22), 96);
-    dl->AddCircleFilled({cx, cy}, r * 0.6f, IM_COL32(120, 80, 30, 18), 96);
+    dl->AddCircleFilled({cx, cy}, r, IM_COL32(140, 30, 34, 24), 96);
+    dl->AddCircleFilled({cx, cy}, r * 0.6f, IM_COL32(180, 44, 48, 18), 96);
 }
 
 void DrawModalBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
@@ -236,8 +240,8 @@ void DrawGamePanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
     }
     // Vertical gradient body (raised → deep) for a moulded surface.
     dl->AddRectFilledMultiColor(a, b,
-        IM_COL32(28, 37, 60, 255), IM_COL32(28, 37, 60, 255),
-        IM_COL32(16, 22, 38, 255), IM_COL32(16, 22, 38, 255));
+        IM_COL32(40, 21, 25, 255), IM_COL32(40, 21, 25, 255),
+        IM_COL32(22, 12, 15, 255), IM_COL32(22, 12, 15, 255));
     // Top sheen.
     float h = b.y - a.y;
     dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.22f},
@@ -256,10 +260,10 @@ void CountBadge(ImDrawList* dl, ImVec2 center, int count, ImU32 accent) {
     ImVec2 ts = ImGui::CalcTextSize(b);
     float hw = ts.x * 0.5f + 8.f, hh = ts.y * 0.5f + 3.f;
     ImVec2 p0{center.x - hw, center.y - hh}, p1{center.x + hw, center.y + hh};
-    dl->AddRectFilled(p0, p1, IM_COL32(10, 12, 22, 225), hh);
+    dl->AddRectFilled(p0, p1, IM_COL32(16, 9, 11, 228), hh);
     dl->AddRect(p0, p1, (accent & 0x00FFFFFF) | 0xC0000000, hh, 0, 1.f);
     dl->AddText({center.x - ts.x * 0.5f, center.y - ts.y * 0.5f},
-                IM_COL32(255, 244, 214, 245), b);
+                IM_COL32(255, 226, 226, 245), b);
     PopFont();
 }
 
@@ -283,9 +287,9 @@ void EmptyState(float h, const char* title, const char* subtitle) {
     float w = ImGui::GetContentRegionAvail().x;
     ImVec2 c{p.x + w * 0.5f, p.y + h * 0.42f};
     // Subtle ring + slash glyph.
-    dl->AddCircle(c, 16.f, IM_COL32(120, 134, 170, 110), 24, 1.8f);
+    dl->AddCircle(c, 16.f, IM_COL32(176, 86, 92, 110), 24, 1.8f);
     dl->AddLine({c.x - 9.f, c.y - 9.f}, {c.x + 9.f, c.y + 9.f},
-                IM_COL32(120, 134, 170, 110), 1.8f);
+                IM_COL32(176, 86, 92, 110), 1.8f);
     if (title && title[0]) {
         ImVec2 ts = ImGui::CalcTextSize(title);
         dl->AddText({c.x - ts.x * 0.5f, c.y + 26.f}, gC.textLo, title);
@@ -309,8 +313,8 @@ bool IconButton(const char* label, ImVec2 sz, bool active) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 br{pos.x + sz.x, pos.y + sz.y};
     ImU32 fill = active  ? gC.accent
-              : hovered  ? IM_COL32(40, 52, 82, 255)
-                         : IM_COL32(24, 31, 50, 230);
+              : hovered  ? IM_COL32(64, 32, 38, 255)
+                         : IM_COL32(34, 18, 22, 230);
     dl->AddRectFilled(pos, br, fill, gM.radS);
     dl->AddRect(pos, br,
                 active ? gC.accentHi : hovered ? gC.border : gC.borderSoft,
@@ -470,9 +474,9 @@ static void paintPrimary(ImDrawList* dl, ImVec2 a, ImVec2 b,
 
 static void paintSecondary(ImDrawList* dl, ImVec2 a, ImVec2 b,
                            bool hovered, bool active, const char* label) {
-    ImU32 fill = active  ? IM_COL32(45, 60, 95, 255)
-              : hovered  ? IM_COL32(40, 55, 88, 255)
-                         : IM_COL32(30, 42, 70, 255);
+    ImU32 fill = active  ? IM_COL32(70, 34, 40, 255)
+              : hovered  ? IM_COL32(62, 30, 36, 255)
+                         : IM_COL32(46, 24, 28, 255);
     dl->AddRectFilled(a, b, fill, gM.radM);
     dl->AddRect(a, b, hovered ? gC.primaryHi : gC.border,
                 gM.radM, 0, hovered ? 1.4f : 1.f);
@@ -516,8 +520,8 @@ bool SegmentedButton(const char* label, bool active, bool enabled, ImVec2 sz) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 br = {pos.x + sz.x, pos.y + sz.y};
     ImU32 fill = active  ? gC.accent
-              : hovered ? IM_COL32(45, 56, 82, 255)
-                        : IM_COL32(28, 34, 50, 255);
+              : hovered ? IM_COL32(66, 32, 38, 255)
+                        : IM_COL32(36, 20, 24, 255);
     dl->AddRectFilled(pos, br, fill, gM.radS);
     dl->AddRect(pos, br,
                 active ? gC.accentHi : gC.border,
@@ -552,8 +556,8 @@ bool HudPill(const char* label, bool active, bool enabled, ImVec2 sz) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (active) DrawGlow(dl, a, b, gC.glowGold, r, 3);
     ImU32 fill = active  ? gC.accent
-              : hovered ? IM_COL32(36, 46, 74, 240)
-                        : IM_COL32(20, 26, 44, 230);
+              : hovered ? IM_COL32(54, 27, 32, 240)
+                        : IM_COL32(28, 15, 18, 230);
     dl->AddRectFilled(a, b, fill, r);
     dl->AddRectFilledMultiColor(a, {b.x, a.y + sz.y * 0.5f},
         IM_COL32(255,255,255, active ? 38 : 16),
@@ -562,7 +566,7 @@ bool HudPill(const char* label, bool active, bool enabled, ImVec2 sz) {
     dl->AddRect(a, b,
                 active  ? gC.accentHi
               : hovered ? gC.border
-                        : IM_COL32(72, 88, 132, 180),
+                        : IM_COL32(120, 56, 62, 180),
                 r, 0, active ? 1.6f : 1.f);
     PushFont(fSmall);
     ImVec2 lts = ImGui::CalcTextSize(vis);
@@ -597,21 +601,21 @@ bool ActionCard(const char* id, const char* title, const char* desc,
 
     ImVec2 br = {pos.x + width, pos.y + h};
     if (hov) DrawGlow(dl, pos, br, gC.glowGold, 7.f, 2);
-    ImU32 bg = held ? IM_COL32(62, 70, 116, 255)
-             : hov  ? IM_COL32(48, 56, 98, 255)
-                    : IM_COL32(30, 36, 64, 255);
-    ImU32 border = hov ? gC.accentHi : IM_COL32(74, 88, 138, 190);
+    ImU32 bg = held ? IM_COL32(86, 38, 44, 255)
+             : hov  ? IM_COL32(70, 32, 38, 255)
+                    : IM_COL32(44, 22, 26, 255);
+    ImU32 border = hov ? gC.accentHi : IM_COL32(124, 56, 62, 190);
     dl->AddRectFilled(pos, br, bg, 7.f);
     dl->AddRect(pos, br, border, 7.f, 0, hov ? 1.8f : 1.f);
     // Left accent bar so rows read as selectable action cards.
     dl->AddRectFilled({pos.x, pos.y + 6.f}, {pos.x + 3.f, pos.y + h - 6.f},
-                      hov ? gC.accentHi : IM_COL32(110, 126, 180, 200), 2.f);
+                      hov ? gC.accentHi : IM_COL32(168, 76, 82, 200), 2.f);
     dl->AddText(nullptr, 0.f, {pos.x + padX, pos.y + padY},
-                IM_COL32(255, 232, 160, 255), title, nullptr, innerW);
+                IM_COL32(255, 218, 200, 255), title, nullptr, innerW);
     if (hasDesc)
         dl->AddText(nullptr, 0.f,
                     {pos.x + padX, pos.y + padY + tSz.y + gap},
-                    IM_COL32(198, 206, 226, 255), desc, nullptr, innerW);
+                    IM_COL32(220, 200, 204, 255), desc, nullptr, innerW);
     ImGui::Dummy({1.f, 6.f});                 // inter-row gap
     return clicked;
 }
