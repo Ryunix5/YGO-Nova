@@ -370,8 +370,11 @@ bool DuelManager::startBoardBreak(const PuzzleSetup& board, const Deck& humanDec
     opts.team1.startingDrawCount = 0;
     opts.team1.drawCountPerTurn  = 1;
     opts.team2.startingLP        = board.lpYou;
-    opts.team2.startingDrawCount = 5;     // +1 on the human's turn = 6 cards
-    opts.team2.drawCountPerTurn  = 1;
+    // Open the human's hand at exactly 6 and suppress the per-turn draw so the
+    // player's turn begins with 6 in hand (a board break is a one-turn puzzle —
+    // no draw step to wait through).
+    opts.team2.startingDrawCount = 6;
+    opts.team2.drawCountPerTurn  = 0;
     opts.cardReader     = CardDB::cardReaderCb;     opts.payload1 = &m_db;
     opts.cardReaderDone = CardDB::cardReaderDoneCb; opts.payload4 = &m_db;
     opts.scriptReader   = scriptReaderCb;           opts.payload2 = this;
@@ -2483,20 +2486,18 @@ bool DuelManager::autoRespondP2() {
     case WaitType::SelectCard: {
         if (!hasCards) { respondInt(0); return true; }
         const int aiSeat = m_selection.player & 1;
-        // If every option is an OPPONENT card, this is almost certainly a
-        // removal / attack target — take the strongest. Otherwise (own cards:
-        // costs, summon material, etc.) take the first valid one.
-        bool allOpp = true;
-        for (const CardState& c : m_selection.cards)
-            if ((c.player & 1) == aiSeat) { allOpp = false; break; }
-        int pick = 0;
-        if (allOpp) {
-            int best = -1;
-            for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
-                int v = m_db.getCard(m_selection.cards[i].code).atk;
-                if (v > best) { best = v; pick = i; }
-            }
+        // Prefer the opponent's (human's) strongest card as a target — a
+        // removal/negate effect should hit a threat, never the AI's own board
+        // (e.g. Mirrorjade banishing itself). Only when NO opponent card is
+        // offered (pure cost / own-material selection) do we fall back to the
+        // first option.
+        int pick = -1, best = -1;
+        for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
+            if ((m_selection.cards[i].player & 1) == aiSeat) continue;  // own card
+            int v = m_db.getCard(m_selection.cards[i].code).atk;
+            if (v > best) { best = v; pick = i; }
         }
+        if (pick < 0) pick = 0;          // no opponent target → first valid
         respondSingleCard(pick); return true;
     }
     case WaitType::SelectTribute: {
@@ -2519,8 +2520,16 @@ bool DuelManager::autoRespondP2() {
         // never chains into its own combo or loops. Outside this mode the AI
         // keeps the safe behaviour: pass unless forced.
         const int aiSeat = m_selection.player & 1;
+        const int humanSeat = aiSeat ^ 1;
         const bool ownTurn = (m_field.turnPlayer & 1) == aiSeat;
-        if (m_defensiveAI && !ownTurn && !m_selection.cards.empty()) {
+        // Only fire once the human has actually committed a monster to the
+        // board. Disruptions are mostly removal/negation aimed at a threat;
+        // firing into an empty board makes the AI target ITS OWN cards (e.g.
+        // Mirrorjade banishing itself). Waiting for a human monster also times
+        // the negate to the player's real play instead of their first draw.
+        bool humanHasThreat = !m_field.monsters[humanSeat].empty();
+        if (m_defensiveAI && !ownTurn && humanHasThreat &&
+            !m_selection.cards.empty()) {
             for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
                 uint32_t code = m_selection.cards[i].code;
                 bool used = false;
