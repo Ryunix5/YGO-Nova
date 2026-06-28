@@ -4035,7 +4035,7 @@ void UI::drawLobby(int w, int h) {
                 m_viewerReplayValid = m_viewerReplay.load(m_replayFiles[0]);
             m_screen = Screen::Replays;
         }
-        if (navItem("PUZZLES", "Solve preset boards — win in one turn", false)) {
+        if (navItem("PUZZLES", "Go second and break a preset boss board", false)) {
             gAudio().play("click");
             if (m_puzzles.empty()) loadPuzzles();
             m_puzzleBrowserOpen = true;
@@ -4225,7 +4225,7 @@ void UI::drawLobby(int w, int h) {
             ImGui::TextColored(okCol, "All SFX loaded.");
         }
         ImGui::Spacing();
-        ImGui::TextDisabled("To generate placeholder WAVs, run:");
+        ImGui::TextDisabled("To regenerate the default WAV bank, run:");
         ImGui::PushStyleColor(ImGuiCol_Text,
             ImGui::ColorConvertU32ToFloat4(C.accent));
         ImGui::TextUnformatted("  python tools/generate_sfx.py");

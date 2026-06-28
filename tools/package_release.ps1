@@ -21,7 +21,7 @@
     powershell -ExecutionPolicy Bypass -File tools\package_release.ps1 -Version 1.0.0
 #>
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.0.2",
     [string]$Config  = "Release",
     # Card images (~300 MB, Konami IP) are NOT bundled by default — the app
     # downloads them on demand on first view. Pass this to ship them anyway.

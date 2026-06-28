@@ -23,7 +23,7 @@
     powershell -ExecutionPolicy Bypass -File tools\build_installer.ps1 -Version 1.0.0
 #>
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.0.2",
     [string]$Config  = "Release",
     [switch]$IncludeCardImages
 )

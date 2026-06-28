@@ -8,7 +8,7 @@
 ; exe, which a Program Files install would block.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.0.2"
 #endif
 #define MyAppName "YGO Nova"
 #define MyAppExeName "YGONova.exe"
