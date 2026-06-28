@@ -196,13 +196,10 @@ void DrawGlassPanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
     dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.30f},
         IM_COL32(255, 255, 255, 16), IM_COL32(255, 255, 255, 16),
         IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
-    // Refined edge: a faint dark "seat" for separation from the backdrop, then
-    // a soft (not loud) crimson border, finished with a top highlight bevel so
-    // the panel reads as a lit surface rather than an outlined box.
-    dl->AddRect(a, b, IM_COL32(0, 0, 0, 80), rounding, 0, 1.0f);
-    dl->AddRect(a, b, (gC.border & 0x00FFFFFF) | 0x66000000, rounding, 0, 1.0f);
-    dl->AddLine({a.x + rounding, a.y + 1.5f}, {b.x - rounding, a.y + 1.5f},
-                IM_COL32(255, 236, 236, 26), 1.f);
+    dl->AddRect(a, b, gC.border, rounding, 0, 1.2f);
+    // Inner hairline for depth.
+    dl->AddRect({a.x + 1.5f, a.y + 1.5f}, {b.x - 1.5f, b.y - 1.5f},
+                IM_COL32(255, 255, 255, 14), rounding - 1.f, 0, 1.f);
 }
 
 void DrawGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color,
@@ -250,11 +247,10 @@ void DrawGamePanel(ImDrawList* dl, ImVec2 a, ImVec2 b,
     dl->AddRectFilledMultiColor(a, {b.x, a.y + h * 0.22f},
         IM_COL32(255, 255, 255, 20), IM_COL32(255, 255, 255, 20),
         IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 0));
-    ImU32 border = accent ? accent : ((gC.border & 0x00FFFFFF) | 0x77000000);
-    dl->AddRect(a, b, IM_COL32(0, 0, 0, 90), rounding, 0, 1.0f);
-    dl->AddRect(a, b, border, rounding, 0, 1.0f);
-    dl->AddLine({a.x + rounding, a.y + 1.5f}, {b.x - rounding, a.y + 1.5f},
-                IM_COL32(255, 236, 236, 24), 1.f);
+    ImU32 border = accent ? accent : gC.border;
+    dl->AddRect(a, b, border, rounding, 0, 1.4f);
+    dl->AddRect({a.x + 1.5f, a.y + 1.5f}, {b.x - 1.5f, b.y - 1.5f},
+                IM_COL32(255, 255, 255, 12), rounding - 1.f, 0, 1.f);
 }
 
 void CountBadge(ImDrawList* dl, ImVec2 center, int count, ImU32 accent) {
@@ -458,29 +454,19 @@ static void drawButtonLabel(ImDrawList* dl, ImVec2 a, ImVec2 b,
 
 static void paintPrimary(ImDrawList* dl, ImVec2 a, ImVec2 b,
                          bool hovered, bool active, const char* label) {
-    float r = gM.radM;
-    // Soft hover glow (subtle, not a bright ring).
-    if (hovered && !active)
-        DrawGlow(dl, a, b, (gC.accentHi & 0x00FFFFFF) | 0x33000000, r, 2);
-    // Drop shadow below for depth.
-    dl->AddRectFilled({a.x + 1.f, a.y + 3.f}, {b.x + 1.f, b.y + 4.f},
-                      IM_COL32(0, 0, 0, 60), r);
-    // Vertical gradient body: bright crimson top → deep red bottom (press
-    // inverts slightly for a tactile "pushed in" cue).
-    ImU32 top = active ? gC.primary   : hovered ? gC.primaryAct : gC.primaryHi;
-    ImU32 bot = active ? gC.primaryHi : hovered ? gC.primary    : gC.primary;
-    dl->AddRectFilledMultiColor(a, b, top, top, bot, bot);
-    // Soft top sheen for the "lit" cue.
+    // One clean solid fill — state just shifts it: brighter on hover, dimmer
+    // on press. Subtle top highlight, single border (original treatment).
+    ImU32 fill = active  ? gC.accentDim
+              : hovered  ? gC.accentHi
+                         : gC.accent;
+    dl->AddRectFilled(a, b, fill, gM.radM);
     float h = b.y - a.y;
     dl->AddRectFilledMultiColor(
-        {a.x, a.y}, {b.x, a.y + h * 0.46f},
-        IM_COL32(255, 255, 255, 40), IM_COL32(255, 255, 255, 40),
+        a, {b.x, a.y + h * 0.5f},
+        IM_COL32(255, 255, 255, 38), IM_COL32(255, 255, 255, 38),
         IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
-    // Clean single edge: one deep-crimson outline for definition (no bright
-    // pink ring, no white perimeter), plus a 1px top highlight only.
-    dl->AddRect(a, b, IM_COL32(92, 14, 20, 235), r, 0, 1.0f);
-    dl->AddLine({a.x + r, a.y + 1.2f}, {b.x - r, a.y + 1.2f},
-                IM_COL32(255, 228, 228, hovered ? 64 : 44), 1.f);
+    dl->AddRect(a, b, hovered ? gC.accentHi : gC.accent,
+                gM.radM, 0, hovered ? 1.4f : 1.f);
     drawButtonLabel(dl, a, b, gC.primaryText, label);
 }
 

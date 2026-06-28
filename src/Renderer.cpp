@@ -8,6 +8,15 @@
 #ifndef GL_CLAMP_TO_EDGE
 #  define GL_CLAMP_TO_EDGE 0x812F
 #endif
+// GL_GENERATE_MIPMAP (GL 1.4) auto-builds mipmaps on upload — no GL 3.0
+// glGenerateMipmap function pointer needed. Pairs with a trilinear MIN filter
+// so card art stays crisp (no aliasing/shimmer) when drawn smaller than native.
+#ifndef GL_GENERATE_MIPMAP
+#  define GL_GENERATE_MIPMAP 0x8191
+#endif
+#ifndef GL_LINEAR_MIPMAP_LINEAR
+#  define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#endif
 #include <cstring>
 #include <cmath>
 #include <cstdio>
@@ -193,7 +202,10 @@ void* Renderer::loadTexture(const std::string& path) {
     GLuint texID;
     glGenTextures(1, &texID);
     glBindTexture(GL_TEXTURE_2D, texID);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    // Auto-generate mipmaps (set BEFORE glTexImage2D) and filter trilinearly so
+    // downscaled card art reads crisp instead of aliased/blocky.
+    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
