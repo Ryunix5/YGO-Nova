@@ -5047,8 +5047,8 @@ void UI::drawDuel(int w, int h) {
     // Game-speed presets (Relaxed / Normal / Fast) drive the per-event "read
     // beat" and phase pacing so the player can follow each summon/activation.
     //                                    Relaxed  Normal  Fast
-    const double kBeat[3]  = { 0.95,  0.50,  0.20 };
-    const double kPhase[3] = { 1.30,  0.70,  0.20 };
+    const double kBeat[3]  = { 1.30,  1.00,  0.60 };
+    const double kPhase[3] = { 1.30,  0.80,  0.35 };
     int gs = (m_settings.gameSpeed >= 0 && m_settings.gameSpeed <= 2)
                  ? m_settings.gameSpeed : 0;
     bool pace = m_net.isOffline() && !m_replayMode && !m_testingRebuilding &&

@@ -562,9 +562,9 @@ bool DuelManager::process() {
                     case WaitType::SelectIdleCmd:
                     case WaitType::SelectBattleCmd:
                         // A visible move (Summon / Set / Activate / Attack /
-                        // phase change) — a full one-second beat so each AI
-                        // action is clearly separated and watchable.
-                        aiHold = 1.0;
+                        // phase change) — a generous beat so each AI action is
+                        // clearly separated and watchable.
+                        aiHold = 1.4;
                         break;
                     case WaitType::SelectEffectYn:
                     case WaitType::SelectYesNo:
@@ -574,8 +574,8 @@ bool DuelManager::process() {
                     case WaitType::SelectTribute:
                     case WaitType::SelectUnselect:
                         // Every AI decision — including effect choices and
-                        // material picks — gets the full one-second beat.
-                        aiHold = 1.0;
+                        // material picks — gets a clear beat too.
+                        aiHold = 1.2;
                         break;
                     default: break;
                 }
