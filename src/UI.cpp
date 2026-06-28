@@ -3600,24 +3600,68 @@ void UI::drawLobby(int w, int h) {
         bg->AddLine({0.f, hy}, {W, hy}, IM_COL32(190, 60, 64, 40), 1.f);
     }
 
-    // ── Subtle Egyptian accent ──────────────────────────────────────────────
-    // Just a faint pyramid skyline on the horizon — barely-there dark
-    // silhouettes that hint at the theme without crowding the scene.
+    // ── Subtle Egyptian glyphs ──────────────────────────────────────────────
+    // A sparse, faint scatter of hieroglyph-style marks (ankh / Eye of Horus /
+    // was-sceptre) drifting in the deep background — barely-there bronze so
+    // they hint at the theme without competing with the nova.
     {
-        const float hy = H * 0.78f;
-        auto pyramid = [&](float px, float half, float ht, int alpha) {
-            ImVec2 apex = { px, hy - ht };
-            ImVec2 bl   = { px - half, hy };
-            ImVec2 br   = { px + half, hy };
-            // Dark silhouette, very low contrast against the backdrop.
-            bg->AddTriangleFilled(apex, bl, br, IM_COL32(8, 4, 5, alpha));
-            // The slope facing the nova catches a sliver of light.
-            ImVec2 lit = (px <= cx) ? br : bl;
-            bg->AddLine(apex, lit, IM_COL32(150, 64, 50, alpha / 3), 1.2f);
+        // Manual quadratic-bezier → polyline (no imgui-version dependency).
+        auto quad = [&](ImVec2 p0, ImVec2 p1, ImVec2 p2, ImU32 col, float th) {
+            const int N = 12; ImVec2 pts[N + 1];
+            for (int i = 0; i <= N; ++i) {
+                float u = (float)i / N, v = 1.f - u;
+                pts[i] = { v*v*p0.x + 2*v*u*p1.x + u*u*p2.x,
+                           v*v*p0.y + 2*v*u*p1.y + u*u*p2.y };
+            }
+            bg->AddPolyline(pts, N + 1, col, 0, th);
         };
-        pyramid(cx - 300.f, 130.f, 165.f, 150);
-        pyramid(cx + 280.f, 110.f, 145.f, 150);
-        pyramid(cx,         235.f, 280.f, 175);   // central, a touch taller
+        auto ankh = [&](ImVec2 c, float s, ImU32 col, float th) {
+            bg->AddCircle({c.x, c.y - s*0.55f}, s*0.34f, col, 16, th);
+            bg->AddLine({c.x, c.y - s*0.2f}, {c.x, c.y + s}, col, th);
+            bg->AddLine({c.x - s*0.5f, c.y}, {c.x + s*0.5f, c.y}, col, th);
+        };
+        auto eye = [&](ImVec2 c, float s, ImU32 col, float th) {
+            quad({c.x-1.1f*s, c.y}, {c.x, c.y-0.85f*s},
+                 {c.x+1.2f*s, c.y-0.1f*s}, col, th);          // upper lid
+            quad({c.x-1.1f*s, c.y}, {c.x-0.1f*s, c.y+0.45f*s},
+                 {c.x+0.9f*s, c.y+0.1f*s}, col, th);          // lower lid
+            bg->AddCircleFilled(c, 0.18f*s, col, 12);         // pupil
+            quad({c.x-0.2f*s, c.y+0.35f*s}, {c.x-0.35f*s, c.y+0.8f*s},
+                 {c.x-0.25f*s, c.y+1.15f*s}, col, th);        // tear
+            quad({c.x+0.55f*s, c.y+0.2f*s}, {c.x+0.95f*s, c.y+0.55f*s},
+                 {c.x+0.55f*s, c.y+1.05f*s}, col, th);        // curl
+        };
+        auto was = [&](ImVec2 c, float s, ImU32 col, float th) {
+            bg->AddLine({c.x, c.y - s}, {c.x, c.y + s}, col, th);     // staff
+            bg->AddLine({c.x, c.y - s}, {c.x - s*0.5f, c.y - s*0.6f}, col, th);
+            bg->AddLine({c.x - s*0.45f, c.y + s}, {c.x + s*0.45f, c.y + s}, col, th);
+        };
+
+        // Deterministic scatter — same layout every frame so the glyphs sit
+        // still. Skip the busy left strip (nav + status panels) and the bright
+        // core around the sigil so nothing reads as clutter.
+        unsigned s = 0x5EED9u;
+        auto frand = [&](){ s = s * 1664525u + 1013904223u;
+                            return (s >> 8) * (1.f / 16777216.f); };
+        const float pulse = 0.5f + 0.5f * std::sin(t * 0.6f);
+        for (int i = 0; i < 14; ++i) {
+            float gx = frand() * W;
+            float gy = frand() * H;
+            float sz = 12.f + frand() * 12.f;
+            float pick = frand();
+            // Keep clear of the left chrome column and the sigil's bright core.
+            if (gx < W * 0.30f && gy > H * 0.14f && gy < H * 0.92f) continue;
+            float dx = gx - cx, dy = gy - cy;
+            if (dx*dx + dy*dy < 210.f * 210.f) continue;
+            // Twinkle: each glyph fades in/out on its own slow phase.
+            float ph = frand() * 6.2831853f;
+            float tw = 0.4f + 0.6f * (0.5f + 0.5f * std::sin(t * 0.5f + ph));
+            int a = (int)((14.f + 16.f * tw) * (0.7f + 0.3f * pulse));
+            ImU32 col = IM_COL32(180, 120, 60, a);
+            if      (pick < 0.40f) ankh(  {gx, gy}, sz, col, 1.3f);
+            else if (pick < 0.75f) eye(   {gx, gy}, sz * 0.7f, col, 1.2f);
+            else                   was(   {gx, gy}, sz, col, 1.3f);
+        }
     }
 
     // Slow rising embers — deterministic seeds, time-driven vertical drift so
