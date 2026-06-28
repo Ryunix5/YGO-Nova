@@ -577,9 +577,17 @@ bool DuelManager::process() {
                         // material picks — gets a clear beat too.
                         aiHold = 1.2;
                         break;
-                    default: break;
+                    default:
+                        // Placement / position and any other sub-step still
+                        // gets a beat so nothing the AI does is truly instant.
+                        aiHold = 0.8;
+                        break;
                 }
-                if (m_phaseDelaySec > 0.0 && aiHold > 0.0) {
+                // Gate on the AI combo-beat (set by the UI whenever an offline
+                // live duel is running — independent of the phase slider / Fast
+                // turns), so the per-action hold ALWAYS applies and the AI can
+                // never pump a whole combo within a single frame.
+                if (m_aiComboBeat > 0.0 && aiHold > 0.0) {
                     m_phaseHoldUntil = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                             std::chrono::duration<double>(aiHold));

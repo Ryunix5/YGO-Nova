@@ -2999,6 +2999,9 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
         return false;
     }
     m_snap.clear();
+    // Seed AI pacing up-front so the engine can't pump the opponent's whole
+    // first turn instantly on frame 1 (before drawDuel's pacing block runs).
+    m_dm.setAiComboBeat(1.3);
     // Replay + testing capture the registered (toss) order so playback and
     // rewind reproduce the exact same opening.
     beginReplayRecording(t0, t1);
@@ -5060,9 +5063,14 @@ void UI::drawDuel(int w, int h) {
         (int)m_dm.field().turnPlayer != m_dm.humanSeat();
     if (skipOppTurn) pace = false;
     m_dm.setPhaseDelay(pace ? kPhase[gs] : 0.0);
-    // AI "combo beat" — paces each Summon / activation so the action is
-    // watchable. Fast turns / replay / rebuild / online switch it off.
-    m_dm.setAiComboBeat(pace ? kBeat[gs] : 0.0);
+    // AI pacing — DECOUPLED from the phase slider / Fast-turns / game-speed so a
+    // visible 1-second-class beat between every AI action ALWAYS applies in an
+    // offline live duel (only a Testing rewind/replay/puzzle-skip turns it off).
+    // The DuelManager gates its per-action hold on this combo-beat value, so a
+    // non-zero value here guarantees the hold fires.
+    bool aiPace = m_net.isOffline() && !m_replayMode && !m_testingRebuilding &&
+                  !skipOppTurn;
+    m_dm.setAiComboBeat(aiPace ? 1.3 : 0.0);
 
     // Opponent-action notifications: toast each new summon / activation /
     // attack the opponent makes, so the player can follow the game state even
