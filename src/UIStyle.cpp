@@ -459,29 +459,28 @@ static void drawButtonLabel(ImDrawList* dl, ImVec2 a, ImVec2 b,
 static void paintPrimary(ImDrawList* dl, ImVec2 a, ImVec2 b,
                          bool hovered, bool active, const char* label) {
     float r = gM.radM;
-    // Hover glow ring for a premium "lit" feel.
+    // Soft hover glow (subtle, not a bright ring).
     if (hovered && !active)
-        DrawGlow(dl, a, b, (gC.accentHi & 0x00FFFFFF) | 0x66000000, r, 3);
+        DrawGlow(dl, a, b, (gC.accentHi & 0x00FFFFFF) | 0x33000000, r, 2);
     // Drop shadow below for depth.
     dl->AddRectFilled({a.x + 1.f, a.y + 3.f}, {b.x + 1.f, b.y + 4.f},
-                      IM_COL32(0, 0, 0, 70), r);
+                      IM_COL32(0, 0, 0, 60), r);
     // Vertical gradient body: bright crimson top → deep red bottom (press
     // inverts slightly for a tactile "pushed in" cue).
     ImU32 top = active ? gC.primary   : hovered ? gC.primaryAct : gC.primaryHi;
     ImU32 bot = active ? gC.primaryHi : hovered ? gC.primary    : gC.primary;
     dl->AddRectFilledMultiColor(a, b, top, top, bot, bot);
-    // Crisp top sheen.
+    // Soft top sheen for the "lit" cue.
     float h = b.y - a.y;
     dl->AddRectFilledMultiColor(
         {a.x, a.y}, {b.x, a.y + h * 0.46f},
-        IM_COL32(255, 255, 255, 52), IM_COL32(255, 255, 255, 52),
+        IM_COL32(255, 255, 255, 40), IM_COL32(255, 255, 255, 40),
         IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
-    // Hairline inner highlight + bright outer border.
-    dl->AddRect({a.x + 1.f, a.y + 1.f}, {b.x - 1.f, b.y - 1.f},
-                IM_COL32(255, 255, 255, 30), r - 1.f, 0, 1.f);
-    dl->AddRect(a, b, hovered ? IM_COL32(255, 140, 140, 255)
-                              : IM_COL32(255, 110, 110, 220),
-                r, 0, hovered ? 1.6f : 1.2f);
+    // Clean single edge: one deep-crimson outline for definition (no bright
+    // pink ring, no white perimeter), plus a 1px top highlight only.
+    dl->AddRect(a, b, IM_COL32(92, 14, 20, 235), r, 0, 1.0f);
+    dl->AddLine({a.x + r, a.y + 1.2f}, {b.x - r, a.y + 1.2f},
+                IM_COL32(255, 228, 228, hovered ? 64 : 44), 1.f);
     drawButtonLabel(dl, a, b, gC.primaryText, label);
 }
 
