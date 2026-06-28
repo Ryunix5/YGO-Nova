@@ -2546,6 +2546,7 @@ void UI::loadSettings() {
     // to open — AudioManager::setMuted/setVolume are no-ops in that case.
     gAudio().setMuted (m_settings.sfxMuted);
     gAudio().setVolume(m_settings.sfxVolume);
+    gAudio().setMusicVolume(m_settings.musicVolume);
     // Restore last-used decks for the lobby setup popup.
     if (!m_settings.lastDeckP1.empty())
         strncpy(m_deck0Path, m_settings.lastDeckP1.c_str(),
@@ -2580,6 +2581,7 @@ void UI::saveSettings() {
     m_settings.showLegalGlow     = m_showLegalGlow;
     m_settings.sfxMuted          = gAudio().muted();
     m_settings.sfxVolume         = gAudio().volume();
+    m_settings.musicVolume       = gAudio().musicVolume();
     m_settings.lastDeckP1        = m_deck0Path[0] ? m_deck0Path : "";
     m_settings.lastDeckP2        = m_deck1Path[0] ? m_deck1Path : "";
     if (!m_settings.save())
@@ -3546,80 +3548,165 @@ void UI::drawLobby(int w, int h) {
     const auto& C = UIStyle::C();
     const float W = (float)w, H = (float)h;
 
-    // ── Fullscreen procedural background (drawn under everything) ───────────
+    // ── Fullscreen epic dark background (drawn under everything) ────────────
+    // A deliberate cinematic scene rather than a flat tinted canvas: deep
+    // black base, a great crimson "nova" burning centre-right, slow rising
+    // embers, a sweeping light, a forged central sigil, and a hard vignette
+    // that frames the whole menu like a title card.
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
-    UIStyle::DrawAppBackdrop(bg, {0.f, 0.f}, {W, H});
+    const float t = (float)ImGui::GetTime();
+    const float cx = W * 0.62f, cy = H * 0.50f;
 
-    // Subtle diagonal "duel-field perspective" lines on the right half.
-    // Original abstract geometry — no derivative imagery.
+    // Base: near-black vertical gradient, far darker than the stock backdrop.
+    bg->AddRectFilledMultiColor({0.f, 0.f}, {W, H},
+        IM_COL32( 14,  6,  8, 255),   // tl
+        IM_COL32( 16,  7,  9, 255),   // tr
+        IM_COL32(  3,  1,  2, 255),   // br
+        IM_COL32(  2,  1,  1, 255));  // bl
+
+    // The nova — a huge layered radial glow that the menu sits inside. Layers
+    // go from a deep blood-red halo to a hot near-white core, with a gentle
+    // breathing pulse so it feels alive without distracting.
     {
-        ImU32 line = IM_COL32(150, 70, 76, 24);
-        float ox = W * 0.55f, oy = H * 0.55f;
-        for (int i = -8; i <= 8; ++i) {
-            float k = (float)i * 0.12f;
-            bg->AddLine({ox - 800.f * k, oy + 600.f * (1 - std::abs(k))},
-                        {W, oy - 200.f + 60.f * i}, line, 1.f);
+        const float pulse = 0.5f + 0.5f * std::sin(t * 0.6f);   // 0..1
+        struct Ring { float r; int cr, cg, cb, a; };
+        const Ring rings[] = {
+            { 620.f,  90, 16, 22, 26 },
+            { 470.f, 120, 22, 28, 34 },
+            { 350.f, 150, 28, 32, 40 },
+            { 250.f, 185, 40, 38, 52 },
+            { 165.f, 215, 70, 50, 70 },
+            { 100.f, 240,120, 80, 90 },
+            {  58.f, 255,180,140,120 },
+        };
+        for (const auto& rg : rings) {
+            float r = rg.r * (1.f + 0.015f * pulse);
+            bg->AddCircleFilled({cx, cy}, r,
+                IM_COL32(rg.cr, rg.cg, rg.cb,
+                         (int)(rg.a * (0.85f + 0.15f * pulse))), 72);
         }
     }
-    // Procedural "starfield" particles (deterministic — same seed every frame
-    // so they don't dance). Tiny dots scattered across the canvas.
+
+    // A faint distant ground-plane "horizon" rift — a thin bright band low on
+    // the screen with falloff, suggesting a vast arena beyond the dark.
     {
-        unsigned s = 0x12345u;
-        auto frand = [&](){ s = s * 1664525u + 1013904223u; return (s >> 8) * (1.f / 16777216.f); };
-        for (int i = 0; i < 220; ++i) {
-            float x = frand() * W;
-            float y = frand() * H;
-            float r = 0.6f + frand() * 1.6f;
-            ImU32 c = IM_COL32(210, 150, 156, (int)(24 + frand() * 90.f));
-            bg->AddCircleFilled({x, y}, r, c, 6);
+        float hy = H * 0.78f;
+        bg->AddRectFilledMultiColor({0.f, hy - 140.f}, {W, hy},
+            IM_COL32(0,0,0,0), IM_COL32(0,0,0,0),
+            IM_COL32(150, 32, 36, 30), IM_COL32(150, 32, 36, 30));
+        bg->AddRectFilledMultiColor({0.f, hy}, {W, hy + 120.f},
+            IM_COL32(120, 24, 28, 26), IM_COL32(120, 24, 28, 26),
+            IM_COL32(0,0,0,0), IM_COL32(0,0,0,0));
+        bg->AddLine({0.f, hy}, {W, hy}, IM_COL32(190, 60, 64, 40), 1.f);
+    }
+
+    // Slow rising embers — deterministic seeds, time-driven vertical drift so
+    // they float upward and recycle. A few brighter sparks among dim motes.
+    {
+        unsigned s = 0xA53F1u;
+        auto frand = [&](){ s = s * 1664525u + 1013904223u;
+                            return (s >> 8) * (1.f / 16777216.f); };
+        for (int i = 0; i < 70; ++i) {
+            float bx   = frand() * W;
+            float spd  = 8.f + frand() * 26.f;          // px/sec upward
+            float phase= frand();
+            float span = H + 120.f;
+            // Position rises over time and wraps from bottom to top.
+            float y = H + 60.f - std::fmod(t * spd + phase * span, span);
+            float sway = std::sin((t * 0.5f) + phase * 6.2831853f) * 14.f;
+            float x = bx + sway;
+            float rr = 0.7f + frand() * 1.8f;
+            // Fade in low, fade out high.
+            float lifeT = 1.f - (H - y) / span;         // 1 at bottom → 0 top
+            float fade  = std::clamp(lifeT * 1.4f, 0.f, 1.f);
+            bool hot = frand() > 0.82f;
+            int a = (int)((hot ? 180.f : 95.f) * fade);
+            ImU32 c = hot ? IM_COL32(255, 150, 90, a)
+                          : IM_COL32(210, 80, 70, a);
+            bg->AddCircleFilled({x, y}, rr, c, 6);
+            if (hot)  // tiny halo on the bright ones
+                bg->AddCircleFilled({x, y}, rr * 2.4f,
+                                    IM_COL32(255, 130, 80, a / 4), 8);
         }
     }
-    // Central hero composition (abstract glowing emblem at ~60% width).
+
+    // Sweeping light shaft behind the sigil — a soft rotating wedge that
+    // catches the eye, kept low-alpha so it never overpowers.
     {
-        float cx = W * 0.62f, cy = H * 0.52f;
-        // Concentric energy rings.
-        for (int i = 0; i < 5; ++i) {
-            float r = 80.f + i * 38.f;
-            int alpha = 90 - i * 14;
-            bg->AddCircle({cx, cy}, r,
-                          IM_COL32(200, 70, 76, alpha), 64, 1.4f);
+        float ang = t * 0.12f;
+        for (int k = 0; k < 2; ++k) {
+            float a = ang + k * 3.14159265f;
+            ImVec2 dir = { std::cos(a), std::sin(a) };
+            ImVec2 nrm = { -dir.y, dir.x };
+            float len = 540.f, wid = 70.f;
+            ImVec2 p0 = { cx + nrm.x * wid, cy + nrm.y * wid };
+            ImVec2 p1 = { cx - nrm.x * wid, cy - nrm.y * wid };
+            ImVec2 p2 = { cx - nrm.x * (wid*0.2f) + dir.x * len,
+                          cy - nrm.y * (wid*0.2f) + dir.y * len };
+            ImVec2 p3 = { cx + nrm.x * (wid*0.2f) + dir.x * len,
+                          cy + nrm.y * (wid*0.2f) + dir.y * len };
+            ImVec2 wedge[4] = { p0, p1, p2, p3 };
+            bg->AddConvexPolyFilled(wedge, 4, IM_COL32(200, 60, 60, 14));
         }
-        // Hexagonal lattice — six rotated diamonds around a centre.
-        for (int i = 0; i < 6; ++i) {
-            float a = (float)i * 6.2831853f / 6.f - 1.5707963f;
-            float ax = cx + std::cos(a) * 170.f;
-            float ay = cy + std::sin(a) * 170.f;
-            float a2 = a + 6.2831853f / 6.f;
-            float bx = cx + std::cos(a2) * 170.f;
-            float by = cy + std::sin(a2) * 170.f;
-            bg->AddLine({ax, ay}, {bx, by},
-                        IM_COL32(205, 80, 86, 100), 1.3f);
+    }
+
+    // ── The sigil — a forged crimson diamond emblem, the menu's centrepiece.
+    {
+        const float pulse = 0.5f + 0.5f * std::sin(t * 0.6f);
+        // Outer ring of runic ticks rotating very slowly.
+        float rot = t * 0.08f;
+        for (int i = 0; i < 48; ++i) {
+            float a = rot + (float)i * (6.2831853f / 48.f);
+            float r0 = 196.f, r1 = (i % 4 == 0) ? 214.f : 206.f;
+            ImVec2 p0 = { cx + std::cos(a) * r0, cy + std::sin(a) * r0 };
+            ImVec2 p1 = { cx + std::cos(a) * r1, cy + std::sin(a) * r1 };
+            bg->AddLine(p0, p1, IM_COL32(180, 50, 54,
+                        (i % 4 == 0) ? 150 : 70), 1.4f);
         }
-        // Centre diamond (suggests a card silhouette in plan view).
-        {
-            float s = 90.f;
-            ImVec2 dp[4] = { {cx, cy - s}, {cx + s, cy},
-                             {cx, cy + s}, {cx - s, cy} };
-            bg->AddPolyline(dp, 4, IM_COL32(214, 64, 70, 190),
-                            ImDrawFlags_Closed, 1.6f);
-            // Inner small diamond.
-            float s2 = s * 0.55f;
-            ImVec2 ip[4] = { {cx, cy - s2}, {cx + s2, cy},
-                             {cx, cy + s2}, {cx - s2, cy} };
-            bg->AddPolyline(ip, 4, IM_COL32(255, 120, 120, 130),
-                            ImDrawFlags_Closed, 1.f);
-        }
-        // Soft red core glow.
-        for (int i = 0; i < 7; ++i)
-            bg->AddCircleFilled({cx, cy}, 28.f - i * 3.f,
-                                IM_COL32(220, 56, 62, 24), 32);
-        // Vertical light shaft behind the emblem.
-        bg->AddRectFilledMultiColor({cx - 6.f, cy - 260.f},
-                                    {cx + 6.f, cy + 260.f},
-                                    IM_COL32(220, 60, 66,   0),
-                                    IM_COL32(220, 60, 66,   0),
-                                    IM_COL32(220, 60, 66, 110),
-                                    IM_COL32(220, 60, 66, 110));
+        // Two concentric thin rings.
+        bg->AddCircle({cx, cy}, 196.f, IM_COL32(150, 40, 44, 90), 96, 1.4f);
+        bg->AddCircle({cx, cy}, 150.f, IM_COL32(120, 32, 36, 70), 96, 1.f);
+
+        // Forged diamond — layered fills from dark steel to a glowing rim.
+        auto diamond = [&](float r, ImU32 col, bool fill, float th) {
+            ImVec2 p[4] = {{cx, cy - r}, {cx + r, cy},
+                           {cx, cy + r}, {cx - r, cy}};
+            if (fill) bg->AddConvexPolyFilled(p, 4, col);
+            else      bg->AddPolyline(p, 4, col, ImDrawFlags_Closed, th);
+        };
+        diamond(132.f, IM_COL32(20,  9, 11, 235), true, 0.f);   // body
+        diamond(132.f, IM_COL32(150, 40, 44, 120), false, 1.5f);
+        // Bevel facets — lines from each vertex to centre give a cut-gem read.
+        bg->AddLine({cx, cy - 132.f}, {cx, cy + 132.f},
+                    IM_COL32(120, 34, 38, 80), 1.f);
+        bg->AddLine({cx - 132.f, cy}, {cx + 132.f, cy},
+                    IM_COL32(120, 34, 38, 80), 1.f);
+        diamond(78.f, IM_COL32(60, 16, 20, 230), true, 0.f);
+        diamond(78.f, IM_COL32(210, 64, 60,
+                               (int)(150 + 80 * pulse)), false, 1.8f);
+        // Hot core — a small bright diamond + bloom that breathes.
+        for (int i = 6; i >= 0; --i)
+            diamond(10.f + i * 5.f,
+                    IM_COL32(230, 90, 70, (int)(20 + 6 * (6 - i))), true, 0.f);
+        diamond(22.f, IM_COL32(255, 180, 140, (int)(200 + 50 * pulse)),
+                true, 0.f);
+        diamond(10.f, IM_COL32(255, 240, 225, 255), true, 0.f);
+    }
+
+    // Cinematic vignette — darken all four corners hard so the bright centre
+    // pops and the chrome panels read against true black at the edges.
+    {
+        const ImU32 edge = IM_COL32(0, 0, 0, 200);
+        const ImU32 clear = IM_COL32(0, 0, 0, 0);
+        float vw = W * 0.34f, vh = H * 0.34f;
+        bg->AddRectFilledMultiColor({0.f, 0.f}, {vw, H},
+            edge, clear, clear, edge);                    // left
+        bg->AddRectFilledMultiColor({W - vw, 0.f}, {W, H},
+            clear, edge, edge, clear);                    // right
+        bg->AddRectFilledMultiColor({0.f, 0.f}, {W, vh},
+            edge, edge, clear, clear);                    // top
+        bg->AddRectFilledMultiColor({0.f, H - vh}, {W, H},
+            clear, clear, edge, edge);                    // bottom
     }
 
     // ── Top-left profile / status HUD (glass, no boxy panel) ────────────────
@@ -4020,16 +4107,30 @@ void UI::drawLobby(int w, int h) {
         if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
         ImGui::TextUnformatted("Audio");
         if (UIStyle::fHeader) ImGui::PopFont();
-        ImGui::TextDisabled("Procedural SFX bank — placeholder sounds.");
+        ImGui::TextDisabled("Sound effects and background music.");
         ImGui::Separator();
         bool av     = gAudio().isAvailable();
         bool muted  = gAudio().muted();
         float vol   = gAudio().volume();
         ImGui::Text("Device: %s", av ? "open" : "unavailable");
-        if (ImGui::Checkbox("Mute SFX", &muted)) gAudio().setMuted(muted);
+        if (ImGui::Checkbox("Mute all", &muted)) gAudio().setMuted(muted);
+        ImGui::TextDisabled("SFX volume");
         ImGui::SetNextItemWidth(-1.f);
-        if (ImGui::SliderFloat("Volume", &vol, 0.f, 1.f, "%.2f"))
+        if (ImGui::SliderFloat("##sfxvol", &vol, 0.f, 1.f, "%.2f")) {
             gAudio().setVolume(vol);
+            m_settings.sfxVolume = vol; saveSettings();
+        }
+        // Background music volume.
+        ImGui::TextDisabled("Music volume");
+        float mvol = gAudio().musicVolume();
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::SliderFloat("##musvol", &mvol, 0.f, 1.f, "%.2f")) {
+            gAudio().setMusicVolume(mvol);
+            m_settings.musicVolume = mvol; saveSettings();
+        }
+        if (!gAudio().musicLoaded())
+            ImGui::TextDisabled("(no music track loaded — needs a real PCM "
+                                ".wav at assets/sfx/main menu loop.wav)");
         ImGui::Spacing();
         if (UIStyle::SecondaryButton("Test Sound", {160.f, 32.f}))
             gAudio().play("confirm");

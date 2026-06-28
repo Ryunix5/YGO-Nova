@@ -29,6 +29,7 @@ struct Settings {
     // ── Audio ────────────────────────────────────────────────────────────
     bool   sfxMuted          = false;
     float  sfxVolume         = 0.70f;
+    float  musicVolume       = 0.45f;    // looping background music level
 
     // ── Visual toggles ───────────────────────────────────────────────────
     bool   showFieldNames    = false;
@@ -186,6 +187,7 @@ struct Settings {
         f << "\n# Audio\n";
         f << "sfxMuted="          << (sfxMuted          ? "1" : "0") << "\n";
         f << "sfxVolume="         << sfxVolume                       << "\n";
+    f << "musicVolume="       << musicVolume                     << "\n";
         f << "\n# Visual\n";
         f << "showFieldNames="    << (showFieldNames    ? "1" : "0") << "\n";
         f << "largePreview="      << (largePreview      ? "1" : "0") << "\n";
@@ -246,6 +248,7 @@ private:
     void applyKV(const std::string& k, const std::string& v) {
         if      (k == "sfxMuted")          sfxMuted          = boolFromStr(v);
         else if (k == "sfxVolume")         sfxVolume         = floatFromStr(v, sfxVolume);
+        else if (k == "musicVolume")       musicVolume       = floatFromStr(v, musicVolume);
         else if (k == "showFieldNames")    showFieldNames    = boolFromStr(v);
         else if (k == "largePreview")      largePreview      = boolFromStr(v);
         else if (k == "showZoneLabels")    showZoneLabels    = boolFromStr(v);
