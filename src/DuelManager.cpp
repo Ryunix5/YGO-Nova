@@ -573,9 +573,9 @@ bool DuelManager::process() {
                     case WaitType::SelectCard:
                     case WaitType::SelectTribute:
                     case WaitType::SelectUnselect:
-                        // Sub-steps of a single move (effect choices, material
-                        // picks) — shorter so one summon doesn't drag.
-                        aiHold = 0.5;
+                        // Every AI decision — including effect choices and
+                        // material picks — gets the full one-second beat.
+                        aiHold = 1.0;
                         break;
                     default: break;
                 }

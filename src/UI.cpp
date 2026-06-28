@@ -3026,6 +3026,9 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
         m_anim.emitPhaseBanner(humanFirst ? "COIN TOSS — YOU GO FIRST"
                                           : "COIN TOSS — OPPONENT FIRST",
                                ImGui::GetIO().DisplaySize, col);
+        // Hold the phase-banner queue so the first Draw Phase banner doesn't
+        // pop on top of (and instantly replace) the coin-toss banner.
+        m_phaseQueueNextAt = ImGui::GetTime() + 1.9;
     }
     m_dm.logEvent(std::string("[COIN TOSS] first=") +
                   (humanFirst ? "P1(you)" : "P2(opp)") +
