@@ -561,7 +561,10 @@ bool DuelManager::process() {
                 switch (m_selection.type) {
                     case WaitType::SelectIdleCmd:
                     case WaitType::SelectBattleCmd:
-                        aiHold = m_phaseDelaySec < 0.5 ? m_phaseDelaySec : 0.5;
+                        // A visible move (Summon / Set / Activate / Attack /
+                        // phase change) — a full one-second beat so each AI
+                        // action is clearly separated and watchable.
+                        aiHold = 1.0;
                         break;
                     case WaitType::SelectEffectYn:
                     case WaitType::SelectYesNo:
@@ -570,7 +573,9 @@ bool DuelManager::process() {
                     case WaitType::SelectCard:
                     case WaitType::SelectTribute:
                     case WaitType::SelectUnselect:
-                        aiHold = m_phaseDelaySec < 0.28 ? m_phaseDelaySec : 0.28;
+                        // Sub-steps of a single move (effect choices, material
+                        // picks) — shorter so one summon doesn't drag.
+                        aiHold = 0.5;
                         break;
                     default: break;
                 }
