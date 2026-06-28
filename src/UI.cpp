@@ -2782,6 +2782,10 @@ void UI::observePhaseForBanners() {
     } else {
         startIdx = newIdx;                                // only the new phase
     }
+    // Ending the turn jumps straight to the End Phase (e.g. Main 1 -> End,
+    // skipping Battle / Main 2). Those middle phases never happened, so don't
+    // backfill banners for them — just show "End Phase".
+    if (newPhase == 0x200) startIdx = newIdx;
     for (int k = startIdx; k <= newIdx; ++k)
         m_phaseQueue.push_back(kPhaseOrder[k]);
 
