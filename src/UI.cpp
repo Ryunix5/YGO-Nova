@@ -3600,157 +3600,24 @@ void UI::drawLobby(int w, int h) {
         bg->AddLine({0.f, hy}, {W, hy}, IM_COL32(190, 60, 64, 40), 1.f);
     }
 
-    // ── Egyptian theme layer ────────────────────────────────────────────────
-    // Abstract, original geometry (no copyrighted imagery): pyramids on the
-    // horizon, two flanking temple columns with carved glyph bands, a frieze
-    // of ankhs/eyes along the horizon, and an Eye of Horus keystone up top.
-    // Warm bronze "gold" reads as Egyptian against the crimson dark scene.
+    // ── Subtle Egyptian accent ──────────────────────────────────────────────
+    // Just a faint pyramid skyline on the horizon — barely-there dark
+    // silhouettes that hint at the theme without crowding the scene.
     {
         const float hy = H * 0.78f;
-        const float pulse = 0.5f + 0.5f * std::sin(t * 0.6f);
-
-        // Manual quadratic-bezier → polyline (no imgui-version dependency).
-        auto quad = [&](ImVec2 p0, ImVec2 p1, ImVec2 p2, ImU32 col, float th) {
-            const int N = 14; ImVec2 pts[N + 1];
-            for (int i = 0; i <= N; ++i) {
-                float u = (float)i / N, v = 1.f - u;
-                pts[i] = { v*v*p0.x + 2*v*u*p1.x + u*u*p2.x,
-                           v*v*p0.y + 2*v*u*p1.y + u*u*p2.y };
-            }
-            bg->AddPolyline(pts, N + 1, col, 0, th);
-        };
-        // Stylised Eye of Horus (wedjat) built from arcs + a pupil + the
-        // descending tear and curl tail.
-        auto eyeOfHorus = [&](ImVec2 c, float s, ImU32 col, float th) {
-            quad({c.x-1.1f*s, c.y}, {c.x, c.y-0.9f*s},
-                 {c.x+1.2f*s, c.y-0.15f*s}, col, th);                 // upper lid
-            quad({c.x-1.1f*s, c.y}, {c.x-0.1f*s, c.y+0.45f*s},
-                 {c.x+0.9f*s, c.y+0.1f*s}, col, th);                  // lower lid
-            quad({c.x-1.0f*s, c.y-0.55f*s}, {c.x+0.1f*s, c.y-1.05f*s},
-                 {c.x+1.25f*s, c.y-0.4f*s}, col, th);                 // brow
-            bg->AddCircleFilled(c, 0.2f*s, col, 16);                  // pupil
-            quad({c.x-0.2f*s, c.y+0.35f*s}, {c.x-0.4f*s, c.y+0.8f*s},
-                 {c.x-0.28f*s, c.y+1.2f*s}, col, th);                 // tear
-            quad({c.x+0.5f*s, c.y+0.25f*s}, {c.x+0.98f*s, c.y+0.5f*s},
-                 {c.x+0.95f*s, c.y+1.0f*s}, col, th);                 // curl
-            quad({c.x+0.95f*s, c.y+1.0f*s}, {c.x+0.95f*s, c.y+1.4f*s},
-                 {c.x+0.5f*s, c.y+1.3f*s}, col, th);
-        };
-        // Ankh — loop + stem + crossbar.
-        auto ankh = [&](ImVec2 c, float s, ImU32 col, float th) {
-            bg->AddCircle({c.x, c.y - s*0.55f}, s*0.34f, col, 18, th);
-            bg->AddLine({c.x, c.y - s*0.2f}, {c.x, c.y + s}, col, th);
-            bg->AddLine({c.x - s*0.5f, c.y + s*0.02f},
-                        {c.x + s*0.5f, c.y + s*0.02f}, col, th);
-        };
-
-        const ImU32 stone   = IM_COL32(  9,  5,  6, 255);   // dark silhouette
-        const ImU32 goldDim = IM_COL32(176, 116, 56,  70);  // muted bronze
-        const ImU32 goldLit = IM_COL32(206, 142, 70, 120);  // brighter bronze
-        const ImU32 rim     = IM_COL32(196,  92, 56,  90);  // sun-lit edge
-
-        // Pyramids — a large central one rising under the sigil/sun, flanked by
-        // two smaller ones. Dark stone with a rim-lit edge facing the nova and
-        // a faint apex glow where the "sun" meets the peak.
-        auto pyramid = [&](float px, float half, float ht) {
+        auto pyramid = [&](float px, float half, float ht, int alpha) {
             ImVec2 apex = { px, hy - ht };
             ImVec2 bl   = { px - half, hy };
             ImVec2 br   = { px + half, hy };
-            bg->AddTriangleFilled(apex, bl, br, stone);
-            // Lit edge faces the centre (the light source).
-            if (px <= cx) bg->AddLine(apex, br, rim, 2.f);  // right face lit
-            else          bg->AddLine(apex, bl, rim, 2.f);  // left face lit
-            bg->AddLine(apex, (px <= cx ? bl : br),
-                        IM_COL32(120, 50, 40, 50), 1.5f);   // shaded edge
-            // Subtle banded courses near the base.
-            for (int i = 1; i <= 3; ++i) {
-                float yy = hy - (ht * 0.10f) * i;
-                float t2 = 1.f - (hy - yy) / ht;
-                bg->AddLine({px - half*t2, yy}, {px + half*t2, yy},
-                            IM_COL32(0, 0, 0, 60), 1.f);
-            }
-            // Apex glow.
-            bg->AddCircleFilled(apex, 14.f, IM_COL32(220, 110, 70, 40), 16);
+            // Dark silhouette, very low contrast against the backdrop.
+            bg->AddTriangleFilled(apex, bl, br, IM_COL32(8, 4, 5, alpha));
+            // The slope facing the nova catches a sliver of light.
+            ImVec2 lit = (px <= cx) ? br : bl;
+            bg->AddLine(apex, lit, IM_COL32(150, 64, 50, alpha / 3), 1.2f);
         };
-        pyramid(cx - 360.f, 150.f, 200.f);
-        pyramid(cx + 330.f, 130.f, 175.f);
-        pyramid(cx,         300.f, 360.f);   // grand central pyramid
-
-        // Two temple columns framing the centrepiece like a gateway. Dark
-        // fluted shafts, banded lotus capitals, a glyph cartouche down each
-        // shaft, and a rim light on the inner edge facing the nova.
-        auto column = [&](float x) {
-            const float top = H * 0.13f, bot = hy;
-            const float cwid = 30.f;
-            bg->AddRectFilled({x - cwid, top}, {x + cwid, bot},
-                              IM_COL32(13, 7, 8, 238));
-            // Fluting.
-            for (int i = -2; i <= 2; ++i)
-                bg->AddLine({x + i*11.f, top}, {x + i*11.f, bot},
-                            IM_COL32(0, 0, 0, 70), 1.f);
-            // Inner edge rim light (faces centre).
-            float inner = (x < cx) ? x + cwid : x - cwid;
-            bg->AddLine({inner, top}, {inner, bot}, rim, 2.f);
-            // Lotus/papyrus capital — stacked bands.
-            bg->AddRectFilled({x - cwid - 12.f, top - 30.f},
-                              {x + cwid + 12.f, top}, IM_COL32(17, 9, 10, 242));
-            bg->AddRect({x - cwid - 12.f, top - 30.f},
-                        {x + cwid + 12.f, top}, goldDim, 0, 0, 1.5f);
-            for (int i = 1; i <= 3; ++i)
-                bg->AddLine({x - cwid - 12.f, top - 30.f + i*7.f},
-                            {x + cwid + 12.f, top - 30.f + i*7.f}, goldDim, 1.f);
-            // Abacus + base slabs.
-            bg->AddRectFilled({x - cwid - 16.f, top - 38.f},
-                              {x + cwid + 16.f, top - 30.f}, IM_COL32(20,11,12,245));
-            bg->AddRectFilled({x - cwid - 14.f, bot - 8.f},
-                              {x + cwid + 14.f, bot + 10.f}, IM_COL32(16, 9, 10, 245));
-            // Glyph cartouche running down the shaft.
-            int rows = 6;
-            float gy0 = top + 50.f, gstep = (bot - 60.f - gy0) / (rows - 1);
-            for (int i = 0; i < rows; ++i) {
-                ImVec2 g = { x, gy0 + gstep * i };
-                ImU32 gc = (i & 1) ? goldDim : goldLit;
-                if      (i % 3 == 0) eyeOfHorus(g, 9.f, gc, 1.3f);
-                else if (i % 3 == 1) ankh({g.x, g.y - 6.f}, 13.f, gc, 1.4f);
-                else { // chevron / wave glyph
-                    bg->AddLine({g.x-9.f, g.y-4.f}, {g.x, g.y+4.f}, gc, 1.4f);
-                    bg->AddLine({g.x, g.y+4.f}, {g.x+9.f, g.y-4.f}, gc, 1.4f);
-                    bg->AddLine({g.x-9.f, g.y+8.f}, {g.x+9.f, g.y+8.f}, gc, 1.4f);
-                }
-            }
-        };
-        column(cx - 330.f);
-        column(cx + 330.f);
-
-        // Horizon frieze — a temple band of alternating ankhs and eyes sitting
-        // on the horizon line, fading toward the screen edges.
-        {
-            const float fy = hy - 14.f;
-            const float gap = 84.f;
-            for (float x = gap * 0.5f; x < W; x += gap) {
-                float edgeFade = std::min(x, W - x) / (W * 0.5f);
-                int a = (int)(70 * std::clamp(edgeFade, 0.f, 1.f));
-                if (a < 8) continue;
-                ImU32 gc = IM_COL32(190, 126, 62, a);
-                int idx = (int)(x / gap);
-                if (idx & 1) ankh({x, fy}, 11.f, gc, 1.4f);
-                else         eyeOfHorus({x, fy - 4.f}, 8.f, gc, 1.3f);
-            }
-        }
-
-        // Eye of Horus keystone — top-centre "all-seeing" motif above the
-        // sigil, with a soft bronze halo that breathes with the nova.
-        {
-            ImVec2 ec = { cx, H * 0.165f };
-            float es = 30.f;
-            int halo = (int)(26 + 18 * pulse);
-            bg->AddCircleFilled(ec, es * 1.7f, IM_COL32(150, 90, 50, halo / 3), 28);
-            ImU32 ecol = IM_COL32(214, 150, 78, (int)(150 + 60 * pulse));
-            eyeOfHorus(ec, es, ecol, 2.2f);
-            // Small sun disk above the brow (Ra motif).
-            bg->AddCircleFilled({ec.x, ec.y - es * 1.25f}, 6.f,
-                                IM_COL32(230, 150, 80, (int)(160 + 60 * pulse)), 16);
-        }
+        pyramid(cx - 300.f, 130.f, 165.f, 150);
+        pyramid(cx + 280.f, 110.f, 145.f, 150);
+        pyramid(cx,         235.f, 280.f, 175);   // central, a touch taller
     }
 
     // Slow rising embers — deterministic seeds, time-driven vertical drift so
