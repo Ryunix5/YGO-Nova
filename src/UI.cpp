@@ -3464,6 +3464,18 @@ bool UI::draw(int winW, int winH) {
     // means drawDuel sees the freshest selection state.
     pumpMultiplayer();
 
+    // Background music: loop it on the menus, silence it during a live duel so
+    // the duel SFX have the stage. Cheap idempotent toggle by screen.
+    {
+        bool wantMusic = (m_screen != Screen::Duel);
+        if (wantMusic) {
+            if (gAudio().musicLoaded() && !gAudio().musicPlaying())
+                gAudio().playMusic();
+        } else if (gAudio().musicPlaying()) {
+            gAudio().stopMusic();
+        }
+    }
+
     switch (m_screen) {
         case Screen::Lobby:       drawLobby(winW, winH);       break;
         case Screen::Duel:        drawDuel(winW, winH);         break;

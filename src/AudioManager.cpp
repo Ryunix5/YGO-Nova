@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -26,7 +27,38 @@ struct AudioManager::Impl {
     bool   muted  = false;
     float  volume = 0.7f;
     bool   ready  = false;
+
+    // ── Streaming music (separate callback device) ────────────────────────
+    SDL_AudioDeviceID musicDev = 0;
+    SDL_AudioSpec     musicSpec{};
+    Clip              music;          // PCM converted to musicSpec
+    size_t            musicPos = 0;   // read cursor (audio thread)
+    bool              musicOn  = false;
+    float             musicVolume = 0.5f;
 };
+
+// Audio-thread callback: fill `stream` with the looping music PCM, mixed at
+// the music volume. Runs on SDL's audio thread, so it only touches fields the
+// main thread guards with SDL_LockAudioDevice when mutating the buffer.
+void AudioManager::musicCallback(void* userdata, unsigned char* stream, int len) {
+    auto* p = static_cast<AudioManager::Impl*>(userdata);
+    SDL_memset(stream, 0, (size_t)len);
+    if (!p->musicOn || p->muted || p->music.data.empty() ||
+        p->musicVolume < 0.001f)
+        return;
+    const std::vector<Uint8>& d = p->music.data;
+    int vol = (int)(SDL_MIX_MAXVOLUME * p->musicVolume);
+    int filled = 0;
+    while (filled < len) {
+        if (p->musicPos >= d.size()) p->musicPos = 0;          // loop
+        int chunk = (int)std::min((size_t)(len - filled),
+                                  d.size() - p->musicPos);
+        SDL_MixAudioFormat(stream + filled, d.data() + p->musicPos,
+                           p->musicSpec.format, (Uint32)chunk, vol);
+        p->musicPos += (size_t)chunk;
+        filled      += chunk;
+    }
+}
 
 // The canonical SFX bank — tools/generate_sfx.py produces exactly these and
 // Game.cpp loads exactly these. Sharing the list here keeps the diagnostic
@@ -70,11 +102,30 @@ bool AudioManager::init() {
     p->ready = true;
     printf("[audio] device opened: %d Hz, %d ch, fmt 0x%x\n",
            p->spec.freq, p->spec.channels, (unsigned)p->spec.format);
+
+    // Second device for streaming music (callback mode), so BGM mixes UNDER
+    // the queued SFX rather than playing in sequence with them.
+    SDL_AudioSpec mwant{};
+    mwant.freq     = 44100;
+    mwant.format   = AUDIO_S16SYS;
+    mwant.channels = 2;
+    mwant.samples  = 4096;
+    mwant.callback = &AudioManager::musicCallback;
+    mwant.userdata = p;
+    p->musicDev = SDL_OpenAudioDevice(nullptr, 0, &mwant, &p->musicSpec,
+                                      SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+    if (p->musicDev) SDL_PauseAudioDevice(p->musicDev, 1);   // paused until play
+    else printf("[audio] music device failed (BGM disabled): %s\n",
+                SDL_GetError());
     return true;
 }
 
 void AudioManager::shutdown() {
     if (!p) return;
+    if (p->musicDev) {
+        SDL_CloseAudioDevice(p->musicDev);
+        p->musicDev = 0;
+    }
     if (p->dev) {
         SDL_ClearQueuedAudio(p->dev);
         SDL_CloseAudioDevice(p->dev);
@@ -173,6 +224,78 @@ void  AudioManager::setMuted(bool m)     { p->muted = m; }
 bool  AudioManager::muted() const        { return p->muted; }
 void  AudioManager::setVolume(float v)   { p->volume = std::clamp(v, 0.f, 1.f); }
 float AudioManager::volume() const       { return p->volume; }
+
+// ── Background music ─────────────────────────────────────────────────────────
+void AudioManager::loadMusic(const std::string& path) {
+    if (!p->ready || !p->musicDev) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) {
+        printf("[audio] music missing (BGM off): %s\n", path.c_str());
+        return;
+    }
+    SDL_AudioSpec wavSpec{}; Uint8* wavBuf = nullptr; Uint32 wavLen = 0;
+    if (!SDL_LoadWAV(path.c_str(), &wavSpec, &wavBuf, &wavLen)) {
+        // A common mistake is renaming an .mp3 to .wav — SDL only reads real
+        // RIFF/WAVE PCM, so flag that clearly.
+        unsigned char hdr[4] = {0};
+        { std::ifstream hf(path, std::ios::binary);
+          if (hf) hf.read(reinterpret_cast<char*>(hdr), 4); }
+        bool looksMp3 = (hdr[0]=='I'&&hdr[1]=='D'&&hdr[2]=='3') ||
+                        (hdr[0]==0xFF && (hdr[1]&0xE0)==0xE0);
+        printf("[audio] music load failed for %s: %s%s\n", path.c_str(),
+               SDL_GetError(),
+               looksMp3 ? "  (this file is MP3 data, not WAV — re-encode it to "
+                          "a real PCM .wav)" : "");
+        return;
+    }
+    SDL_AudioCVT cvt{};
+    int rc = SDL_BuildAudioCVT(&cvt, wavSpec.format, wavSpec.channels,
+                               wavSpec.freq, p->musicSpec.format,
+                               p->musicSpec.channels, p->musicSpec.freq);
+    std::vector<Uint8> out;
+    if (rc < 0) { SDL_FreeWAV(wavBuf); return; }
+    if (rc == 0) {
+        out.assign(wavBuf, wavBuf + wavLen);
+    } else {
+        cvt.len = (int)wavLen;
+        std::vector<Uint8> buf((size_t)cvt.len * cvt.len_mult, 0);
+        cvt.buf = buf.data();
+        std::copy(wavBuf, wavBuf + wavLen, buf.begin());
+        if (SDL_ConvertAudio(&cvt) < 0) { SDL_FreeWAV(wavBuf); return; }
+        out.assign(buf.begin(), buf.begin() + cvt.len_cvt);
+    }
+    SDL_FreeWAV(wavBuf);
+    SDL_LockAudioDevice(p->musicDev);
+    p->music.data = std::move(out);
+    p->musicPos   = 0;
+    SDL_UnlockAudioDevice(p->musicDev);
+    printf("[audio] music loaded: %s (%zu bytes pcm)\n",
+           path.c_str(), p->music.data.size());
+}
+
+void AudioManager::playMusic() {
+    if (!p->ready || !p->musicDev || p->music.data.empty()) return;
+    if (p->musicOn) return;
+    SDL_LockAudioDevice(p->musicDev);
+    p->musicPos = 0;
+    p->musicOn  = true;
+    SDL_UnlockAudioDevice(p->musicDev);
+    SDL_PauseAudioDevice(p->musicDev, 0);
+}
+
+void AudioManager::stopMusic() {
+    if (!p->musicDev) return;
+    p->musicOn = false;
+    SDL_PauseAudioDevice(p->musicDev, 1);
+}
+
+bool  AudioManager::musicPlaying() const { return p && p->musicOn; }
+bool  AudioManager::musicLoaded()  const { return p && !p->music.data.empty(); }
+void  AudioManager::setMusicVolume(float v) {
+    if (p) p->musicVolume = std::clamp(v, 0.f, 1.f);
+}
+float AudioManager::musicVolume() const  { return p ? p->musicVolume : 0.f; }
 
 bool AudioManager::isLoaded(const std::string& key) const {
     return p && p->clips.find(key) != p->clips.end();

@@ -216,6 +216,10 @@ bool Game::init(const std::string& title, int w, int h) {
         if (loaded < expected)
             printf("[audio] some SFX are missing — run "
                    "`python tools/generate_sfx.py` to create placeholders.\n");
+        // Background music — looped on the menus. The UI starts/stops it by
+        // screen. (Must be a real PCM .wav; an .mp3 renamed to .wav won't load.)
+        gAudio().setMusicVolume(0.45f);
+        gAudio().loadMusic("assets/sfx/main menu loop.wav");
     } else {
         printf("[audio] no device — SFX disabled (gameplay unaffected).\n");
     }

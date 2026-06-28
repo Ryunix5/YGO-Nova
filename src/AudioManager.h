@@ -26,6 +26,18 @@ public:
     void  setVolume(float v);
     float volume() const;
 
+    // ── Looping background music ──────────────────────────────────────────
+    // A separate streaming audio device (callback) so music mixes UNDER the
+    // one-shot SFX instead of queuing behind them. loadMusic decodes a WAV;
+    // playMusic loops it; stopMusic silences it. Volume is independent of SFX.
+    void  loadMusic(const std::string& path);
+    void  playMusic();
+    void  stopMusic();
+    bool  musicPlaying() const;
+    bool  musicLoaded() const;
+    void  setMusicVolume(float v);
+    float musicVolume() const;
+
     // True if a clip is currently cached under `key`.
     bool isLoaded(const std::string& key) const;
     // Number of clips currently cached.
@@ -39,6 +51,9 @@ public:
 private:
     struct Impl;
     Impl* p;
+    // SDL audio-thread callback for the streaming music device. Static so it
+    // matches SDL's C callback signature; userdata is the Impl*.
+    static void musicCallback(void* userdata, unsigned char* stream, int len);
 };
 
 // One process-wide audio manager, accessed by UI hooks without threading it
