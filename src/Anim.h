@@ -464,78 +464,48 @@ private:
         m_items.push_back(a); cap();
     }
 
-    // ── Banner: cinematic full-width wipe band + light sweep ──────────────
+    // ── Banner: centre phase plate, slide-in / hold / fade-out ────────────
     void drawBanner(ImDrawList* dl, ImVec2 winTL, const Anim& it, double t) {
         float W = it.a.x, H = it.a.y;
-        float cx = winTL.x + W * 0.5f, cy = winTL.y + H * 0.40f;
-        // Envelope: wipe open → hold (with a light sweep) → fade.
-        float alpha, open, scale;
-        if (t < 0.18) {
-            float k = (float)(t / 0.18);
-            float e = 1.f - (1.f - k) * (1.f - k);     // ease-out
-            alpha = k; open = e; scale = 0.84f + 0.16f * e;
-        } else if (t < 0.70) {
-            alpha = 1.f; open = 1.f; scale = 1.f;
-        } else {
-            float k = (float)((t - 0.70) / 0.30);
-            alpha = 1.f - k; open = 1.f + 0.05f * k; scale = 1.f;
-        }
+        // Envelope: 0-.16 slide+fade in, .16-.66 hold, .66-1 fade out.
+        float alpha, slide;
+        if (t < 0.16)      { float k = (float)(t / 0.16); alpha = k; slide = (1.f - k) * 60.f; }
+        else if (t < 0.66) { alpha = 1.f; slide = 0.f; }
+        else               { float k = (float)((t - 0.66) / 0.34); alpha = 1.f - k; slide = -k * 40.f; }
         if (alpha < 0.f) alpha = 0.f;
-
-        float bw = W * 0.66f * open, bh = 72.f;
+        float cx = winTL.x + W * 0.5f + slide;
+        float cy = winTL.y + H * 0.42f;
+        const float bw = 460.f, bh = 64.f;
         ImVec2 a { cx - bw * 0.5f, cy - bh * 0.5f };
         ImVec2 b { cx + bw * 0.5f, cy + bh * 0.5f };
-
-        // Full-width ambient glow band, brightest at centre and fading to the
-        // screen edges — gives the transition presence without a hard box.
-        float gy0 = a.y - 3.f, gy1 = b.y + 3.f, mx = winTL.x + W * 0.5f;
-        dl->AddRectFilledMultiColor({winTL.x, gy0}, {mx, gy1},
-            withAlpha(it.color, 0), withAlpha(it.color, (unsigned)(30 * alpha)),
-            withAlpha(it.color, (unsigned)(30 * alpha)), withAlpha(it.color, 0));
-        dl->AddRectFilledMultiColor({mx, gy0}, {winTL.x + W, gy1},
-            withAlpha(it.color, (unsigned)(30 * alpha)), withAlpha(it.color, 0),
-            withAlpha(it.color, 0), withAlpha(it.color, (unsigned)(30 * alpha)));
-
-        // Band: dark glass core with a centred colour wash.
-        dl->AddRectFilled(a, b, withAlpha(IM_COL32(10, 7, 9, 255),
-                          (unsigned)(225 * alpha)), 6.f);
-        dl->AddRectFilledMultiColor(a, {mx, b.y},
-            withAlpha(it.color, (unsigned)(10 * alpha)),
-            withAlpha(it.color, (unsigned)(46 * alpha)),
-            withAlpha(it.color, (unsigned)(46 * alpha)),
-            withAlpha(it.color, (unsigned)(10 * alpha)));
-        dl->AddRectFilledMultiColor({mx, a.y}, b,
-            withAlpha(it.color, (unsigned)(46 * alpha)),
+        // Wide soft glow band behind the plate.
+        dl->AddRectFilled({winTL.x, a.y - 6.f}, {winTL.x + W, b.y + 6.f},
+            withAlpha(it.color, (unsigned)(26 * alpha)), 0.f);
+        // Plate: dark glass with a coloured gradient core.
+        dl->AddRectFilled(a, b, withAlpha(IM_COL32(10, 13, 24, 255),
+                          (unsigned)(220 * alpha)), 10.f);
+        dl->AddRectFilledMultiColor(
+            {a.x, a.y}, {b.x, b.y},
+            withAlpha(it.color, (unsigned)(38 * alpha)),
             withAlpha(it.color, (unsigned)(10 * alpha)),
             withAlpha(it.color, (unsigned)(10 * alpha)),
-            withAlpha(it.color, (unsigned)(46 * alpha)));
-        // Top + bottom accent rails spanning the band.
-        dl->AddRectFilled({a.x, a.y}, {b.x, a.y + 2.5f},
-            withAlpha(it.color, (unsigned)(240 * alpha)), 0.f);
-        dl->AddRectFilled({a.x, b.y - 2.5f}, {b.x, b.y},
-            withAlpha(it.color, (unsigned)(240 * alpha)), 0.f);
-
-        // Light sweep streak crossing the band during the hold.
-        if (t > 0.16 && t < 0.72) {
-            float s = (float)((t - 0.16) / 0.56);
-            float sx = a.x + bw * s;
-            for (int k = -3; k <= 3; ++k) {
-                float fx = sx + k * 4.f;
-                unsigned sa = (unsigned)((60 - std::abs(k) * 16) * alpha);
-                dl->AddLine({fx, a.y + 3.f}, {fx, b.y - 3.f},
-                            withAlpha(IM_COL32_WHITE, sa), 2.f);
-            }
-        }
-
-        // Big phase text, centred, with a soft scale-in.
+            withAlpha(it.color, (unsigned)(38 * alpha)));
+        dl->AddRect(a, b, withAlpha(it.color, (unsigned)(235 * alpha)),
+                    10.f, 0, 1.8f);
+        // Accent bars left + right of the text.
+        dl->AddRectFilled({a.x + 14.f, cy - 1.f}, {a.x + 52.f, cy + 1.f},
+            withAlpha(it.color, (unsigned)(220 * alpha)), 1.f);
+        dl->AddRectFilled({b.x - 52.f, cy - 1.f}, {b.x - 14.f, cy + 1.f},
+            withAlpha(it.color, (unsigned)(220 * alpha)), 1.f);
+        // Big phase text, centred.
         ImFont* font = ImGui::GetFont();
-        float fsz = 34.f * scale;
+        float fsz = 30.f;
         ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.f, it.text);
         ImVec2 tp { cx - ts.x * 0.5f, cy - ts.y * 0.5f };
         dl->AddText(font, fsz, {tp.x + 2.f, tp.y + 2.f},
-            withAlpha(IM_COL32(0, 0, 0, 255), (unsigned)(190 * alpha)), it.text);
+            withAlpha(IM_COL32(0,0,0,255), (unsigned)(180 * alpha)), it.text);
         dl->AddText(font, fsz, tp,
-            withAlpha(IM_COL32(250, 244, 244, 255),
+            withAlpha(IM_COL32(248, 240, 220, 255),
                       (unsigned)(255 * alpha)), it.text);
     }
 

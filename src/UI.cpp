@@ -2771,23 +2771,13 @@ void UI::observePhaseForBanners() {
                       " turnChanged=" + (turnChanged ? "yes" : "no") +
                       " queued=yes");
 
-    int lastIdx = (m_animLastEnqueued == 0)
-                    ? -1 : phaseOrderIndex(m_animLastEnqueued);
-    // Where to start filling from: advancing within a turn fills only the
-    // skipped phases after the last shown; a new turn (wrap) restarts at Draw.
-    int startIdx;
-    if (m_settings.animShowSkippedPhases) {
-        startIdx = (turnChanged || newIdx <= lastIdx) ? 0 : (lastIdx + 1);
-        if (startIdx < 0) startIdx = 0;
-    } else {
-        startIdx = newIdx;                                // only the new phase
-    }
-    // Ending the turn jumps straight to the End Phase (e.g. Main 1 -> End,
-    // skipping Battle / Main 2). Those middle phases never happened, so don't
-    // backfill banners for them — just show "End Phase".
-    if (newPhase == 0x200) startIdx = newIdx;
-    for (int k = startIdx; k <= newIdx; ++k)
-        m_phaseQueue.push_back(kPhaseOrder[k]);
+    // Queue ONLY the phase the engine is actually on now. Backfilling the
+    // phases the engine fast-forwarded through (Draw/Standby) made the banner
+    // lag the real game state — it could still read "Draw Phase" while the
+    // opponent was already summoning in Main Phase. The engine's per-phase
+    // pacing already holds each phase that has content long enough to read.
+    m_phaseQueue.clear();                  // never let stale phases pile up
+    m_phaseQueue.push_back(newPhase);
 
     if (m_debugLog)
         m_dm.logEvent(std::string("[PHASE BANNER QUEUE] phase=") +
