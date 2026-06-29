@@ -66,6 +66,18 @@ struct Settings {
     // hover, so prompts stay small instead of exploding to fit long text.
     bool   compactPrompts        = true;
 
+    // ── Keybindings (duel) ───────────────────────────────────────────────
+    // Stored as raw ImGuiKey ints. 0 means "use the built-in default" so the
+    // file stays forward-compatible and a fresh install needs no key data.
+    int    keyHelp     = 0;   // toggle help overlay   (default F1)
+    int    keyYes      = 0;   // Yes / activate        (default Y)
+    int    keyNo       = 0;   // No / decline          (default N)
+    int    keyBattle   = 0;   // enter Battle Phase    (default B)
+    int    keyEndTurn  = 0;   // End Turn              (default E)
+    int    keyMain2    = 0;   // Main Phase 2          (default M)
+    int    keyAdvance  = 0;   // advance phase         (default Space)
+    int    keyUndo     = 0;   // undo last move        (default Ctrl+Z → Z)
+
     // ── Logs ─────────────────────────────────────────────────────────────
     bool   logCollapsed      = true;     // collapsed by default — quiet UI
     int    selectedLogTab    = 0;        // 0 = Game, 1 = Debug
@@ -209,6 +221,15 @@ struct Settings {
         f << "animPhaseMinDuration="  << animPhaseMinDuration            << "\n";
         f << "enginePhasePacing="     << enginePhasePacing               << "\n";
         f << "compactPrompts="        << (compactPrompts ? "1" : "0")    << "\n";
+        f << "\n# Keybindings (duel) — ImGuiKey ints; 0 = default\n";
+        f << "keyHelp="    << keyHelp    << "\n";
+        f << "keyYes="     << keyYes     << "\n";
+        f << "keyNo="      << keyNo      << "\n";
+        f << "keyBattle="  << keyBattle  << "\n";
+        f << "keyEndTurn=" << keyEndTurn << "\n";
+        f << "keyMain2="   << keyMain2   << "\n";
+        f << "keyAdvance=" << keyAdvance << "\n";
+        f << "keyUndo="    << keyUndo    << "\n";
         f << "\n# Logs\n";
         f << "logCollapsed="      << (logCollapsed      ? "1" : "0") << "\n";
         f << "selectedLogTab="    << selectedLogTab                   << "\n";
@@ -271,6 +292,14 @@ private:
         else if (k == "animPhaseMinDuration")  animPhaseMinDuration  = floatFromStr(v, animPhaseMinDuration);
         else if (k == "enginePhasePacing")     enginePhasePacing     = floatFromStr(v, enginePhasePacing);
         else if (k == "compactPrompts")        compactPrompts        = boolFromStr(v);
+        else if (k == "keyHelp")           keyHelp     = intFromStr(v, keyHelp);
+        else if (k == "keyYes")            keyYes      = intFromStr(v, keyYes);
+        else if (k == "keyNo")             keyNo       = intFromStr(v, keyNo);
+        else if (k == "keyBattle")         keyBattle   = intFromStr(v, keyBattle);
+        else if (k == "keyEndTurn")        keyEndTurn  = intFromStr(v, keyEndTurn);
+        else if (k == "keyMain2")          keyMain2    = intFromStr(v, keyMain2);
+        else if (k == "keyAdvance")        keyAdvance  = intFromStr(v, keyAdvance);
+        else if (k == "keyUndo")           keyUndo     = intFromStr(v, keyUndo);
         else if (k == "logCollapsed")      logCollapsed      = boolFromStr(v);
         else if (k == "selectedLogTab")    selectedLogTab    = intFromStr(v, selectedLogTab);
         else if (k == "debugLog")          debugLog          = boolFromStr(v);

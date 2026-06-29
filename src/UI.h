@@ -377,6 +377,10 @@ private:
     bool   m_helpOverlayOpen = false;
     void   handleDuelHotkeys();   // F1 = help, Esc = close top panel
     void   drawHelpOverlay(int w, int h);
+    // Keybindings: a settings field awaiting a key press (nullptr = not
+    // capturing). The Settings popup "Rebind" buttons set this; the next key
+    // pressed is written into *m_rebindTarget. Resolve via keyFor().
+    int*   m_rebindTarget = nullptr;
     // In a response window, show what the opponent is attempting (summon /
     // activation / attack) so the player can decide whether to chain.
     void   drawOpponentActionHint();

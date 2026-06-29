@@ -4594,6 +4594,68 @@ void UI::drawLobby(int w, int h) {
             gAudio().play("confirm");
         ImGui::Separator();
 
+        // — Keybindings (duel) ────────────────────────────────────────────
+        UIStyle::SectionHeader("Keybindings");
+        ImGui::TextDisabled("Click a key, press the new one. Esc cancels.");
+        {
+            struct KB { const char* label; int* slot; ImGuiKey def; };
+            KB binds[] = {
+                {"Help overlay",  &m_settings.keyHelp,    ImGuiKey_F1},
+                {"Yes / activate",&m_settings.keyYes,     ImGuiKey_Y},
+                {"No / decline",  &m_settings.keyNo,      ImGuiKey_N},
+                {"Battle Phase",  &m_settings.keyBattle,  ImGuiKey_B},
+                {"End Turn",      &m_settings.keyEndTurn, ImGuiKey_E},
+                {"Main Phase 2",  &m_settings.keyMain2,   ImGuiKey_M},
+                {"Advance phase", &m_settings.keyAdvance, ImGuiKey_Space},
+                {"Undo move",     &m_settings.keyUndo,    ImGuiKey_Z},
+            };
+            for (auto& b : binds) {
+                ImGui::PushID(b.slot);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(b.label);
+                ImGui::SameLine(150.f);
+                bool capturing = (m_rebindTarget == b.slot);
+                ImGuiKey cur = *b.slot > 0 ? (ImGuiKey)*b.slot : b.def;
+                char btn[48];
+                snprintf(btn, sizeof(btn), "%s###rb",
+                         capturing ? "press a key..." : ImGui::GetKeyName(cur));
+                if (ImGui::Button(btn, {130.f, 24.f}))
+                    m_rebindTarget = capturing ? nullptr : b.slot;
+                if (*b.slot != 0) {
+                    ImGui::SameLine(0.f, 6.f);
+                    if (ImGui::SmallButton("Reset")) {
+                        *b.slot = 0; saveSettings();
+                    }
+                }
+                ImGui::PopID();
+            }
+            // Capture the next key press into the awaiting slot.
+            if (m_rebindTarget) {
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                    m_rebindTarget = nullptr;
+                } else {
+                    auto isMod = [](ImGuiKey k) {
+                        return k == ImGuiKey_LeftCtrl  || k == ImGuiKey_RightCtrl ||
+                               k == ImGuiKey_LeftShift || k == ImGuiKey_RightShift ||
+                               k == ImGuiKey_LeftAlt   || k == ImGuiKey_RightAlt   ||
+                               k == ImGuiKey_LeftSuper || k == ImGuiKey_RightSuper;
+                    };
+                    for (ImGuiKey k = ImGuiKey_NamedKey_BEGIN;
+                         k < ImGuiKey_NamedKey_END; k = (ImGuiKey)(k + 1)) {
+                        if (k >= ImGuiKey_MouseLeft) break;   // ignore mouse
+                        if (isMod(k)) continue;
+                        if (ImGui::IsKeyPressed(k, false)) {
+                            *m_rebindTarget = (int)k;
+                            m_rebindTarget = nullptr;
+                            saveSettings();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        ImGui::Separator();
+
         // — Visual
         UIStyle::SectionHeader("Visual");
         savedToggle("Card name strip on field", &m_showFieldNames);
@@ -5004,11 +5066,17 @@ void UI::drawLobby(int w, int h) {
 // selections here: an untested mis-fire could submit a wrong response or
 // desync a multiplayer duel. Reducing clicks on actual plays is handled by the
 // gated "auto-pass" option instead.
+// Resolve a remappable binding: the saved ImGuiKey, or the built-in default
+// when unset (0).
+static ImGuiKey keyFor(int setting, ImGuiKey def) {
+    return setting > 0 ? (ImGuiKey)setting : def;
+}
+
 void UI::handleDuelHotkeys() {
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput) return;   // don't hijack typing (chat, names, search)
 
-    if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
+    if (ImGui::IsKeyPressed(keyFor(m_settings.keyHelp, ImGuiKey_F1), false))
         m_helpOverlayOpen = !m_helpOverlayOpen;
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
@@ -5025,11 +5093,16 @@ void UI::handleDuelHotkeys() {
             m_pauseMenuOpen = true;
     }
 
-    // Ctrl+Z — undo your last move (offline practice; testingUndoHuman self-
-    // gates on offline + rewind availability).
-    if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) &&
-        ImGui::IsKeyPressed(ImGuiKey_Z, false))
-        testingUndoHuman();
+    // Undo your last move (offline practice; testingUndoHuman self-gates on
+    // offline + rewind availability). Default Ctrl+Z; a rebound key fires bare.
+    {
+        ImGuiKey uk = keyFor(m_settings.keyUndo, ImGuiKey_Z);
+        bool undo = (m_settings.keyUndo > 0)
+            ? ImGui::IsKeyPressed(uk, false)
+            : (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) &&
+               ImGui::IsKeyPressed(ImGuiKey_Z, false));
+        if (undo) testingUndoHuman();
+    }
 
     // ── Prompt shortcuts — OFFLINE ONLY ──────────────────────────────────
     // Bound to game decisions, so restricted to offline practice duels where a
@@ -5045,11 +5118,11 @@ void UI::handleDuelHotkeys() {
     switch (sel.type) {
         case WaitType::SelectYesNo:
         case WaitType::SelectEffectYn:
-            if (ImGui::IsKeyPressed(ImGuiKey_Y, false) ||
+            if (ImGui::IsKeyPressed(keyFor(m_settings.keyYes, ImGuiKey_Y), false) ||
                 ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
                 submitMpChoice(sel.type, 1);          // Yes / activate
-            else if (ImGui::IsKeyPressed(ImGuiKey_N, false))
+            else if (ImGui::IsKeyPressed(keyFor(m_settings.keyNo, ImGuiKey_N), false))
                 submitMpChoice(sel.type, 0);          // No / decline
             // Right-click anywhere = No, for fast declines. Skip when the same
             // click just pinned a card zoom (right-click-to-zoom still works);
@@ -5073,12 +5146,12 @@ void UI::handleDuelHotkeys() {
         // hotkey can never submit an illegal command. submitIdleCmd matches the
         // bottom-bar buttons: 6=to Battle, 7=End Turn, 2=to Main 2, 3=End BP.
         case WaitType::SelectIdleCmd: {
-            bool space = ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+            bool space = ImGui::IsKeyPressed(keyFor(m_settings.keyAdvance, ImGuiKey_Space), false) ||
                          ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
                          ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-            if (sel.toBP && ImGui::IsKeyPressed(ImGuiKey_B, false))
+            if (sel.toBP && ImGui::IsKeyPressed(keyFor(m_settings.keyBattle, ImGuiKey_B), false))
                 submitIdleCmd(6, 0, "Battle Phase");
-            else if (sel.toEP && ImGui::IsKeyPressed(ImGuiKey_E, false))
+            else if (sel.toEP && ImGui::IsKeyPressed(keyFor(m_settings.keyEndTurn, ImGuiKey_E), false))
                 submitIdleCmd(7, 0, "End Turn");
             else if (space) {                      // advance to the next phase
                 if (sel.toBP)      submitIdleCmd(6, 0, "Battle Phase");
@@ -5087,12 +5160,12 @@ void UI::handleDuelHotkeys() {
             break;
         }
         case WaitType::SelectBattleCmd: {
-            bool space = ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+            bool space = ImGui::IsKeyPressed(keyFor(m_settings.keyAdvance, ImGuiKey_Space), false) ||
                          ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
                          ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-            if (sel.toEP && ImGui::IsKeyPressed(ImGuiKey_E, false))
+            if (sel.toEP && ImGui::IsKeyPressed(keyFor(m_settings.keyEndTurn, ImGuiKey_E), false))
                 submitIdleCmd(3, 0, "End Battle Phase");
-            else if (sel.toM2 && ImGui::IsKeyPressed(ImGuiKey_M, false))
+            else if (sel.toM2 && ImGui::IsKeyPressed(keyFor(m_settings.keyMain2, ImGuiKey_M), false))
                 submitIdleCmd(2, 0, "Main Phase 2");
             else if (space) {                      // advance out of the Battle Phase
                 if (sel.toM2)      submitIdleCmd(2, 0, "Main Phase 2");
@@ -5192,27 +5265,31 @@ void UI::drawHelpOverlay(int w, int h) {
         ImGui::SameLine(150.f);
         ImGui::TextDisabled("%s", desc);
     };
+    // Resolve a binding to its display name (live, so rebinds show here).
+    auto kn = [&](int setting, ImGuiKey def) {
+        return ImGui::GetKeyName(keyFor(setting, def));
+    };
     row("Left-click",  "Play a card / pick an action or option");
     row("Right-click", "Zoom a card — big art + full text (Esc to close)");
     row("Hover",       "Preview a card + its text");
-    row("Ctrl+Z",      "Undo your last move (offline practice)");
-    row("F1",          "Toggle this help");
+    row(m_settings.keyUndo > 0 ? kn(m_settings.keyUndo, ImGuiKey_Z) : "Ctrl+Z",
+        "Undo your last move (offline practice)");
+    row(kn(m_settings.keyHelp, ImGuiKey_F1), "Toggle this help");
     row("F11",         "Toggle fullscreen");
     row("Esc",         "Close the open panel (help / viewer / info / tools)");
     ImGui::Dummy({1.f, 4.f});
     UIStyle::Subtle("Offline prompts");
     row("1 - 9",       "Pick option N when choosing an effect");
-    row("Y / Enter",   "Yes / activate on a Yes-No prompt");
-    row("N",           "No / decline on a Yes-No prompt");
+    row(kn(m_settings.keyYes, ImGuiKey_Y), "Yes / activate on a Yes-No prompt");
+    row(kn(m_settings.keyNo,  ImGuiKey_N), "No / decline on a Yes-No prompt");
     ImGui::Dummy({1.f, 4.f});
     UIStyle::Subtle("Turn control (offline)");
-    row("Space",       "Advance to the next phase");
-    row("B",           "Go to Battle Phase");
-    row("M",           "Go to Main Phase 2");
-    row("E",           "End Turn / End Battle Phase");
+    row(kn(m_settings.keyAdvance, ImGuiKey_Space), "Advance to the next phase");
+    row(kn(m_settings.keyBattle,  ImGuiKey_B), "Go to Battle Phase");
+    row(kn(m_settings.keyMain2,   ImGuiKey_M), "Go to Main Phase 2");
+    row(kn(m_settings.keyEndTurn, ImGuiKey_E), "End Turn / End Battle Phase");
     ImGui::Dummy({1.f, 6.f});
-    ImGui::TextDisabled("Tip: the bottom bar shows whose turn it is and the");
-    ImGui::TextDisabled("phase; the \"Fast\" button skips phase pauses.");
+    ImGui::TextDisabled("Rebind keys in Settings - Keybindings (main menu).");
     ImGui::Dummy({1.f, 10.f});
     if (UIStyle::PrimaryButton("Close", {-1.f, 30.f}))
         m_helpOverlayOpen = false;
