@@ -34,6 +34,9 @@ struct Settings {
     bool   muteUiSfx         = false;    // silence hover/draw ambience
 
     // ── Visual toggles ───────────────────────────────────────────────────
+    float  uiScale           = 1.00f;    // global UI/font scale (0.8–1.5)
+    bool   colorblindMode    = false;    // blue/orange legality cues vs green/red
+    int    fpsCap            = 0;        // frame cap (0 = uncapped); 30/60/120/144
     bool   showFieldNames    = false;
     bool   largePreview      = false;
     bool   showZoneLabels    = true;
@@ -205,6 +208,9 @@ struct Settings {
     f << "masterVolume="      << masterVolume                    << "\n";
     f << "muteUiSfx="         << (muteUiSfx ? "1" : "0")         << "\n";
         f << "\n# Visual\n";
+        f << "uiScale="           << uiScale                         << "\n";
+        f << "colorblindMode="    << (colorblindMode    ? "1" : "0") << "\n";
+        f << "fpsCap="            << fpsCap                          << "\n";
         f << "showFieldNames="    << (showFieldNames    ? "1" : "0") << "\n";
         f << "largePreview="      << (largePreview      ? "1" : "0") << "\n";
         f << "showZoneLabels="    << (showZoneLabels    ? "1" : "0") << "\n";
@@ -276,6 +282,9 @@ private:
         else if (k == "musicVolume")       musicVolume       = floatFromStr(v, musicVolume);
         else if (k == "masterVolume")      masterVolume      = floatFromStr(v, masterVolume);
         else if (k == "muteUiSfx")         muteUiSfx         = boolFromStr(v);
+        else if (k == "uiScale")           uiScale           = floatFromStr(v, uiScale);
+        else if (k == "colorblindMode")    colorblindMode    = boolFromStr(v);
+        else if (k == "fpsCap")            fpsCap            = intFromStr(v, fpsCap);
         else if (k == "showFieldNames")    showFieldNames    = boolFromStr(v);
         else if (k == "largePreview")      largePreview      = boolFromStr(v);
         else if (k == "showZoneLabels")    showZoneLabels    = boolFromStr(v);

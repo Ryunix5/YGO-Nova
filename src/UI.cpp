@@ -2549,6 +2549,9 @@ void UI::loadSettings() {
     gAudio().setMusicVolume(m_settings.musicVolume);
     gAudio().setMasterVolume(m_settings.masterVolume);
     gAudio().setMuteUiSfx(m_settings.muteUiSfx);
+    // Push the frame cap into the render loop (Game.cpp owns the global).
+    extern int g_fpsCap;
+    g_fpsCap = m_settings.fpsCap;
     // Restore last-used decks for the lobby setup popup.
     if (!m_settings.lastDeckP1.empty())
         strncpy(m_deck0Path, m_settings.lastDeckP1.c_str(),
@@ -3498,6 +3501,10 @@ bool UI::draw(int winW, int winH) {
     // so the whole app shares the custom chrome's visual language.
     static bool s_themeApplied = false;
     if (!s_themeApplied) { UIStyle::ApplyTheme(); s_themeApplied = true; }
+
+    // Global UI scale (fonts) — cheap to set per frame, applies everywhere.
+    ImGui::GetIO().FontGlobalScale =
+        std::clamp(m_settings.uiScale, 0.7f, 1.6f);
 
     // Drain any network messages BEFORE rendering this frame's screen.
     // EngineResponse arrivals may unblock the engine; handling them here
@@ -4735,6 +4742,34 @@ void UI::drawLobby(int w, int h) {
 
         // — Visual
         UIStyle::SectionHeader("Visual");
+        // UI scale (font global scale).
+        ImGui::TextDisabled("UI scale");
+        ImGui::SetNextItemWidth(220.f);
+        if (ImGui::SliderFloat("##uiscale", &m_settings.uiScale, 0.7f, 1.6f,
+                               "%.2fx"))
+            saveSettings();
+        // Colorblind-safe legality cues (blue/orange instead of green/red).
+        if (ImGui::Checkbox("Colorblind-safe legality colors",
+                            &m_settings.colorblindMode))
+            saveSettings();
+        // Frame-rate cap.
+        {
+            const int   caps[]  = {0, 30, 60, 120, 144};
+            const char* lbls[]  = {"Uncapped", "30", "60", "120", "144"};
+            int curIdx = 0;
+            for (int i = 0; i < 5; ++i) if (caps[i] == m_settings.fpsCap) curIdx = i;
+            ImGui::TextDisabled("Frame cap");
+            ImGui::SetNextItemWidth(220.f);
+            if (ImGui::BeginCombo("##fpscap", lbls[curIdx])) {
+                for (int i = 0; i < 5; ++i)
+                    if (ImGui::Selectable(lbls[i], curIdx == i)) {
+                        m_settings.fpsCap = caps[i];
+                        extern int g_fpsCap; g_fpsCap = caps[i];
+                        saveSettings();
+                    }
+                ImGui::EndCombo();
+            }
+        }
         savedToggle("Card name strip on field", &m_showFieldNames);
         savedToggle("Large card preview",       &m_largePreview);
         savedToggle("Show zone labels",         &m_showZoneLabels);
@@ -12436,12 +12471,17 @@ void UI::drawDeckBuilder(int w, int h) {
         // Legality chip (#E) — green Legal / red Illegal with the reason.
         {
             std::string issue = deckLegality(m_editDeck);
+            // Colorblind-safe legality cues: blue/orange instead of green/red.
+            ImU32 okCol  = m_settings.colorblindMode
+                ? IM_COL32(70, 150, 235, 255) : IM_COL32(90, 200, 120, 255);
+            ImU32 badCol = m_settings.colorblindMode
+                ? IM_COL32(235, 150, 40, 255) : IM_COL32(230, 90, 80, 255);
             ImGui::SameLine(0.f, 12.f);
             ImGui::AlignTextToFramePadding();
             if (issue.empty())
-                UIStyle::StatusChip("Legal", IM_COL32(90, 200, 120, 255));
+                UIStyle::StatusChip("Legal", okCol);
             else {
-                UIStyle::StatusChip("Illegal", IM_COL32(230, 90, 80, 255));
+                UIStyle::StatusChip("Illegal", badCol);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", issue.c_str());
             }

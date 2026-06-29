@@ -275,8 +275,13 @@ bool Game::init(const std::string& title, int w, int h) {
     return true;
 }
 
+// Frame-rate cap (0 = uncapped). Set by the UI from Settings; read here so the
+// render loop can pad each frame to the target without threading settings in.
+int g_fpsCap = 0;
+
 void Game::run() {
     while (!g_quit) {
+        Uint32 frameStart = SDL_GetTicks();
         processEvents();
         if (g_quit) break;
 
@@ -303,6 +308,14 @@ void Game::run() {
 
         // ── Render ────────────────────────────────────────────────────────────
         render();
+
+        // Optional frame cap — pad the frame to the target so the GPU/CPU
+        // don't spin at full tilt when uncapped.
+        if (g_fpsCap > 0) {
+            Uint32 target  = 1000u / (Uint32)g_fpsCap;
+            Uint32 elapsed = SDL_GetTicks() - frameStart;
+            if (elapsed < target) SDL_Delay(target - elapsed);
+        }
     }
 }
 
