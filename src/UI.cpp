@@ -9051,10 +9051,12 @@ void UI::drawSelectionPanel(int pw, int ph) {
                             : act.chainIdx) +
                         " kind=" + (act.kind == 1 ? "idle" : "chain") +
                         " src=" + gysrc);
-                    gAudio().play(act.cmd == 1 ? "special_summon"
-                                  : act.kind == 2 ? "chain" : "activate");
-                    if (act.cmd == 1) m_lastSummonSfxAt   = ImGui::GetTime();
-                    else              m_lastActivateSfxAt = ImGui::GetTime();
+                    // Special-summon SFX is deferred to the field observer
+                    // (plays when the monster lands); other effects sound now.
+                    if (act.cmd != 1) {
+                        gAudio().play(act.kind == 2 ? "chain" : "activate");
+                        m_lastActivateSfxAt = ImGui::GetTime();
+                    }
                     if (m_zoneRectsReady) {
                         int apl = (int)currentSelection().player & 1;
                         ImVec2 c{
@@ -10475,18 +10477,21 @@ void UI::drawCardActionPopup(int screenW, int screenH) {
             // means "activate during battle"; outside Battle Phase (idle
             // main phase) cmd==1 means Special Summon. The label is already
             // mapped correctly above; mirror that here for the sound.
-            const char* sfx;
+            // Normal / Special Summon SFX are deferred: the field-state
+            // observer plays them when the monster actually lands on a zone,
+            // not now (the click happens before zone/tribute selection). All
+            // other actions play their sound immediately on click.
+            const char* sfx = nullptr;
             if (sel.type == WaitType::SelectBattleCmd) {
                 sfx = (a.cmd == 1) ? "attack" : "activate";
+            } else if (a.cmd == 0 || a.cmd == 1) {
+                sfx = nullptr;   // summon — deferred to placement
             } else {
                 sfx =
-                    (a.cmd == 0) ? "summon"          :
-                    (a.cmd == 1) ? "special_summon"  :
                     (a.cmd == 3 || a.cmd == 4) ? "set" :
-                    (a.cmd == 5) ? "activate"        :
-                    (a.cmd == 2) ? "click"           : "click";
+                    (a.cmd == 5) ? "activate"  : "click";
             }
-            gAudio().play(sfx);
+            if (sfx) gAudio().play(sfx);
             // Battle Phase debug logs.
             if (sel.type == WaitType::SelectBattleCmd && a.cmd == 1) {
                 int directCnt = 0, total = 0;
@@ -10506,8 +10511,10 @@ void UI::drawCardActionPopup(int screenW, int screenH) {
             // Mark the time the explicit action SFX fired so the field-
             // state observer can skip its own follow-up summon/activate/set.
             double tnow = ImGui::GetTime();
-            if (a.cmd == 0 || a.cmd == 1)        m_lastSummonSfxAt   = tnow;
-            else if (a.cmd == 3 || a.cmd == 4)   m_lastSetSfxAt      = tnow;
+            // Note: summon/special-summon intentionally do NOT stamp
+            // m_lastSummonSfxAt here — their SFX is played by the field-state
+            // observer when the monster appears, so the guard must stay clear.
+            if (a.cmd == 3 || a.cmd == 4)        m_lastSetSfxAt      = tnow;
             else if (a.cmd == 5)                 m_lastActivateSfxAt = tnow;
             // Animation cue at the clicked card's anchor (m_actionAnchorX/Y).
             // Pulse colour follows the action category — gold for summon /

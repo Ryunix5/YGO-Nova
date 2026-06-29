@@ -199,6 +199,12 @@ void AudioManager::play(const std::string& key) {
     if (it == p->clips.end()) return;
     const auto& clip = it->second;
     if (clip.data.empty()) return;
+    // Single channel: never stack SFX. If a clip is still playing, drop this
+    // new one instead of queueing it to play afterwards. SFX fire in bursts
+    // (summon + send-to-GY + chain in one beat) and the old queue model made
+    // them play back-to-back, lagging seconds behind the action. With this
+    // gate the in-progress sound finishes and the extras are simply discarded.
+    if (SDL_GetQueuedAudioSize(p->dev) > 0) return;
     // Cooldown — suppress duplicate plays of the SAME key within the
     // cooldown window. Stops the action-popup button and the field-state
     // observer from doubling up on a Normal Summon, etc.
