@@ -288,6 +288,39 @@ std::vector<CardInfo> CardDB::search(const std::string& query, int limit) const 
     return results;
 }
 
+std::vector<CardInfo> CardDB::searchText(const std::string& query,
+                                         int limit) const {
+    std::vector<CardInfo> results;
+    if (m_dbs.empty() || query.empty()) return results;
+    const std::string sql = std::string("SELECT ") + kCols +
+        " FROM datas d JOIN texts t ON d.id=t.id "
+        "WHERE t.desc LIKE ?1 LIMIT ?2";
+    std::vector<uint32_t> seen;
+    for (const auto& db : m_dbs) {
+        if ((int)results.size() >= limit) break;
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2((sqlite3*)db.handle, sql.c_str(), -1,
+                               &st, nullptr) != SQLITE_OK)
+            continue;
+        std::string pat = "%" + query + "%";
+        sqlite3_bind_text(st, 1, pat.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int (st, 2, limit);
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            uint32_t id = (uint32_t)sqlite3_column_int(st, 0);
+            bool dup = false;
+            for (uint32_t s : seen) if (s == id) { dup = true; break; }
+            if (dup) continue;
+            seen.push_back(id);
+            CardInfo info;
+            readRow(st, info);
+            info.source = db.path;
+            results.push_back(std::move(info));
+        }
+        sqlite3_finalize(st);
+    }
+    return results;
+}
+
 std::vector<CardInfo> CardDB::filter(uint32_t typeMask, uint32_t attrMask,
                                       int level, int limit) const {
     std::vector<CardInfo> results;

@@ -12302,15 +12302,32 @@ void UI::drawDeckBuilder(int w, int h) {
 
         UIStyle::SectionHeader("Card Search");
 
-        // Themed search box with a leading magnifier glyph.
-        if (UIStyle::SearchInput("##db_search_in", m_searchBuf,
-                                 sizeof(m_searchBuf),
-                                 "Search card name or code...", -1.f)) {
-            if (strlen(m_searchBuf) >= 2)
-                m_searchResults = m_db.search(m_searchBuf, 80);
-            else
+        // Re-run the active query. Text mode matches effect text; otherwise
+        // names/codes. With an empty box but active attribute/level filters we
+        // browse by filter alone (monsters), so you can find cards without
+        // typing. Attribute/level are also applied as a post-filter at render.
+        auto runSearch = [&]() {
+            if (strlen(m_searchBuf) >= 2) {
+                m_searchResults = m_dbTextSearch
+                    ? m_db.searchText(m_searchBuf, 120)
+                    : m_db.search(m_searchBuf, 120);
+            } else if (m_dbAttrMask || m_dbLevelFilter > 0) {
+                m_searchResults = m_db.filter(
+                    TYPE_MONSTER, m_dbAttrMask,
+                    m_dbLevelFilter > 0 ? m_dbLevelFilter : -1, 120);
+            } else {
                 m_searchResults.clear();
-        }
+            }
+        };
+
+        // Themed search box with a leading magnifier glyph.
+        const char* hint = m_dbTextSearch ? "Search effect text (e.g. \"banish\")..."
+                                          : "Search card name or code...";
+        if (UIStyle::SearchInput("##db_search_in", m_searchBuf,
+                                 sizeof(m_searchBuf), hint, -1.f))
+            runSearch();
+        // Toggle: match effect text instead of names.
+        if (ImGui::Checkbox("Search effect text", &m_dbTextSearch)) runSearch();
 
         ImGui::Dummy({1.f, 6.f});
         // Filter chips — first row: card kinds; second: deck zone.
@@ -12328,6 +12345,42 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::SameLine(0.f, 4.f);
         if (UIStyle::SegmentedButton("Extra Deck", m_dbFilterExtra, true, {100.f, 26.f}))
             m_dbFilterExtra = !m_dbFilterExtra;
+
+        // Advanced: attribute + level filters (collapsed by default).
+        if (ImGui::CollapsingHeader("Attribute / Level")) {
+            // Attribute bits (mirror ocgcore's ocgapi_constants.h — that full
+            // header isn't pulled into this translation unit).
+            constexpr uint32_t kEarth = 0x01, kWater = 0x02, kFire = 0x04,
+                               kWind  = 0x08, kLight = 0x10, kDark = 0x20,
+                               kDivine= 0x40;
+            auto attrChip = [&](const char* lbl, uint32_t bit) {
+                bool on = (m_dbAttrMask & bit) != 0;
+                if (UIStyle::SegmentedButton(lbl, on, true, {56.f, 24.f})) {
+                    m_dbAttrMask ^= bit;
+                    runSearch();
+                }
+            };
+            attrChip("LIGHT", kLight); ImGui::SameLine(0.f, 4.f);
+            attrChip("DARK",  kDark);  ImGui::SameLine(0.f, 4.f);
+            attrChip("EARTH", kEarth); ImGui::SameLine(0.f, 4.f);
+            attrChip("WATER", kWater);
+            attrChip("FIRE",  kFire);  ImGui::SameLine(0.f, 4.f);
+            attrChip("WIND",  kWind);  ImGui::SameLine(0.f, 4.f);
+            attrChip("DIVINE",kDivine);
+            ImGui::Dummy({1.f, 2.f});
+            ImGui::SetNextItemWidth(90.f);
+            if (ImGui::InputInt("Level/Rank", &m_dbLevelFilter)) {
+                m_dbLevelFilter = std::clamp(m_dbLevelFilter, 0, 13);
+                runSearch();
+            }
+            if (m_dbAttrMask || m_dbLevelFilter > 0) {
+                ImGui::SameLine(0.f, 8.f);
+                if (UIStyle::GhostButton("Clear##filters", {72.f, 24.f})) {
+                    m_dbAttrMask = 0; m_dbLevelFilter = 0;
+                    runSearch();
+                }
+            }
+        }
 
         ImGui::Dummy({1.f, 8.f});
         {
@@ -12350,15 +12403,15 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::TextUnformatted("No card database found.");
             ImGui::PopStyleColor();
             ImGui::TextDisabled("Place cards.cdb in assets/ next to the exe.");
-        } else if (m_searchBuf[0] == '\0') {
-            UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
-                "Search for cards to add",
-                "Type at least 2 characters to start");
         } else if (m_searchResults.empty()) {
-            char es[96];
-            snprintf(es, sizeof(es), "No cards match \"%s\"", m_searchBuf);
-            UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
-                es, "Try a shorter or different term");
+            if (m_searchBuf[0] == '\0' && !m_dbAttrMask && m_dbLevelFilter == 0) {
+                UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
+                    "Search for cards to add",
+                    "Type at least 2 characters, or use the filters");
+            } else {
+                UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
+                    "No cards match", "Try a different term or clear filters");
+            }
         } else {
             // Add a copy of `code` to a chosen section, honouring the copy
             // limit (across all zones) and the section size cap. Shared by the
@@ -12398,6 +12451,11 @@ void UI::drawDeckBuilder(int w, int h) {
                 if (isExtra && !m_dbFilterExtra) continue;
                 if (!isExtra && (isMonster || isSpell || isTrap)
                     && !m_dbFilterMain) continue;
+                // Attribute / level post-filters (monsters only — a Spell has
+                // no attribute/level so any active filter hides it).
+                if (m_dbAttrMask && !(card.attribute & m_dbAttrMask)) continue;
+                if (m_dbLevelFilter > 0 &&
+                    (int)(card.level & 0xff) != m_dbLevelFilter) continue;
                 ++rendered;
 
                 // ── Row layout, warning-free pattern ────────────────────
@@ -12473,6 +12531,9 @@ void UI::drawDeckBuilder(int w, int h) {
                 // free on the right). This stays inside the reserved rect.
                 char sid[40];
                 snprintf(sid, sizeof(sid), "##srow_%u", (unsigned)card.id);
+                char addPop[40];
+                snprintf(addPop, sizeof(addPop), "##addpop_%u",
+                         (unsigned)card.id);
                 ImGui::SetCursorScreenPos(rp);
                 ImGui::InvisibleButton(sid, {rw - 92.f, rh});
                 bool rowHov = ImGui::IsItemHovered();
@@ -12482,7 +12543,14 @@ void UI::drawDeckBuilder(int w, int h) {
                     m_hoveredCard = card.id;
                     m_hoveredInfo = card;
                     m_deckHoverCode = card.id;
+                    // Double-click quick-adds to the natural section (Extra for
+                    // extra-deck cards, otherwise Main) — the common case.
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                        addCardTo(isExtra ? 'e' : 'm', card.id);
                 }
+                // Right-click opens the same destination menu as the Add button.
+                if (rowHov && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                    ImGui::OpenPopup(addPop);
                 // Drag a search result straight into a deck section. Carries
                 // just the code; the deck panel accepts "POOL_CARD" and adds a
                 // copy to whichever section it's dropped on.
@@ -12502,23 +12570,28 @@ void UI::drawDeckBuilder(int w, int h) {
                 char addLbl[40];
                 snprintf(addLbl, sizeof(addLbl), "+ Add##s%u",
                          (unsigned)card.id);
-                char addPop[40];
-                snprintf(addPop, sizeof(addPop), "##addpop_%u",
-                         (unsigned)card.id);
                 if (UIStyle::SecondaryButton(addLbl, {80.f, 32.f}))
                     ImGui::OpenPopup(addPop);
                 if (ImGui::BeginPopup(addPop)) {
                     ImGui::TextDisabled("Add to");
                     ImGui::Separator();
-                    if (isExtra) {
-                        if (ImGui::Selectable("Extra Deck"))
-                            addCardTo('e', card.id);
-                    } else {
-                        if (ImGui::Selectable("Main Deck"))
-                            addCardTo('m', card.id);
-                    }
-                    if (ImGui::Selectable("Side Deck"))
-                        addCardTo('s', card.id);
+                    // An option is disabled when this card is already at its
+                    // copy limit or the target section is full.
+                    int copies   = deckCopies(card.id);
+                    bool atCopies = copies >= cardLimit(card.id);
+                    auto opt = [&](const char* label, char sec, int secMax,
+                                   int curSize) {
+                        bool full = curSize >= secMax;
+                        bool dis  = atCopies || full;
+                        if (dis) ImGui::BeginDisabled();
+                        if (ImGui::Selectable(label)) addCardTo(sec, card.id);
+                        if (dis) ImGui::EndDisabled();
+                    };
+                    if (isExtra)
+                        opt("Extra Deck", 'e', 15, (int)m_editDeck.extra.size());
+                    else
+                        opt("Main Deck",  'm', 60, (int)m_editDeck.main.size());
+                    opt("Side Deck", 's', 15, (int)m_editDeck.side.size());
                     ImGui::EndPopup();
                 }
 
@@ -12908,6 +12981,26 @@ void UI::drawDeckBuilder(int w, int h) {
                         ImVec2 ns = ImGui::CalcTextSize(rl);
                         dl->AddText({bc.x - ns.x * 0.5f, bc.y - ns.y * 0.5f},
                                     rcol, rl);
+                    }
+                }
+
+                // Copy-count badge (bottom-right): "xN" when more than one
+                // copy of this card sits in this section — see at a glance how
+                // many you're running without counting tiles.
+                {
+                    int n = (int)std::count(zone.begin(), zone.end(), code);
+                    if (n > 1) {
+                        char cb[8];
+                        snprintf(cb, sizeof(cb), "x%d", n);
+                        ImVec2 cs = ImGui::CalcTextSize(cb);
+                        ImVec2 pad{5.f, 2.f};
+                        ImVec2 b1{te.x - cs.x - pad.x * 2.f - 3.f,
+                                  te.y - cs.y - pad.y * 2.f - 3.f};
+                        ImVec2 b2{te.x - 3.f, te.y - 3.f};
+                        dl->AddRectFilled(b1, b2, IM_COL32(12, 8, 9, 235), 3.f);
+                        dl->AddRect(b1, b2, IM_COL32(198, 120, 64, 220), 3.f, 0, 1.f);
+                        dl->AddText({b1.x + pad.x, b1.y + pad.y},
+                                    IM_COL32(240, 196, 120, 255), cb);
                     }
                 }
 

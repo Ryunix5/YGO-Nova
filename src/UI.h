@@ -201,6 +201,11 @@ private:
     bool                   m_dbFilterTrp  = true;
     bool                   m_dbFilterMain = true;
     bool                   m_dbFilterExtra= true;
+    // Advanced search: match effect text instead of names, plus attribute /
+    // level filters applied to the result set.
+    bool                   m_dbTextSearch  = false;  // search desc, not name
+    uint32_t               m_dbAttrMask    = 0;      // OR of ATTRIBUTE_* (0=any)
+    int                    m_dbLevelFilter = 0;      // exact level/rank (0=any)
     // Save toast — non-modal confirmation/error pinned at the top of the
     // deck panel for ~2s after Save runs.
     std::string            m_deckToastMsg;

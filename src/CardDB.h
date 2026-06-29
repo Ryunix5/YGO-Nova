@@ -72,6 +72,9 @@ public:
     // Case-insensitive partial search of name/description/code across all
     // databases, de-duplicated by card code. Applies Kewl<->Killer aliasing.
     std::vector<CardInfo> search(const std::string& query, int limit = 80) const;
+    // Like search() but matches ONLY the effect/description text — for finding
+    // every card that "mentions" a term (e.g. "banish", an archetype name).
+    std::vector<CardInfo> searchText(const std::string& query, int limit = 80) const;
     std::vector<CardInfo> filter(uint32_t typeMask, uint32_t attrMask,
                                   int level, int limit = 100) const;
 
