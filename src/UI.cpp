@@ -2557,6 +2557,7 @@ void UI::loadSettings() {
         m_rend.setCardBack("assets/sleeves/" + m_settings.cardSleeve);
     loadCardTags();      // deck-consistency role tags (assets/card_tags.txt)
     loadMatchHistory();  // win/loss log (assets/match_history.txt)
+    loadFavorites();     // favorite decks (assets/config/favorites.txt)
     loadBanlists();      // format/banlist files (assets/lflists/*.lflist.conf)
     loadPresetDecks();   // bundled AI opponent decks (assets/decks/presets/)
     // Kick off the in-app update check (no-op unless a repo was baked in).
@@ -5753,7 +5754,9 @@ void UI::drawDuel(int w, int h) {
                 return s.empty() ? std::string("Deck") : s;
             };
             recordMatch(base(m_deck0Path), base(m_deck1Path),
-                        w == 0 ? 'W' : w == 1 ? 'L' : 'D');
+                        w == 0 ? 'W' : w == 1 ? 'L' : 'D',
+                        m_dm.field().turnCount,
+                        m_dm.humanSeat() == 0 ? 1 : 0);
         }
         // Multiplayer duel resolved naturally — drop the in-duel flag so
         // returning to lobby / multiplayer screen behaves correctly, and
@@ -11912,7 +11915,7 @@ void UI::drawDeckConsistency() {
 
 // ── Match history + win/loss stats (#8) ──────────────────────────────────────
 void UI::recordMatch(const std::string& myDeck, const std::string& oppDeck,
-                     char result) {
+                     char result, int turns, int wentFirst) {
     MatchRecord r;
     std::time_t t = std::time(nullptr);
     std::tm tmv{};
@@ -11924,14 +11927,36 @@ void UI::recordMatch(const std::string& myDeck, const std::string& oppDeck,
     char buf[24];
     std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tmv);
     r.when = buf; r.myDeck = myDeck; r.oppDeck = oppDeck; r.result = result;
+    r.turns = turns; r.wentFirst = wentFirst;
     m_matchHistory.push_back(r);
     auto san = [](std::string s) {
         for (char& c : s) if (c == '|' || c == '\n' || c == '\r') c = ' ';
         return s;
     };
+    // Two trailing fields (turns | wentFirst) are appended; older rows without
+    // them still parse — the loader fills defaults.
     std::ofstream f("assets/match_history.txt", std::ios::app);
     if (f) f << r.when << "|" << san(myDeck) << "|" << san(oppDeck) << "|"
-             << result << "\n";
+             << result << "|" << turns << "|" << wentFirst << "\n";
+}
+
+void UI::loadFavorites() {
+    m_favDecks.clear();
+    std::ifstream f("assets/config/favorites.txt");
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) m_favDecks.insert(line);
+    }
+}
+
+void UI::saveFavorites() {
+    std::error_code ec;
+    std::filesystem::create_directories("assets/config", ec);
+    std::ofstream f("assets/config/favorites.txt", std::ios::trunc);
+    if (!f) return;
+    for (const auto& s : m_favDecks) f << s << "\n";
 }
 
 void UI::loadMatchHistory() {
@@ -11949,6 +11974,8 @@ void UI::loadMatchHistory() {
             MatchRecord r;
             r.when = parts[0]; r.myDeck = parts[1]; r.oppDeck = parts[2];
             r.result = parts[3][0];
+            if (parts.size() >= 5) { try { r.turns = std::stoi(parts[4]); } catch (...) {} }
+            if (parts.size() >= 6) { try { r.wentFirst = std::stoi(parts[5]); } catch (...) {} }
             m_matchHistory.push_back(r);
         }
     }
@@ -11984,6 +12011,36 @@ void UI::drawHistory() {
     int decided = W + L;
     double overall = decided ? (double)W / decided * 100.0 : 0.0;
     ImGui::Text("Overall:  %d-%d-%d   (%.0f%% win rate)", W, L, D, overall);
+
+    // Streaks (current + longest), counting decided games only.
+    int curStreak = 0, longestW = 0, runW = 0; char lastRes = '?';
+    for (const auto& r : m_matchHistory) {
+        if (r.result == 'W') { runW++; longestW = std::max(longestW, runW); }
+        else if (r.result == 'L') runW = 0;
+    }
+    for (auto it = m_matchHistory.rbegin(); it != m_matchHistory.rend(); ++it) {
+        if (it->result != 'W' && it->result != 'L') continue;
+        if (lastRes == '?') lastRes = it->result;
+        if (it->result == lastRes) curStreak++; else break;
+    }
+    // Going first/second + average turns (records that captured them).
+    int fW = 0, fDec = 0, sW = 0, sDec = 0, turnSum = 0, turnN = 0;
+    for (const auto& r : m_matchHistory) {
+        if (r.turns > 0) { turnSum += r.turns; ++turnN; }
+        if (r.result != 'W' && r.result != 'L') continue;
+        if (r.wentFirst == 1) { ++fDec; if (r.result == 'W') ++fW; }
+        else if (r.wentFirst == 0) { ++sDec; if (r.result == 'W') ++sW; }
+    }
+    if (lastRes != '?' && curStreak > 0)
+        ImGui::Text("Streak:   %d %s   ·   longest win streak %d",
+                    curStreak, lastRes == 'W' ? "win" : "loss", longestW);
+    if (fDec || sDec)
+        ImGui::Text("Going 1st: %d-%d (%.0f%%)    ·    Going 2nd: %d-%d (%.0f%%)",
+            fW, fDec - fW, fDec ? (double)fW / fDec * 100.0 : 0.0,
+            sW, sDec - sW, sDec ? (double)sW / sDec * 100.0 : 0.0);
+    if (turnN)
+        ImGui::Text("Avg duel length: %.1f turns   (over %d recorded)",
+                    (double)turnSum / turnN, turnN);
     ImGui::Separator();
 
     ImGui::TextDisabled("By deck");
@@ -12646,25 +12703,56 @@ void UI::drawDeckBuilder(int w, int h) {
         const char* preview = (m_selDeckIdx >= 0 &&
                                m_selDeckIdx < (int)m_deckFiles.size())
             ? m_deckFiles[m_selDeckIdx].c_str() : "(choose a deck)";
+        auto selectDeck = [&](int i) {
+            m_selDeckIdx = i;
+            std::string path = "assets/decks/" + m_deckFiles[i];
+            m_editDeck  = loadYdk(path);
+            m_savedDeck = m_editDeck;
+            prefetchDeckArt(m_editDeck);
+            std::string nm = m_deckFiles[i];
+            if (nm.size() > 4 && nm.substr(nm.size() - 4) == ".ydk")
+                nm = nm.substr(0, nm.size() - 4);
+            strncpy(m_deckNameBuf, nm.c_str(), sizeof(m_deckNameBuf) - 1);
+            m_deckNameBuf[sizeof(m_deckNameBuf) - 1] = '\0';
+            m_deckHoverCode = 0;
+        };
         if (ImGui::BeginCombo("##db_combo", preview)) {
-            for (int i = 0; i < (int)m_deckFiles.size(); i++) {
+            // Filter box — type to narrow a long deck list.
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::InputTextWithHint("##deckfilter", "filter...",
+                                     m_deckFilterBuf, sizeof(m_deckFilterBuf));
+            ImGui::Separator();
+            std::string flt = m_deckFilterBuf;
+            for (char& c : flt) c = (char)tolower((unsigned char)c);
+            auto matches = [&](const std::string& s) {
+                if (flt.empty()) return true;
+                std::string lo = s;
+                for (char& c : lo) c = (char)tolower((unsigned char)c);
+                return lo.find(flt) != std::string::npos;
+            };
+            // One row: a star toggle + the selectable filename.
+            auto row = [&](int i) {
+                bool fav = m_favDecks.count(m_deckFiles[i]) != 0;
                 bool sel = (m_selDeckIdx == i);
-                if (ImGui::Selectable(m_deckFiles[i].c_str(), sel)) {
-                    m_selDeckIdx = i;
-                    std::string path = "assets/decks/" + m_deckFiles[i];
-                    m_editDeck  = loadYdk(path);
-                    m_savedDeck = m_editDeck;             // freshly clean
-                    prefetchDeckArt(m_editDeck);          // warm the art cache
-                    std::string nm = m_deckFiles[i];
-                    if (nm.size() > 4 && nm.substr(nm.size() - 4) == ".ydk")
-                        nm = nm.substr(0, nm.size() - 4);
-                    strncpy(m_deckNameBuf, nm.c_str(),
-                            sizeof(m_deckNameBuf) - 1);
-                    m_deckNameBuf[sizeof(m_deckNameBuf) - 1] = '\0';
-                    m_deckHoverCode = 0;
+                ImGui::PushID(i);
+                if (ImGui::SmallButton(fav ? "*" : "o")) {
+                    if (fav) m_favDecks.erase(m_deckFiles[i]);
+                    else     m_favDecks.insert(m_deckFiles[i]);
+                    saveFavorites();
                 }
+                ImGui::SameLine(0.f, 6.f);
+                if (ImGui::Selectable((m_deckFiles[i] + "##sel").c_str(), sel))
+                    selectDeck(i);
                 if (sel) ImGui::SetItemDefaultFocus();
-            }
+                ImGui::PopID();
+            };
+            // Favorites first, then the rest; both filtered.
+            for (int i = 0; i < (int)m_deckFiles.size(); i++)
+                if (m_favDecks.count(m_deckFiles[i]) && matches(m_deckFiles[i]))
+                    row(i);
+            for (int i = 0; i < (int)m_deckFiles.size(); i++)
+                if (!m_favDecks.count(m_deckFiles[i]) && matches(m_deckFiles[i]))
+                    row(i);
             ImGui::EndCombo();
         }
 

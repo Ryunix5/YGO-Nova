@@ -13,6 +13,7 @@
 #include "NetSnapshots.h"
 #include <string>
 #include <vector>
+#include <set>
 #include <unordered_map>
 
 enum class Screen { Lobby, Duel, DeckBuilder, Replays, Multiplayer };
@@ -201,6 +202,11 @@ private:
     char                   m_deckNameBuf[64];
     std::vector<std::string> m_deckFiles;   // .ydk files found in assets/decks/
     int                    m_selDeckIdx   = -1;
+    // Favorites (persisted to assets/config/favorites.txt) + a dropdown filter.
+    std::set<std::string>  m_favDecks;      // favorite .ydk filenames
+    char                   m_deckFilterBuf[64] = {};
+    void   loadFavorites();
+    void   saveFavorites();
     // Filter chips: monster / spell / trap / main-only / extra-only.
     bool                   m_dbFilterMon  = true;
     bool                   m_dbFilterSpl  = true;
@@ -286,11 +292,15 @@ private:
     void   startMatchGame();             // begin the next match game from stored decks
 
     // Match history + win/loss stats (#8).
-    struct MatchRecord { std::string when, myDeck, oppDeck; char result = 'D'; };
+    struct MatchRecord {
+        std::string when, myDeck, oppDeck; char result = 'D';
+        int  turns = 0;            // total turns the duel lasted (0 = unknown)
+        int  wentFirst = -1;       // 1 = you went first, 0 = second, -1 unknown
+    };
     std::vector<MatchRecord> m_matchHistory;
     bool   m_historyOpen = false;
     void   recordMatch(const std::string& myDeck, const std::string& oppDeck,
-                       char result);
+                       char result, int turns = 0, int wentFirst = -1);
     void   loadMatchHistory();
     void   drawHistory();
 
