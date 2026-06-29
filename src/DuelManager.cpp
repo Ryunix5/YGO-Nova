@@ -52,6 +52,7 @@ void DuelManager::endDuel() {
     m_excavateEvents.clear();
     m_chainStack.clear();
     m_chainLinkCount = 0;
+    m_chainSolvingLink = 0;
     m_pendingSummonCode   = 0;
     m_pendingSummonName.clear();
     m_lastActionDesc.clear();
@@ -1093,6 +1094,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
         ChainEvent ce;
         ce.code = code; ce.con = con; ce.loc = cloc; ce.seq = cseq;
         ce.link = ++m_chainLinkCount;
+        if (ce.link == 1) m_chainSolvingLink = 0;  // fresh chain — not resolving
         m_chainEvents.push_back(ce);
         m_chainStack.push_back(ce);   // persistent for negate/resolve mapping
         break;
@@ -1915,6 +1917,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
     case MSG_CHAIN_END:
         m_chainLinkCount = 0;   // chain resolved — link numbering restarts
         m_chainStack.clear();
+        m_chainSolvingLink = 0; // no link is resolving any more
         break;
     case MSG_DAMAGE_STEP_START:
     case MSG_DAMAGE_STEP_END:
@@ -1926,6 +1929,7 @@ void DuelManager::handleMsg(const uint8_t*& p, const uint8_t* end) {
 
     case MSG_CHAIN_SOLVING: {
         uint8_t link = r8(p);
+        m_chainSolvingLink = (int)link;   // this link is resolving now
         // Spotlight the resolving link's card (chains resolve last-in-first-out).
         for (const auto& ce : m_chainStack)
             if (ce.link == (int)link) {

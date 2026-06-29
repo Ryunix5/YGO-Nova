@@ -3686,6 +3686,8 @@ void UI::drawChainStack(int /*w*/, int h) {
     if (chain.size() < 2 && !responding) return;
 
     const auto& C = UIStyle::C();
+    const int solving = m_dm.chainSolvingLink();   // >0 once resolution starts
+    const float pulse = 0.5f + 0.5f * std::sin((float)ImGui::GetTime() * 6.f);
     const float CW = 38.f, CH = 55.f, ROWH = CH + 8.f, PANW = 250.f;
     int n = (int)chain.size();
     float panH = n * ROWH + 30.f;
@@ -3696,35 +3698,63 @@ void UI::drawChainStack(int /*w*/, int h) {
     dl->AddRectFilled(a, b, IM_COL32(12, 8, 10, 232), 8.f);
     dl->AddRect(a, b, (C.accent & 0x00FFFFFF) | 0xAA000000, 8.f, 0, 1.4f);
     UIStyle::PushFont(UIStyle::fSmall);
-    dl->AddText({a.x + 12.f, a.y + 8.f}, C.textLo, "CHAIN");
+    dl->AddText({a.x + 12.f, a.y + 8.f}, C.textLo,
+                solving > 0 ? "CHAIN — RESOLVING" : "CHAIN");
     UIStyle::PopFont();
 
-    // Draw from the top: highest link first.
+    // Draw from the top: highest link first (resolves first, LIFO). While the
+    // chain resolves we sweep down: links above the current one are spent
+    // (dimmed + struck), the current one pulses, the rest wait.
     for (int i = n - 1, row = 0; i >= 0; --i, ++row) {
         const auto& ce = chain[(size_t)i];
+        bool resolved  = solving > 0 && ce.link > solving;
+        bool resolving = solving > 0 && ce.link == solving;
         float ry = a.y + 26.f + row * ROWH;
         ImVec2 ip = {a.x + 14.f, ry};
         ImVec2 ie = {ip.x + CW, ip.y + CH};
+        int imgA = resolved ? 90 : 255;
         void* tex = m_rend.getCardTexture(ce.code);
         if (tex) dl->AddImageRounded((ImTextureID)tex, ip, ie, {0, 0}, {1, 1},
-                                     IM_COL32_WHITE, 3.f);
-        else     dl->AddRectFilled(ip, ie, IM_COL32(30, 36, 56, 255), 3.f);
+                                     IM_COL32(255, 255, 255, imgA), 3.f);
+        else     dl->AddRectFilled(ip, ie, IM_COL32(30, 36, 56, imgA), 3.f);
         // Owner-coloured frame: yours green, opponent's orange.
         bool mine = ((int)ce.con == m_dm.humanSeat());
         ImU32 frame = mine ? IM_COL32(110, 220, 140, 255)
                            : IM_COL32(255, 150, 90, 255);
-        dl->AddRect(ip, ie, frame, 3.f, 0, 1.6f);
-        // Link number badge.
-        char lk[12]; snprintf(lk, sizeof(lk), "Link %d", ce.link);
-        dl->AddText({ie.x + 10.f, ry + 6.f}, C.textHi, lk);
-        // Card name (clipped).
+        if (resolving) {
+            // Bright pulsing highlight + glow ring around the current link.
+            ImU32 hot = IM_COL32(255, 224, 120, (int)(170 + 85 * pulse));
+            for (int g = 3; g >= 1; --g)
+                dl->AddRect({ip.x - g, ip.y - g}, {ie.x + g, ie.y + g},
+                            (hot & 0x00FFFFFF) | ((unsigned)(40) << 24),
+                            4.f, 0, 2.f);
+            dl->AddRect(ip, ie, hot, 3.f, 0, 2.6f);
+        } else {
+            dl->AddRect(ip, ie, (frame & 0x00FFFFFF) | ((unsigned)imgA << 24),
+                        3.f, 0, 1.6f);
+        }
+        // Link number + status.
+        char lk[32];
+        snprintf(lk, sizeof(lk), "Link %d%s", ce.link,
+                 resolving ? "  resolving" : resolved ? "  done" : "");
+        ImU32 lkCol = resolving ? IM_COL32(255, 224, 120, 255)
+                    : resolved  ? C.textMuted : C.textHi;
+        dl->AddText({ie.x + 10.f, ry + 6.f}, lkCol, lk);
+        // Card name (clipped). Strike resolved links with a line.
         std::string nm = m_db.getCard(ce.code).name;
         if (nm.empty()) nm = "#" + std::to_string(ce.code);
         UIStyle::PushFont(UIStyle::fSmall);
         dl->PushClipRect({ie.x + 10.f, ry}, {b.x - 8.f, ie.y}, true);
-        dl->AddText({ie.x + 10.f, ry + 24.f}, C.textLo, nm.c_str());
+        dl->AddText({ie.x + 10.f, ry + 24.f},
+                    resolved ? C.textMuted : C.textLo, nm.c_str());
         dl->PopClipRect();
         UIStyle::PopFont();
+        if (resolved) {
+            float midY = ry + 30.f;
+            dl->AddLine({ie.x + 10.f, midY},
+                        {ie.x + 10.f + ImGui::CalcTextSize(nm.c_str()).x, midY},
+                        C.textMuted, 1.f);
+        }
     }
 }
 
@@ -15383,11 +15413,19 @@ UI::deckArchetypes(const Deck& d) const {
         return "";
     };
 
+    // Generic staples that share a setname but never define a deck's theme —
+    // splashable hand-traps / engines you'd run in anything. They're real
+    // "archetypes" to the engine but meaningless as a deck identity, so we
+    // never report them. (Extend as needed.)
+    static const std::unordered_set<std::string> kStapleArchetypes = {
+        "mulcharmy"
+    };
     // Build ranked list, merging groups that resolve to the same label.
     std::unordered_map<std::string,int> byName;
     for (auto& kv : groups) {
         std::string lbl = labelOf(kv.second);
         if (lbl.empty()) continue;
+        if (kStapleArchetypes.count(lower(lbl))) continue;   // skip staples
         byName[lbl] = std::max(byName[lbl], (int)kv.second.size());
     }
     std::vector<std::pair<std::string,int>> out(byName.begin(), byName.end());

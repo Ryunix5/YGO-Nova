@@ -450,6 +450,9 @@ public:
     // The current chain's links (link 1..N, persistent until the chain ends).
     // Used by the UI to draw a chain-stack visualizer.
     const std::vector<ChainEvent>& chainStack() const { return m_chainStack; }
+    // The chain link currently resolving (0 = none / still building). Chains
+    // resolve last-in-first-out, so this counts DOWN from the top link.
+    int chainSolvingLink() const { return m_chainSolvingLink; }
     std::vector<TargetEvent> drainTargetEvents() {
         std::vector<TargetEvent> out;
         out.swap(m_targetEvents);
@@ -540,6 +543,7 @@ private:
     std::vector<ExcavateEvent> m_excavateEvents;
     std::vector<ChainEvent>  m_chainStack;   // persistent link→card for this chain
     int                      m_chainLinkCount = 0;   // resets at MSG_CHAIN_END
+    int                      m_chainSolvingLink = 0; // link resolving now (0=none)
     // Replay-recording hook + the seed actually used for this duel.
     ResponseRecorder         m_responseRecorder;
     uint64_t                 m_duelSeed = 0;
