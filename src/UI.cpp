@@ -12360,6 +12360,28 @@ void UI::drawDeckBuilder(int w, int h) {
             UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
                 es, "Try a shorter or different term");
         } else {
+            // Add a copy of `code` to a chosen section, honouring the copy
+            // limit (across all zones) and the section size cap. Shared by the
+            // "+ Add" menu below.
+            auto deckCopies = [&](uint32_t code) {
+                return (int)(
+                    std::count(m_editDeck.main.begin(),  m_editDeck.main.end(),  code) +
+                    std::count(m_editDeck.extra.begin(), m_editDeck.extra.end(), code) +
+                    std::count(m_editDeck.side.begin(),  m_editDeck.side.end(),  code));
+            };
+            auto addCardTo = [&](char sec, uint32_t code) {
+                std::vector<uint32_t>* z = sec == 'm' ? &m_editDeck.main
+                                         : sec == 'e' ? &m_editDeck.extra
+                                                      : &m_editDeck.side;
+                int secLimit = (sec == 'm') ? 60 : 15;
+                if (deckCopies(code) < cardLimit(code) &&
+                    (int)z->size() < secLimit) {
+                    z->push_back(code);
+                    gAudio().play("confirm");
+                } else {
+                    gAudio().play("error");
+                }
+            };
             int rendered = 0;
             // Cap displayed rows so the panel never lags on huge searches —
             // CardDB::search already limits to 80, this caps post-filter too.
@@ -12461,24 +12483,43 @@ void UI::drawDeckBuilder(int w, int h) {
                     m_hoveredInfo = card;
                     m_deckHoverCode = card.id;
                 }
+                // Drag a search result straight into a deck section. Carries
+                // just the code; the deck panel accepts "POOL_CARD" and adds a
+                // copy to whichever section it's dropped on.
+                if (ImGui::BeginDragDropSource(
+                        ImGuiDragDropFlags_SourceAllowNullID)) {
+                    uint32_t cid = card.id;
+                    ImGui::SetDragDropPayload("POOL_CARD", &cid, sizeof(cid));
+                    if (tex) ImGui::Image(tex, {40.f, 56.f});
+                    ImGui::TextUnformatted(card.name.c_str());
+                    ImGui::EndDragDropSource();
+                }
 
-                // Step 3b — Add button placed inside the reserved rect.
-                // Label uses ##id so the visible text is just "+ Add"; the
-                // custom button now strips ##id from the rendered text.
+                // Step 3b — Add button placed inside the reserved rect. Now
+                // opens a small menu so the player picks the destination
+                // section (Main/Extra + Side) instead of auto-routing.
                 ImGui::SetCursorScreenPos({rp.x + rw - 88.f, rp.y + 20.f});
                 char addLbl[40];
                 snprintf(addLbl, sizeof(addLbl), "+ Add##s%u",
                          (unsigned)card.id);
-                if (UIStyle::SecondaryButton(addLbl, {80.f, 32.f})) {
-                    auto& zone = isExtra ? m_editDeck.extra : m_editDeck.main;
-                    int copies = (int)std::count(zone.begin(), zone.end(), card.id);
-                    int limit  = isExtra ? 15 : 60;
-                    if (copies < 3 && (int)zone.size() < limit) {
-                        zone.push_back(card.id);
-                        gAudio().play("confirm");
+                char addPop[40];
+                snprintf(addPop, sizeof(addPop), "##addpop_%u",
+                         (unsigned)card.id);
+                if (UIStyle::SecondaryButton(addLbl, {80.f, 32.f}))
+                    ImGui::OpenPopup(addPop);
+                if (ImGui::BeginPopup(addPop)) {
+                    ImGui::TextDisabled("Add to");
+                    ImGui::Separator();
+                    if (isExtra) {
+                        if (ImGui::Selectable("Extra Deck"))
+                            addCardTo('e', card.id);
                     } else {
-                        gAudio().play("error");
+                        if (ImGui::Selectable("Main Deck"))
+                            addCardTo('m', card.id);
                     }
+                    if (ImGui::Selectable("Side Deck"))
+                        addCardTo('s', card.id);
+                    ImGui::EndPopup();
                 }
 
                 // Step 4 — cursor back to row-bottom, plus a small gap that
@@ -12647,6 +12688,15 @@ void UI::drawDeckBuilder(int w, int h) {
             uint32_t code = 0;
         };
         PendingMove pending;
+        // A card dragged in from the search pool (adds a NEW copy rather than
+        // moving an existing tile). dstIdx = -1 means append.
+        struct PendingAdd {
+            bool valid = false;
+            char dstSec = 0;
+            int  dstIdx = -1;
+            uint32_t code = 0;
+        };
+        PendingAdd pendingAdd;
 
         // Section→zone lookup used when applying the pending move.
         auto zonePtr = [&](char sec) -> std::vector<uint32_t>* {
@@ -12710,6 +12760,12 @@ void UI::drawDeckBuilder(int w, int h) {
                         gAudio().play("error");
                     }
                 }
+                const ImGuiPayload* pp = ImGui::AcceptDragDropPayload("POOL_CARD");
+                if (pp && pp->DataSize == (int)sizeof(uint32_t)) {
+                    uint32_t code = *(const uint32_t*)pp->Data;
+                    if (legalIn(sec, code)) pendingAdd = {true, sec, -1, code};
+                    else                    gAudio().play("error");
+                }
                 ImGui::EndDragDropTarget();
             }
             ImGui::Dummy({1.f, 4.f});
@@ -12745,6 +12801,13 @@ void UI::drawDeckBuilder(int w, int h) {
                         } else {
                             gAudio().play("error");
                         }
+                    }
+                    const ImGuiPayload* pp =
+                        ImGui::AcceptDragDropPayload("POOL_CARD");
+                    if (pp && pp->DataSize == (int)sizeof(uint32_t)) {
+                        uint32_t code = *(const uint32_t*)pp->Data;
+                        if (legalIn(sec, code)) pendingAdd = {true, sec, -1, code};
+                        else                    gAudio().play("error");
                     }
                     ImGui::EndDragDropTarget();
                 }
@@ -12920,6 +12983,15 @@ void UI::drawDeckBuilder(int w, int h) {
                             gAudio().play("error");
                         }
                     }
+                    const ImGuiPayload* pp =
+                        ImGui::AcceptDragDropPayload("POOL_CARD");
+                    if (pp && pp->DataSize == (int)sizeof(uint32_t)) {
+                        uint32_t code = *(const uint32_t*)pp->Data;
+                        if (legalIn(sec, code))
+                            pendingAdd = {true, sec, (int)i, code};
+                        else
+                            gAudio().play("error");
+                    }
                     ImGui::EndDragDropTarget();
                 }
             }
@@ -12957,6 +13029,30 @@ void UI::drawDeckBuilder(int w, int h) {
                 else
                     dst->insert(dst->begin() + di, code);
                 gAudio().play("click");
+            }
+        }
+
+        // Apply a pool-drag add: a brand-new copy from the search panel, with
+        // the copy limit (across all zones) and section cap enforced.
+        if (pendingAdd.valid) {
+            std::vector<uint32_t>* dst = zonePtr(pendingAdd.dstSec);
+            if (dst) {
+                int copies =
+                    (int)std::count(m_editDeck.main.begin(),  m_editDeck.main.end(),  pendingAdd.code) +
+                    (int)std::count(m_editDeck.extra.begin(), m_editDeck.extra.end(), pendingAdd.code) +
+                    (int)std::count(m_editDeck.side.begin(),  m_editDeck.side.end(),  pendingAdd.code);
+                int secLimit = (pendingAdd.dstSec == 'm') ? 60 : 15;
+                if (copies < cardLimit(pendingAdd.code) &&
+                    (int)dst->size() < secLimit) {
+                    int di = pendingAdd.dstIdx;
+                    if (di < 0 || di > (int)dst->size())
+                        dst->push_back(pendingAdd.code);
+                    else
+                        dst->insert(dst->begin() + di, pendingAdd.code);
+                    gAudio().play("confirm");
+                } else {
+                    gAudio().play("error");
+                }
             }
         }
 
