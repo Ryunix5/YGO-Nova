@@ -399,6 +399,14 @@ private:
     // Fullscreen toggle request (F11) — Game applies it to the SDL window.
     bool   m_fullscreenToggleReq = false;
     void   sortEditDeck();        // organise the deck-builder deck by type
+    int    tidyEditDeck();        // drop over-limit / over-cap cards; ret count
+    // Representative "boss" card for a deck (splashiest Extra monster, else
+    // top Main monster). 0 if the deck is empty.
+    uint32_t deckSignatureCard(const Deck& d) const;
+    // Cached lobby boss art (from the last-edited deck), recomputed when the
+    // source path changes so the lobby doesn't reload a deck every frame.
+    uint32_t    m_lobbyBossCode = 0;
+    std::string m_lobbyBossPath;
 public:
     // Polled by Game once per frame to apply an F11 fullscreen toggle.
     bool   consumeFullscreenToggle() {

@@ -3609,6 +3609,20 @@ void UI::drawLobby(int w, int h) {
     const auto& C = UIStyle::C();
     const float W = (float)w, H = (float)h;
 
+    // Cache the "boss" art from your last-used deck so the identity card can
+    // show it — recomputed only when the source deck path changes.
+    {
+        const std::string& bp = m_settings.lastDeckP1;
+        if (bp != m_lobbyBossPath) {
+            m_lobbyBossPath = bp;
+            std::error_code ec;
+            m_lobbyBossCode = (!bp.empty() &&
+                               std::filesystem::is_regular_file(bp, ec))
+                ? deckSignatureCard(loadYdk(bp)) : 0;
+            if (m_lobbyBossCode) m_rend.prefetchCard(m_lobbyBossCode);
+        }
+    }
+
     // ── Fullscreen epic dark background (drawn under everything) ────────────
     // A deliberate cinematic scene rather than a flat tinted canvas: deep
     // black base, a great crimson "nova" burning centre-right, slow rising
@@ -3894,6 +3908,37 @@ void UI::drawLobby(int w, int h) {
         UIStyle::PushFont(UIStyle::fSmall);
         bg->AddText({tx, a.y + 66.f}, C.textMuted,
                     "Modern Yu-Gi-Oh duel simulator");
+        UIStyle::PopFont();
+    }
+
+    // ── Active-deck mini card (signature/boss art + name) ───────────────────
+    if (m_lobbyBossCode) {
+        ImVec2 a = {26.f, 120.f};
+        const float CW = 298.f, CH = 66.f;
+        ImVec2 b = {a.x + CW, a.y + CH};
+        UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
+                                IM_COL32(24, 13, 16, 220));
+        bg->AddRectFilled({a.x + 2.f, a.y + 12.f}, {a.x + 5.f, b.y - 12.f},
+                          (C.accent & 0x00FFFFFF) | 0xCC000000, 2.f);
+        void* tex = m_rend.getCardTexture(m_lobbyBossCode);
+        ImVec2 ip = {a.x + 14.f, a.y + 9.f}, ie = {ip.x + 34.f, ip.y + 48.f};
+        if (tex) {
+            bg->AddImage((ImTextureID)tex, ip, ie);
+            bg->AddRect(ip, ie, C.borderSoft, 3.f, 0, 1.f);
+        }
+        std::string nm = m_settings.lastDeckP1;
+        auto sl = nm.find_last_of("/\\");
+        if (sl != std::string::npos) nm = nm.substr(sl + 1);
+        if (nm.size() > 4 && nm.substr(nm.size() - 4) == ".ydk")
+            nm = nm.substr(0, nm.size() - 4);
+        const float tx2 = ie.x + 12.f;
+        UIStyle::PushFont(UIStyle::fSmall);
+        bg->AddText({tx2, a.y + 12.f}, C.textLo, "ACTIVE DECK");
+        UIStyle::PopFont();
+        bg->AddText({tx2, a.y + 28.f}, C.textHi, nm.c_str());
+        UIStyle::PushFont(UIStyle::fSmall);
+        bg->AddText({tx2, a.y + 47.f}, C.textMuted,
+                    m_db.getCard(m_lobbyBossCode).name.c_str());
         UIStyle::PopFont();
     }
 
@@ -12274,6 +12319,9 @@ static std::string presetLabel(const std::string& file) {
     return s.empty() ? file : s;
 }
 
+// Defined later in this file (YDK helpers section).
+static std::string deckToYdke(const Deck& d);
+
 void UI::drawDeckBuilder(int w, int h) {
     // Fullscreen backdrop — same atmosphere as lobby/duel.
     UIStyle::DrawAppBackdrop(ImGui::GetBackgroundDrawList(),
@@ -12398,7 +12446,8 @@ void UI::drawDeckBuilder(int w, int h) {
         // EXTRA reserves room for the four trailing ghost buttons so they don't
         // run off the right edge (which hid the Stats button entirely).
         const float SAVE_W = 96.f, REF_W = 96.f, NAME_W = 220.f, COMBO_W = 220.f;
-        const float EXTRA = (52.f+6.f) + (62.f+6.f) + (52.f+6.f) + (56.f+6.f);
+        const float EXTRA = (52.f+6.f) + (52.f+6.f) + (62.f+6.f) +
+                            (52.f+6.f) + (56.f+6.f);   // Sort/Tidy/Stats/Copy/Paste
         float rightX = w - 12.f - EXTRA - SAVE_W - 6.f - REF_W;
         ImGui::SameLine(rightX - NAME_W - 6.f - COMBO_W);
 
@@ -12471,17 +12520,40 @@ void UI::drawDeckBuilder(int w, int h) {
             pushToast("Deck sorted", IM_COL32(180, 220, 255, 255), 1.8);
         }
         ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Tidy", {52.f, 32.f})) {
+            int n = tidyEditDeck();
+            if (n > 0) {
+                gAudio().play("confirm");
+                pushToast("Removed " + std::to_string(n) +
+                          " over-limit card" + (n == 1 ? "" : "s"),
+                          IM_COL32(235, 185, 60, 255), 2.4);
+            } else {
+                pushToast("Deck already within limits",
+                          IM_COL32(180, 220, 255, 255), 1.8);
+            }
+        }
+        ImGui::SameLine(0.f, 6.f);
         if (UIStyle::GhostButton("Stats", {62.f, 32.f}))
             m_consistencyOpen = true;
 
-        // Clipboard share — copy the current deck as .ydk text, or paste one in.
+        // Clipboard share — copy as .ydk text or a ydke:// URL, or paste either.
         ImGui::SameLine(0.f, 6.f);
-        if (UIStyle::GhostButton("Copy", {52.f, 32.f})) {
-            ImGui::SetClipboardText(deckToYdkText(m_editDeck).c_str());
+        if (UIStyle::GhostButton("Copy", {52.f, 32.f}))
+            ImGui::OpenPopup("##copyfmt");
+        if (ImGui::BeginPopup("##copyfmt")) {
             int total = (int)(m_editDeck.main.size() + m_editDeck.extra.size() +
                               m_editDeck.side.size());
-            pushToast("Deck copied to clipboard (" + std::to_string(total) +
-                      " cards)", IM_COL32(110, 220, 140, 255), 2.4);
+            if (ImGui::Selectable("Copy as ydke:// URL")) {
+                ImGui::SetClipboardText(deckToYdke(m_editDeck).c_str());
+                pushToast("Copied ydke:// URL (" + std::to_string(total) +
+                          " cards)", IM_COL32(110, 220, 140, 255), 2.4);
+            }
+            if (ImGui::Selectable("Copy as .ydk text")) {
+                ImGui::SetClipboardText(deckToYdkText(m_editDeck).c_str());
+                pushToast("Copied .ydk text (" + std::to_string(total) +
+                          " cards)", IM_COL32(110, 220, 140, 255), 2.4);
+            }
+            ImGui::EndPopup();
         }
         ImGui::SameLine(0.f, 6.f);
         if (UIStyle::GhostButton("Paste", {56.f, 32.f})) {
@@ -13389,12 +13461,25 @@ void UI::drawDeckBuilder(int w, int h) {
         UIStyle::SectionHeader("Card Preview");
 
         uint32_t code = m_deckHoverCode ? m_deckHoverCode : m_hoveredCard;
+        // With nothing hovered, fall back to the deck's signature ("boss")
+        // card so the panel always shows something meaningful.
+        bool showingSig = false;
+        if (code == 0) {
+            uint32_t sig = deckSignatureCard(m_editDeck);
+            if (sig) { code = sig; showingSig = true; }
+        }
         CardInfo info = code ? m_db.getCard(code) : CardInfo{};
         if (code == 0 || info.id == 0) {
             UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
                 "Hover a card to preview",
                 "Name, type, stats and effect text appear here");
         } else {
+            if (showingSig) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImGui::ColorConvertU32ToFloat4(C.accentHi));
+                ImGui::TextUnformatted("Deck signature");
+                ImGui::PopStyleColor();
+            }
             // Card image area — fixed slot so the layout never resizes.
             const float IMG_W = std::min(PREVIEW_W - 32.f, 260.f);
             const float IMG_H = IMG_W * 1.46f;
@@ -14464,6 +14549,37 @@ static std::vector<uint8_t> b64decode(const std::string& in) {
     return out;
 }
 
+// Encode bytes to standard base64 (with '=' padding) — for ydke:// export.
+static std::string b64encode(const std::vector<uint8_t>& in) {
+    static const char* tbl =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0, bits = -6;
+    for (uint8_t c : in) {
+        val = (val << 8) | c; bits += 8;
+        while (bits >= 0) { out.push_back(tbl[(val >> bits) & 0x3f]); bits -= 6; }
+    }
+    if (bits > -6) out.push_back(tbl[((val << 8) >> (bits + 8)) & 0x3f]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+// Serialise a deck to a YDKE share URL (ydke://<main>!<extra>!<side>!) — the
+// universal format every deck site / EDOPro accepts.
+static std::string deckToYdke(const Deck& d) {
+    auto enc = [](const std::vector<uint32_t>& v) {
+        std::vector<uint8_t> b; b.reserve(v.size() * 4);
+        for (uint32_t c : v) {
+            b.push_back((uint8_t)(c & 0xff));
+            b.push_back((uint8_t)((c >> 8) & 0xff));
+            b.push_back((uint8_t)((c >> 16) & 0xff));
+            b.push_back((uint8_t)((c >> 24) & 0xff));
+        }
+        return b64encode(b);
+    };
+    return "ydke://" + enc(d.main) + "!" + enc(d.extra) + "!" + enc(d.side) + "!";
+}
+
 // Parse a YDKE share URL — ydke://<b64 main>!<b64 extra>!<b64 side>! — where
 // each section is base64 of packed little-endian uint32 passcodes. This is the
 // format YGOPRODeck / EDOPro "copy deck" produces, so pasting one Just Works.
@@ -14558,6 +14674,50 @@ void UI::sortEditDeck() {
     std::stable_sort(m_editDeck.main.begin(),  m_editDeck.main.end(),  less);
     std::stable_sort(m_editDeck.extra.begin(), m_editDeck.extra.end(), less);
     std::stable_sort(m_editDeck.side.begin(),  m_editDeck.side.end(),  less);
+}
+
+// Auto-tidy: drop copies past the per-card limit (counted across all zones,
+// banlist-aware) and trim any section past its size cap. Returns how many
+// cards were removed.
+int UI::tidyEditDeck() {
+    int removed = 0;
+    std::unordered_map<uint32_t, int> seen;   // running count across zones
+    auto trim = [&](std::vector<uint32_t>& zone, size_t cap) {
+        std::vector<uint32_t> kept;
+        for (uint32_t c : zone) {
+            int lim = cardLimit(c);
+            if (seen[c] < lim && kept.size() < cap) {
+                kept.push_back(c);
+                seen[c]++;
+            } else {
+                ++removed;
+            }
+        }
+        zone.swap(kept);
+    };
+    // Main + extra share the copy count; side continues it. Section caps:
+    // main 60, extra 15, side 15.
+    trim(m_editDeck.main,  60);
+    trim(m_editDeck.extra, 15);
+    trim(m_editDeck.side,  15);
+    return removed;
+}
+
+uint32_t UI::deckSignatureCard(const Deck& d) const {
+    auto topAtk = [&](const std::vector<uint32_t>& z) -> uint32_t {
+        uint32_t best = 0; int bestAtk = -1;
+        for (uint32_t c : z) {
+            CardInfo ci = m_db.getCard(c);
+            if (!(ci.type & TYPE_MONSTER)) continue;
+            if (ci.atk > bestAtk) { bestAtk = ci.atk; best = c; }
+        }
+        return best;
+    };
+    if (uint32_t e = topAtk(d.extra)) return e;   // splashiest Extra boss
+    if (uint32_t m = topAtk(d.main))  return m;   // else best Main monster
+    if (!d.main.empty())  return d.main[0];
+    if (!d.extra.empty()) return d.extra[0];
+    return 0;
 }
 
 Deck UI::loadYdk(const std::string& path) {
