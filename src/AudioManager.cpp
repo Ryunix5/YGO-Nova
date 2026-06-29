@@ -26,6 +26,8 @@ struct AudioManager::Impl {
     Uint32 cooldownMs = 90;
     bool   muted  = false;
     float  volume = 0.7f;
+    float  masterVolume = 1.0f;       // top-of-mixer gain (SFX + music)
+    bool   muteUiSfx = false;         // drop hover/draw ambience
     bool   ready  = false;
 
     // ── Streaming music (separate callback device) ────────────────────────
@@ -47,7 +49,7 @@ void AudioManager::musicCallback(void* userdata, unsigned char* stream, int len)
         p->musicVolume < 0.001f)
         return;
     const std::vector<Uint8>& d = p->music.data;
-    int vol = (int)(SDL_MIX_MAXVOLUME * p->musicVolume);
+    int vol = (int)(SDL_MIX_MAXVOLUME * p->musicVolume * p->masterVolume);
     int filled = 0;
     while (filled < len) {
         if (p->musicPos >= d.size()) p->musicPos = 0;          // loop
@@ -194,7 +196,10 @@ void AudioManager::load(const std::string& key, const std::string& path) {
 }
 
 void AudioManager::play(const std::string& key) {
-    if (!p->ready || p->muted || p->volume < 0.001f) return;
+    float eff = p->volume * p->masterVolume;
+    if (!p->ready || p->muted || eff < 0.001f) return;
+    // Ambient UI sounds the player can silence independently.
+    if (p->muteUiSfx && (key == "hover" || key == "draw")) return;
     auto it = p->clips.find(key);
     if (it == p->clips.end()) return;
     const auto& clip = it->second;
@@ -213,13 +218,13 @@ void AudioManager::play(const std::string& key) {
     if (lp != p->lastPlayMs.end() && now - lp->second < p->cooldownMs)
         return;
     p->lastPlayMs[key] = now;
-    if (p->volume >= 0.995f) {
+    if (eff >= 0.995f) {
         SDL_QueueAudio(p->dev, clip.data.data(),
                        (Uint32)clip.data.size());
     } else {
         // Apply volume via SDL_MixAudioFormat into a temporary buffer.
         std::vector<Uint8> tmp(clip.data.size(), 0);
-        int sdlVol = (int)(SDL_MIX_MAXVOLUME * p->volume);
+        int sdlVol = (int)(SDL_MIX_MAXVOLUME * eff);
         SDL_MixAudioFormat(tmp.data(), clip.data.data(), p->spec.format,
                            (Uint32)clip.data.size(), sdlVol);
         SDL_QueueAudio(p->dev, tmp.data(), (Uint32)tmp.size());
@@ -230,6 +235,10 @@ void  AudioManager::setMuted(bool m)     { p->muted = m; }
 bool  AudioManager::muted() const        { return p->muted; }
 void  AudioManager::setVolume(float v)   { p->volume = std::clamp(v, 0.f, 1.f); }
 float AudioManager::volume() const       { return p->volume; }
+void  AudioManager::setMasterVolume(float v) { p->masterVolume = std::clamp(v, 0.f, 1.f); }
+float AudioManager::masterVolume() const { return p->masterVolume; }
+void  AudioManager::setMuteUiSfx(bool m) { p->muteUiSfx = m; }
+bool  AudioManager::muteUiSfx() const    { return p->muteUiSfx; }
 
 // ── Background music ─────────────────────────────────────────────────────────
 void AudioManager::loadMusic(const std::string& path) {

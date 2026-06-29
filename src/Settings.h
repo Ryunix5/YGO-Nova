@@ -30,6 +30,8 @@ struct Settings {
     bool   sfxMuted          = false;
     float  sfxVolume         = 0.70f;
     float  musicVolume       = 0.45f;    // looping background music level
+    float  masterVolume      = 1.00f;    // top-of-mixer gain (SFX + music)
+    bool   muteUiSfx         = false;    // silence hover/draw ambience
 
     // ── Visual toggles ───────────────────────────────────────────────────
     bool   showFieldNames    = false;
@@ -188,6 +190,8 @@ struct Settings {
         f << "sfxMuted="          << (sfxMuted          ? "1" : "0") << "\n";
         f << "sfxVolume="         << sfxVolume                       << "\n";
     f << "musicVolume="       << musicVolume                     << "\n";
+    f << "masterVolume="      << masterVolume                    << "\n";
+    f << "muteUiSfx="         << (muteUiSfx ? "1" : "0")         << "\n";
         f << "\n# Visual\n";
         f << "showFieldNames="    << (showFieldNames    ? "1" : "0") << "\n";
         f << "largePreview="      << (largePreview      ? "1" : "0") << "\n";
@@ -249,6 +253,8 @@ private:
         if      (k == "sfxMuted")          sfxMuted          = boolFromStr(v);
         else if (k == "sfxVolume")         sfxVolume         = floatFromStr(v, sfxVolume);
         else if (k == "musicVolume")       musicVolume       = floatFromStr(v, musicVolume);
+        else if (k == "masterVolume")      masterVolume      = floatFromStr(v, masterVolume);
+        else if (k == "muteUiSfx")         muteUiSfx         = boolFromStr(v);
         else if (k == "showFieldNames")    showFieldNames    = boolFromStr(v);
         else if (k == "largePreview")      largePreview      = boolFromStr(v);
         else if (k == "showZoneLabels")    showZoneLabels    = boolFromStr(v);

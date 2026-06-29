@@ -194,6 +194,19 @@ void* Renderer::getCardTexture(uint32_t code) {
     return m_unknownTex;
 }
 
+void Renderer::prefetchCard(uint32_t code) {
+    if (!m_downloadImages || code == 0) return;
+    if (m_cardTextures.count(code)) return;          // already uploaded
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string base = "assets/cards/" + std::to_string(code);
+    if (fs::is_regular_file(base + ".jpg", ec) ||
+        fs::is_regular_file(base + ".png", ec))
+        return;                                       // already on disk
+    if (m_fetcher.state(code) == edo::ImageFetcher::State::None)
+        m_fetcher.request(code, base + ".jpg");
+}
+
 void* Renderer::loadTexture(const std::string& path) {
     int w, h, ch;
     unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);

@@ -306,6 +306,9 @@ private:
     std::vector<std::string> m_presetFiles;   // filenames in presets/
     int    m_opponentPreset = -1;
     void   loadPresetDecks();
+    // Queue all of a deck's card art for background download up front, so the
+    // field/builder don't pop in card-by-card on first view.
+    void   prefetchDeckArt(const Deck& d);
 
     // Testing mode
     bool   m_testingMode = false;

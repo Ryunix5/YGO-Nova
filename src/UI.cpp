@@ -2547,6 +2547,8 @@ void UI::loadSettings() {
     gAudio().setMuted (m_settings.sfxMuted);
     gAudio().setVolume(m_settings.sfxVolume);
     gAudio().setMusicVolume(m_settings.musicVolume);
+    gAudio().setMasterVolume(m_settings.masterVolume);
+    gAudio().setMuteUiSfx(m_settings.muteUiSfx);
     // Restore last-used decks for the lobby setup popup.
     if (!m_settings.lastDeckP1.empty())
         strncpy(m_deck0Path, m_settings.lastDeckP1.c_str(),
@@ -2582,6 +2584,8 @@ void UI::saveSettings() {
     m_settings.sfxMuted          = gAudio().muted();
     m_settings.sfxVolume         = gAudio().volume();
     m_settings.musicVolume       = gAudio().musicVolume();
+    m_settings.masterVolume      = gAudio().masterVolume();
+    m_settings.muteUiSfx         = gAudio().muteUiSfx();
     m_settings.lastDeckP1        = m_deck0Path[0] ? m_deck0Path : "";
     m_settings.lastDeckP2        = m_deck1Path[0] ? m_deck1Path : "";
     if (!m_settings.save())
@@ -2991,6 +2995,8 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
 
     Deck d0 = loadYdk(t0);
     Deck d1 = loadYdk(t1);
+    prefetchDeckArt(d0);    // warm the art cache so the field doesn't pop in
+    prefetchDeckArt(d1);
     m_puzzleMode = false;   // a normal practice duel is not a puzzle
     m_dm.setHumanSeat(humanSeat);
     m_net.setSeatOverride(humanSeat);
@@ -3501,6 +3507,29 @@ bool UI::draw(int winW, int winH) {
         drawCardContextMenu();
         drawPauseMenu(winW, winH);
     }
+    // Card-art download indicator — a small pill, bottom-right, while the
+    // background fetcher has art in flight (deck prefetch or on-demand views).
+    {
+        int n = m_rend.fetcher().inFlight();
+        if (n > 0) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            char buf[48];
+            snprintf(buf, sizeof(buf), "Downloading card art... %d", n);
+            ImVec2 ts = ImGui::CalcTextSize(buf);
+            float pad = 10.f;
+            ImVec2 b2{(float)winW - 16.f, (float)winH - 16.f};
+            ImVec2 b1{b2.x - ts.x - pad * 2.f, b2.y - ts.y - pad};
+            dl->AddRectFilled(b1, b2, IM_COL32(14, 9, 10, 230), 6.f);
+            dl->AddRect(b1, b2, IM_COL32(198, 120, 64, 200), 6.f, 0, 1.f);
+            // Tiny pulsing dot.
+            float pulse = 0.5f + 0.5f * std::sin((float)ImGui::GetTime() * 4.f);
+            dl->AddCircleFilled({b1.x + pad, (b1.y + b2.y) * 0.5f}, 3.f,
+                IM_COL32(240, 180, 100, (int)(120 + 135 * pulse)), 10);
+            dl->AddText({b1.x + pad + 8.f, b1.y + pad * 0.5f},
+                        IM_COL32(236, 200, 150, 255), buf);
+        }
+    }
+
     // Toasts rendered LAST so they sit above every screen. Uses the
     // foreground draw list so they're not clipped by any active window.
     if (!m_toasts.empty()) {
@@ -4178,6 +4207,14 @@ void UI::drawLobby(int w, int h) {
         float vol   = gAudio().volume();
         ImGui::Text("Device: %s", av ? "open" : "unavailable");
         if (ImGui::Checkbox("Mute all", &muted)) gAudio().setMuted(muted);
+        // Master gain — scales both channels.
+        ImGui::TextDisabled("Master volume");
+        float mas = gAudio().masterVolume();
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::SliderFloat("##masvol", &mas, 0.f, 1.f, "%.2f")) {
+            gAudio().setMasterVolume(mas);
+            m_settings.masterVolume = mas; saveSettings();
+        }
         ImGui::TextDisabled("SFX volume");
         ImGui::SetNextItemWidth(-1.f);
         if (ImGui::SliderFloat("##sfxvol", &vol, 0.f, 1.f, "%.2f")) {
@@ -4195,6 +4232,12 @@ void UI::drawLobby(int w, int h) {
         if (!gAudio().musicLoaded())
             ImGui::TextDisabled("(no music track loaded — needs a real PCM "
                                 ".wav at assets/sfx/main menu loop.wav)");
+        // Silence the high-frequency ambience without losing gameplay cues.
+        bool muteUi = gAudio().muteUiSfx();
+        if (ImGui::Checkbox("Mute UI sounds (hover / draw)", &muteUi)) {
+            gAudio().setMuteUiSfx(muteUi);
+            m_settings.muteUiSfx = muteUi; saveSettings();
+        }
         ImGui::Spacing();
         if (UIStyle::SecondaryButton("Test Sound", {160.f, 32.f}))
             gAudio().play("confirm");
@@ -12035,6 +12078,12 @@ int UI::cardLimit(uint32_t code) const {
 }
 
 // Preset opponent decks (#6) — the bundled AI_*.ydk archetype decks.
+void UI::prefetchDeckArt(const Deck& d) {
+    for (uint32_t c : d.main)  m_rend.prefetchCard(c);
+    for (uint32_t c : d.extra) m_rend.prefetchCard(c);
+    for (uint32_t c : d.side)  m_rend.prefetchCard(c);
+}
+
 void UI::loadPresetDecks() {
     m_presetFiles.clear();
     namespace fs = std::filesystem;
@@ -12194,6 +12243,7 @@ void UI::drawDeckBuilder(int w, int h) {
                     std::string path = "assets/decks/" + m_deckFiles[i];
                     m_editDeck  = loadYdk(path);
                     m_savedDeck = m_editDeck;             // freshly clean
+                    prefetchDeckArt(m_editDeck);          // warm the art cache
                     std::string nm = m_deckFiles[i];
                     if (nm.size() > 4 && nm.substr(nm.size() - 4) == ".ydk")
                         nm = nm.substr(0, nm.size() - 4);

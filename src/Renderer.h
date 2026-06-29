@@ -21,6 +21,12 @@ public:
     }
     const edo::ImageFetcher& fetcher() const { return m_fetcher; }
 
+    // Queue a card's art for background download to disk WITHOUT uploading a
+    // texture — so a whole deck's images are fetched up front and the field
+    // doesn't pop in card-by-card. No-op if already cached / on disk / in
+    // flight, or when on-demand download is off.
+    void prefetchCard(uint32_t code);
+
     // Load a card texture by passcode. Returns ImGui texture ID (void*)
     // Falls back to the back-of-card texture if art is missing.
     void* getCardTexture(uint32_t code);

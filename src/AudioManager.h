@@ -25,6 +25,13 @@ public:
     bool  muted() const;
     void  setVolume(float v);
     float volume() const;
+    // Master gain scales BOTH the SFX and music channels (top of the mixer).
+    void  setMasterVolume(float v);
+    float masterVolume() const;
+    // Suppress high-frequency "ambient" UI sounds (hover / draw) without
+    // muting the meaningful gameplay cues.
+    void  setMuteUiSfx(bool m);
+    bool  muteUiSfx() const;
 
     // ── Looping background music ──────────────────────────────────────────
     // A separate streaming audio device (callback) so music mixes UNDER the
