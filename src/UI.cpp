@@ -12536,6 +12536,155 @@ int UI::cardLimit(uint32_t code) const {
     return it == m.end() ? 3 : it->second;
 }
 
+void UI::openBanlistEditor(bool fromCurrent) {
+    m_editBanlist = Banlist{};
+    if (fromCurrent && m_selectedBanlist >= 0 &&
+        m_selectedBanlist < (int)m_banlists.size()) {
+        m_editBanlist = m_banlists[(size_t)m_selectedBanlist];
+        m_editBanlist.name += " (copy)";
+    } else {
+        m_editBanlist.name = "My Format";
+    }
+    strncpy(m_banlistNameBuf, m_editBanlist.name.c_str(),
+            sizeof(m_banlistNameBuf) - 1);
+    m_banlistNameBuf[sizeof(m_banlistNameBuf) - 1] = '\0';
+    m_banlistSearchBuf[0] = '\0';
+    m_banlistSearchResults.clear();
+    m_banlistEditorOpen = true;
+}
+
+bool UI::saveBanlist(const Banlist& bl) {
+    std::error_code ec;
+    std::filesystem::create_directories("assets/lflists", ec);
+    // Sanitise the name into a filename.
+    std::string fn = bl.name.empty() ? "custom" : bl.name;
+    for (char& c : fn)
+        if (!(isalnum((unsigned char)c) || c == '-' || c == '_' || c == ' '))
+            c = '_';
+    std::ofstream f("assets/lflists/" + fn + ".lflist.conf");
+    if (!f) return false;
+    f << "#" << bl.name << " — created in YGO: Nova\n";
+    f << "!" << bl.name << "\n";
+    f << "$whitelist\n";
+    for (const auto& kv : bl.limits)
+        f << kv.first << " " << kv.second << " --"
+          << m_db.getCard(kv.first).name << "\n";
+    return f.good();
+}
+
+void UI::drawBanlistEditor() {
+    if (m_banlistEditorOpen) {
+        ImGui::OpenPopup("Format editor");
+        m_banlistEditorOpen = false;
+    }
+    ImGui::SetNextWindowSize({560.f, 0.f}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("Format editor", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+
+    const auto& C = UIStyle::C();
+    if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
+    ImGui::TextUnformatted("Custom format / banlist");
+    if (UIStyle::fHeader) ImGui::PopFont();
+    ImGui::TextDisabled("Set per-card limits. Cards not listed default to 3.");
+    ImGui::Separator();
+
+    ImGui::SetNextItemWidth(260.f);
+    ImGui::InputTextWithHint("##blname", "Format name", m_banlistNameBuf,
+                             sizeof(m_banlistNameBuf));
+    ImGui::SameLine(0.f, 10.f);
+    ImGui::TextDisabled("%d limited card%s",
+        (int)m_editBanlist.limits.size(),
+        m_editBanlist.limits.size() == 1 ? "" : "s");
+
+    // Search → set a card's limit (0 Forbidden / 1 / 2 / 3 = remove).
+    ImGui::SetNextItemWidth(-1.f);
+    if (UIStyle::SearchInput("##blsearch", m_banlistSearchBuf,
+                             sizeof(m_banlistSearchBuf),
+                             "Search a card to limit...", -1.f)) {
+        if (strlen(m_banlistSearchBuf) >= 2)
+            m_banlistSearchResults = m_db.search(m_banlistSearchBuf, 25);
+        else
+            m_banlistSearchResults.clear();
+    }
+    if (!m_banlistSearchResults.empty()) {
+        ImGui::BeginChild("##blresults", {-1.f, 140.f}, true);
+        for (auto& c : m_banlistSearchResults) {
+            ImGui::PushID((int)c.id);
+            int cur = m_editBanlist.limits.count(c.id)
+                ? m_editBanlist.limits[c.id] : 3;
+            for (int n = 0; n <= 3; ++n) {
+                if (n) ImGui::SameLine(0.f, 3.f);
+                char lbl[4]; snprintf(lbl, sizeof(lbl), "%d", n);
+                if (UIStyle::SegmentedButton(lbl, cur == n, true, {26.f, 22.f})) {
+                    if (n == 3) m_editBanlist.limits.erase(c.id);
+                    else        m_editBanlist.limits[c.id] = n;
+                }
+            }
+            ImGui::SameLine(0.f, 8.f);
+            std::string nm = c.name.empty()
+                ? ("#" + std::to_string(c.id)) : c.name;
+            if (nm.size() > 30) nm = nm.substr(0, 29) + ".";
+            ImGui::TextUnformatted(nm.c_str());
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+
+    // Current entries.
+    ImGui::Dummy({1.f, 4.f});
+    ImGui::TextDisabled("Limited list");
+    ImGui::BeginChild("##blentries", {-1.f, 150.f}, true);
+    if (m_editBanlist.limits.empty()) {
+        ImGui::TextDisabled("(nothing limited yet — search above)");
+    } else {
+        std::vector<std::pair<uint32_t,int>> rows(m_editBanlist.limits.begin(),
+                                                  m_editBanlist.limits.end());
+        std::sort(rows.begin(), rows.end(),
+                  [](auto& a, auto& b){ return a.second < b.second; });
+        uint32_t toErase = 0;
+        for (auto& kv : rows) {
+            ImGui::PushID((int)kv.first);
+            ImU32 lc = kv.second == 0 ? IM_COL32(230, 60, 50, 255)
+                     : kv.second == 1 ? IM_COL32(235, 90, 70, 255)
+                                      : IM_COL32(235, 185, 60, 255);
+            UIStyle::StatusChip(kv.second == 0 ? "Forbidden"
+                              : kv.second == 1 ? "Limited" : "Semi", lc);
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::TextUnformatted(m_db.getCard(kv.first).name.c_str());
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 24.f);
+            if (ImGui::SmallButton("x")) toErase = kv.first;
+            ImGui::PopID();
+        }
+        if (toErase) m_editBanlist.limits.erase(toErase);
+    }
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    if (UIStyle::PrimaryButton("Save format", {150.f, 32.f})) {
+        m_editBanlist.name = m_banlistNameBuf[0] ? m_banlistNameBuf : "My Format";
+        if (saveBanlist(m_editBanlist)) {
+            loadBanlists();
+            // Select the freshly saved list.
+            for (int i = 0; i < (int)m_banlists.size(); ++i)
+                if (m_banlists[i].name == m_editBanlist.name) m_selectedBanlist = i;
+            pushToast("Format saved: " + m_editBanlist.name,
+                      IM_COL32(110, 220, 140, 255), 2.6);
+            gAudio().play("confirm");
+            ImGui::CloseCurrentPopup();
+        } else {
+            pushToast("Could not write the format file",
+                      IM_COL32(232, 110, 100, 255), 2.6);
+            gAudio().play("error");
+        }
+    }
+    ImGui::SameLine(0.f, 8.f);
+    if (UIStyle::GhostButton("Cancel##bl", {110.f, 32.f}))
+        ImGui::CloseCurrentPopup();
+    (void)C;
+    ImGui::EndPopup();
+}
+
 // Preset opponent decks (#6) — the bundled AI_*.ydk archetype decks.
 void UI::prefetchDeckArt(const Deck& d) {
     for (uint32_t c : d.main)  m_rend.prefetchCard(c);
@@ -12860,6 +13009,8 @@ void UI::drawDeckBuilder(int w, int h) {
 
     // Deck-consistency calculator popup (opened by the toolbar "Stats" button).
     drawDeckConsistency();
+    // Custom format / banlist editor popup.
+    drawBanlistEditor();
 
     // ── LEFT — Card Search ──────────────────────────────────────────────────
     {
@@ -13224,6 +13375,15 @@ void UI::drawDeckBuilder(int w, int h) {
                                           m_selectedBanlist == i))
                         m_selectedBanlist = i;
                 ImGui::EndCombo();
+            }
+            // New / Edit custom format buttons.
+            ImGui::SameLine(0.f, 6.f);
+            if (UIStyle::GhostButton("New##fmt", {56.f, 0.f}))
+                openBanlistEditor(false);
+            if (m_selectedBanlist >= 0) {
+                ImGui::SameLine(0.f, 4.f);
+                if (UIStyle::GhostButton("Edit##fmt", {56.f, 0.f}))
+                    openBanlistEditor(true);
             }
             // Legend for the per-card badges (only meaningful with a list).
             if (m_selectedBanlist >= 0) {

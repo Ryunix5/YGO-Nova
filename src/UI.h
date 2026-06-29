@@ -311,6 +311,15 @@ private:
     int    m_selectedBanlist = -1;   // -1 = no list (max 3 each)
     void   loadBanlists();
     int    cardLimit(uint32_t code) const;   // copies allowed under current list
+    // Custom banlist / format editor.
+    bool    m_banlistEditorOpen = false;
+    Banlist m_editBanlist;                       // working copy being edited
+    char    m_banlistNameBuf[64]   = {};
+    char    m_banlistSearchBuf[64] = {};
+    std::vector<CardInfo> m_banlistSearchResults;
+    void   openBanlistEditor(bool fromCurrent);
+    void   drawBanlistEditor();
+    bool   saveBanlist(const Banlist& bl);       // write .lflist.conf; ret ok
 
     // Custom duel settings (Duel Setup popup).
     int    m_setupLP        = 8000;
