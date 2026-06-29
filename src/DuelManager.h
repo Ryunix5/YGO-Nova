@@ -447,6 +447,9 @@ public:
         out.swap(m_chainEvents);
         return out;
     }
+    // The current chain's links (link 1..N, persistent until the chain ends).
+    // Used by the UI to draw a chain-stack visualizer.
+    const std::vector<ChainEvent>& chainStack() const { return m_chainStack; }
     std::vector<TargetEvent> drainTargetEvents() {
         std::vector<TargetEvent> out;
         out.swap(m_targetEvents);

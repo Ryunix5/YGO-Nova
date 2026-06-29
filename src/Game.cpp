@@ -279,7 +279,16 @@ bool Game::init(const std::string& title, int w, int h) {
 // render loop can pad each frame to the target without threading settings in.
 int g_fpsCap = 0;
 
+// Window focus + a taskbar-flash helper, used by the UI's "your turn" alert.
+bool g_windowFocused = true;
+static SDL_Window* s_gameWindow = nullptr;
+void flashTaskbar() {
+    if (s_gameWindow && !g_windowFocused)
+        SDL_FlashWindow(s_gameWindow, SDL_FLASH_UNTIL_FOCUSED);
+}
+
 void Game::run() {
+    s_gameWindow = m_window;
     while (!g_quit) {
         Uint32 frameStart = SDL_GetTicks();
         processEvents();
@@ -328,6 +337,12 @@ void Game::processEvents() {
             e.window.event == SDL_WINDOWEVENT_RESIZED) {
             m_width  = e.window.data1;
             m_height = e.window.data2;
+        }
+        if (e.type == SDL_WINDOWEVENT) {
+            if (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+                g_windowFocused = true;
+            else if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                g_windowFocused = false;
         }
     }
 }

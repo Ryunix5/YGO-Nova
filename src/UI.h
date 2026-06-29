@@ -405,6 +405,7 @@ private:
     bool   m_helpOverlayOpen = false;
     void   handleDuelHotkeys();   // F1 = help, Esc = close top panel
     void   drawHelpOverlay(int w, int h);
+    void   drawChainStack(int w, int h);   // numbered chain-link visualizer
     // Keybindings: a settings field awaiting a key press (nullptr = not
     // capturing). The Settings popup "Rebind" buttons set this; the next key
     // pressed is written into *m_rebindTarget. Resolve via keyFor().
@@ -428,6 +429,11 @@ private:
     // Representative "boss" card for a deck (splashiest Extra monster, else
     // top Main monster). 0 if the deck is empty.
     uint32_t deckSignatureCard(const Deck& d) const;
+    // Dominant archetypes in a deck, ranked by how many (copies of) cards
+    // belong to each. Grouped by real setcode (so non-archetype cards like
+    // Pot of Duality never form a group), labelled by the group's common
+    // name-prefix. Returns {name, count} most-mentioned first.
+    std::vector<std::pair<std::string,int>> deckArchetypes(const Deck& d) const;
     // Cached lobby boss art (from the last-edited deck), recomputed when the
     // source path changes so the lobby doesn't reload a deck every frame.
     uint32_t    m_lobbyBossCode = 0;

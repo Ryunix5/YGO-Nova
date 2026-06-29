@@ -2794,6 +2794,9 @@ void UI::observePhaseForBanners() {
                                     : IM_COL32(255, 150, 90, 255));
         m_phaseQueueNextAt = ImGui::GetTime() + 0.75;
         if (gAudio().isLoaded("phase")) gAudio().play("phase");
+        // It just became your turn — flash the taskbar if the window isn't
+        // focused so you notice while tabbed away (no-op when focused).
+        if (mine) { extern void flashTaskbar(); flashTaskbar(); }
     }
     if (m_debugLog)
         m_dm.logEvent(std::string("[PHASE OBSERVE] old=") +
@@ -3566,6 +3569,7 @@ bool UI::draw(int winW, int winH) {
     // overlay sits on top; hotkeys are UI-only — see handleDuelHotkeys).
     if (m_screen == Screen::Duel) {
         handleDuelHotkeys();
+        drawChainStack(winW, winH);
         drawChainResponsePopup(winW, winH);
         drawCardZoom(winW, winH);
         drawHelpOverlay(winW, winH);
@@ -3667,6 +3671,61 @@ bool UI::draw(int winW, int winH) {
         }
     }
     return true;
+}
+
+// ─── Chain stack visualizer ──────────────────────────────────────────────────
+// While a chain is building/resolving, show its links as a vertical stack on
+// the left: the highest link sits on top (it resolves first, LIFO), link 1 at
+// the bottom. Each row is a thumbnail + "Link N" + card name.
+void UI::drawChainStack(int /*w*/, int h) {
+    const auto& chain = m_dm.chainStack();
+    if (chain.size() < 1) return;            // nothing on the chain
+    // Only worth showing once there's an actual stack (2+), or while the
+    // player is being asked to respond to a single activation.
+    bool responding = DuelManager::isRealSelect(m_dm.selection().type);
+    if (chain.size() < 2 && !responding) return;
+
+    const auto& C = UIStyle::C();
+    const float CW = 38.f, CH = 55.f, ROWH = CH + 8.f, PANW = 250.f;
+    int n = (int)chain.size();
+    float panH = n * ROWH + 30.f;
+    ImVec2 a = {16.f, (float)h * 0.5f - panH * 0.5f};
+    if (a.y < 64.f) a.y = 64.f;
+    ImVec2 b = {a.x + PANW, a.y + panH};
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(a, b, IM_COL32(12, 8, 10, 232), 8.f);
+    dl->AddRect(a, b, (C.accent & 0x00FFFFFF) | 0xAA000000, 8.f, 0, 1.4f);
+    UIStyle::PushFont(UIStyle::fSmall);
+    dl->AddText({a.x + 12.f, a.y + 8.f}, C.textLo, "CHAIN");
+    UIStyle::PopFont();
+
+    // Draw from the top: highest link first.
+    for (int i = n - 1, row = 0; i >= 0; --i, ++row) {
+        const auto& ce = chain[(size_t)i];
+        float ry = a.y + 26.f + row * ROWH;
+        ImVec2 ip = {a.x + 14.f, ry};
+        ImVec2 ie = {ip.x + CW, ip.y + CH};
+        void* tex = m_rend.getCardTexture(ce.code);
+        if (tex) dl->AddImageRounded((ImTextureID)tex, ip, ie, {0, 0}, {1, 1},
+                                     IM_COL32_WHITE, 3.f);
+        else     dl->AddRectFilled(ip, ie, IM_COL32(30, 36, 56, 255), 3.f);
+        // Owner-coloured frame: yours green, opponent's orange.
+        bool mine = ((int)ce.con == m_dm.humanSeat());
+        ImU32 frame = mine ? IM_COL32(110, 220, 140, 255)
+                           : IM_COL32(255, 150, 90, 255);
+        dl->AddRect(ip, ie, frame, 3.f, 0, 1.6f);
+        // Link number badge.
+        char lk[12]; snprintf(lk, sizeof(lk), "Link %d", ce.link);
+        dl->AddText({ie.x + 10.f, ry + 6.f}, C.textHi, lk);
+        // Card name (clipped).
+        std::string nm = m_db.getCard(ce.code).name;
+        if (nm.empty()) nm = "#" + std::to_string(ce.code);
+        UIStyle::PushFont(UIStyle::fSmall);
+        dl->PushClipRect({ie.x + 10.f, ry}, {b.x - 8.f, ie.y}, true);
+        dl->AddText({ie.x + 10.f, ry + 24.f}, C.textLo, nm.c_str());
+        dl->PopClipRect();
+        UIStyle::PopFont();
+    }
 }
 
 // ─── Startup splash ──────────────────────────────────────────────────────────
@@ -11765,6 +11824,20 @@ void UI::drawDeckConsistency() {
                         m_db.getCard(m_sampleHand[i]).name.c_str());
             }
             ImGui::Dummy({m_sampleHand.size() * (cw + gap), ch + 4.f});
+            // Quick read on the hand: starters (role-tagged) + brick estimate.
+            int starters = 0;
+            for (uint32_t c : m_sampleHand) {
+                auto it = m_cardTags.find(c);
+                if (it != m_cardTags.end() && it->second == 1) ++starters;
+            }
+            ImU32 sc = starters > 0 ? IM_COL32(110, 220, 140, 255)
+                                    : IM_COL32(235, 150, 60, 255);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::ColorConvertU32ToFloat4(sc));
+            ImGui::Text("Starters in this hand: %d", starters);
+            ImGui::PopStyleColor();
+            if (starters == 0)
+                ImGui::TextDisabled("(tag cards as Starter to track openers)");
         }
     }
     ImGui::Separator();
@@ -13454,6 +13527,34 @@ void UI::drawDeckBuilder(int w, int h) {
         if (!m_db.isOpen()) {
             ImGui::SameLine(0.f, 6.f);
             UIStyle::StatusChip("No card DB", C.danger);
+        }
+        // Detected archetype(s) — most-mentioned first, real setcodes only.
+        // Cached by a cheap deck signature so we only hit the DB on changes.
+        {
+            static uint64_t s_sig = ~0ull;
+            static std::vector<std::pair<std::string,int>> s_arch;
+            uint64_t sig = m_editDeck.main.size() * 1000003ull +
+                           m_editDeck.extra.size() * 1009ull +
+                           m_editDeck.side.size();
+            for (uint32_t c : m_editDeck.main)  sig = sig * 1315423911ull + c;
+            for (uint32_t c : m_editDeck.extra) sig = sig * 2654435761ull + c;
+            for (uint32_t c : m_editDeck.side)  sig = sig * 40503ull + c;
+            if (sig != s_sig) { s_sig = sig; s_arch = deckArchetypes(m_editDeck); }
+            const auto& arch = s_arch;
+            if (!arch.empty()) {
+                std::string s = "Archetype: ";
+                for (size_t i = 0; i < arch.size() && i < 3; ++i) {
+                    if (i) s += " · ";
+                    s += arch[i].first + " (" +
+                         std::to_string(arch[i].second) + ")";
+                }
+                ImGui::SameLine(0.f, 12.f);
+                ImGui::AlignTextToFramePadding();
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImGui::ColorConvertU32ToFloat4(C.accentHi));
+                ImGui::TextUnformatted(s.c_str());
+                ImGui::PopStyleColor();
+            }
         }
 
         ImGui::Dummy({1.f, 6.f});
@@ -15210,6 +15311,92 @@ uint32_t UI::deckSignatureCard(const Deck& d) const {
     if (!d.main.empty())  return d.main[0];
     if (!d.extra.empty()) return d.extra[0];
     return 0;
+}
+
+std::vector<std::pair<std::string,int>>
+UI::deckArchetypes(const Deck& d) const {
+    // Split a name into words, preserving original casing.
+    auto words = [](const std::string& s) {
+        std::vector<std::string> w; std::string cur;
+        for (char c : s) {
+            if (std::isalnum((unsigned char)c)) cur += c;
+            else { if (!cur.empty()) { w.push_back(cur); cur.clear(); } }
+        }
+        if (!cur.empty()) w.push_back(cur);
+        return w;
+    };
+    auto lower = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+    // Group card names by each non-zero 16-bit setcode.
+    std::unordered_map<uint16_t, std::vector<std::string>> groups;
+    auto addCard = [&](uint32_t code) {
+        CardInfo ci = m_db.getCard(code);
+        if (ci.name.empty()) return;
+        for (int i = 0; i < 4; ++i) {
+            uint16_t sc = (uint16_t)((ci.setcode >> (i * 16)) & 0xFFFF);
+            if (sc) groups[sc].push_back(ci.name);
+        }
+    };
+    for (uint32_t c : d.main)  addCard(c);
+    for (uint32_t c : d.extra) addCard(c);
+    for (uint32_t c : d.side)  addCard(c);
+
+    // Label a group by the longest leading word-run shared by >=60% of its
+    // names (original casing pulled from the first matching name).
+    auto labelOf = [&](const std::vector<std::string>& names) -> std::string {
+        int N = (int)names.size();
+        std::vector<std::vector<std::string>> wl;
+        wl.reserve(N);
+        for (auto& n : names) wl.push_back(words(n));
+        int need = std::max(2, (int)std::ceil(0.6 * N));
+        std::string bestKey; int bestK = 0;
+        for (int k = 1; k <= 4; ++k) {
+            std::unordered_map<std::string,int> cnt;
+            std::string modal; int modalCnt = 0;
+            for (auto& w : wl) {
+                if ((int)w.size() < k) continue;
+                std::string key;
+                for (int j = 0; j < k; ++j) key += lower(w[j]) + " ";
+                int c = ++cnt[key];
+                if (c > modalCnt) { modalCnt = c; modal = key; }
+            }
+            if (modalCnt >= need) { bestKey = modal; bestK = k; }
+            else break;
+        }
+        if (bestK == 0) return "";
+        // Recover original casing: first name whose first bestK words match.
+        for (auto& w : wl) {
+            if ((int)w.size() < bestK) continue;
+            std::string key;
+            for (int j = 0; j < bestK; ++j) key += lower(w[j]) + " ";
+            if (key == bestKey) {
+                std::string out;
+                for (int j = 0; j < bestK; ++j) {
+                    if (j) out += " ";
+                    out += w[j];
+                }
+                return out;
+            }
+        }
+        return "";
+    };
+
+    // Build ranked list, merging groups that resolve to the same label.
+    std::unordered_map<std::string,int> byName;
+    for (auto& kv : groups) {
+        std::string lbl = labelOf(kv.second);
+        if (lbl.empty()) continue;
+        byName[lbl] = std::max(byName[lbl], (int)kv.second.size());
+    }
+    std::vector<std::pair<std::string,int>> out(byName.begin(), byName.end());
+    std::sort(out.begin(), out.end(),
+              [](auto& a, auto& b){ return a.second > b.second; });
+    // Drop tiny splashes (a single copy that happens to share a setcode).
+    out.erase(std::remove_if(out.begin(), out.end(),
+              [](auto& p){ return p.second < 3; }), out.end());
+    return out;
 }
 
 Deck UI::loadYdk(const std::string& path) {
