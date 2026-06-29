@@ -886,6 +886,8 @@ private:
     std::string m_replayDesyncMsg;
     edo::Replay m_replayActive;                  // the loaded replay being played
     std::string m_replayActivePath;              // file path, for header display
+    char        m_replayRenameBuf[128] = {};     // rename field in the browser
+    int         m_replayRenameFor      = -1;      // which list index it's seeded for
 
     // Helpers — actually wire the replay screen / duel screen together.
     void startReplayPlayback(const std::string& path);

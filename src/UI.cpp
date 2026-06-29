@@ -6427,9 +6427,16 @@ void UI::drawDuel(int w, int h) {
                                 ImGuiCond_Always, {0.5f, 0.5f});
         if (ImGui::BeginPopupModal("Surrender?##srpop", nullptr,
                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-            ImGui::TextUnformatted("Concede this duel? Your opponent wins.");
+            if (m_matchActive) {
+                ImGui::Text("Concede game %d? It counts as a loss",
+                            m_matchGameNo);
+                ImGui::TextUnformatted("and the match continues to the next game.");
+            } else {
+                ImGui::TextUnformatted("Concede this duel? Your opponent wins.");
+            }
             ImGui::Dummy({1.f, 8.f});
-            if (UIStyle::DangerButton("Surrender", {150.f, 32.f})) {
+            const char* srLbl = m_matchActive ? "Concede game" : "Surrender";
+            if (UIStyle::DangerButton(srLbl, {160.f, 32.f})) {
                 const int me = m_net.localPlayerIndex();
                 if (m_net.isOffline() || m_net.isHost()) {
                     // We own the authoritative engine — forfeit directly. In
@@ -13920,6 +13927,59 @@ void UI::drawReplays(int w, int h) {
             m_selectedReplay = m_replayFiles.empty() ? -1 : 0;
             m_viewerReplayValid = false;
             pushToast("Replay deleted", IM_COL32(232, 110, 100, 255), 2.0);
+        }
+
+        // Rename — seed the field from the current filename (no dir/.json)
+        // the first time this replay is selected, then rename on the disk.
+        {
+            if (m_replayRenameFor != m_selectedReplay) {
+                std::string base = path;
+                auto sl = base.find_last_of("/\\");
+                if (sl != std::string::npos) base = base.substr(sl + 1);
+                auto dot = base.find_last_of('.');
+                std::string ext = (dot != std::string::npos) ? base.substr(dot) : "";
+                if (dot != std::string::npos) base = base.substr(0, dot);
+                strncpy(m_replayRenameBuf, base.c_str(),
+                        sizeof(m_replayRenameBuf) - 1);
+                m_replayRenameBuf[sizeof(m_replayRenameBuf) - 1] = '\0';
+                m_replayRenameFor = m_selectedReplay;
+            }
+            ImGui::Dummy({1.f, 6.f});
+            ImGui::SetNextItemWidth(280.f);
+            ImGui::InputTextWithHint("##rep_rename", "New name",
+                m_replayRenameBuf, sizeof(m_replayRenameBuf));
+            ImGui::SameLine(0.f, 6.f);
+            if (UIStyle::SecondaryButton("Rename", {120.f, 30.f}) &&
+                m_replayRenameBuf[0]) {
+                namespace fs = std::filesystem;
+                fs::path src(path);
+                std::string ext = src.extension().string();
+                fs::path dst = src.parent_path() /
+                    (std::string(m_replayRenameBuf) + (ext.empty() ? ".json" : ext));
+                std::error_code ec;
+                if (dst != src && !fs::exists(dst, ec)) {
+                    fs::rename(src, dst, ec);
+                    if (!ec) {
+                        m_replayFiles = edo::Replay::list();
+                        // Reselect the renamed file.
+                        for (int k = 0; k < (int)m_replayFiles.size(); ++k)
+                            if (m_replayFiles[k] == dst.string()) {
+                                m_selectedReplay = k;
+                                m_viewerReplayValid = m_viewerReplay.load(m_replayFiles[k]);
+                                break;
+                            }
+                        m_replayRenameFor = -1;
+                        pushToast("Replay renamed",
+                                  IM_COL32(110, 220, 140, 255), 2.0);
+                    } else {
+                        pushToast("Rename failed",
+                                  IM_COL32(232, 110, 100, 255), 2.4);
+                    }
+                } else {
+                    pushToast("A replay with that name already exists",
+                              IM_COL32(235, 185, 60, 255), 2.4);
+                }
+            }
         }
 
         ImGui::Dummy({1.f, 10.f});
