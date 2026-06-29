@@ -58,6 +58,12 @@ private:
 
     Screen  m_screen = Screen::Lobby;
 
+    // Startup splash: fade "Sponsored by Dark Side" (with logo), then
+    // "Made by Ryunix", then hand off to the lobby. Skippable.
+    bool    m_introActive = true;
+    double  m_introStart  = -1.0;
+    void    drawIntro(int w, int h);
+
     // ── Screen draw functions ──────────────────────────────────────────────
     void drawLobby(int w, int h);
     void drawDuel(int w, int h);

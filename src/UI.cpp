@@ -3527,6 +3527,12 @@ bool UI::draw(int winW, int winH) {
     ImGui::GetIO().FontGlobalScale =
         std::clamp(m_settings.uiScale, 0.7f, 1.6f);
 
+    // Startup splash — sponsor then author fade — before anything else.
+    if (m_introActive) {
+        drawIntro(winW, winH);
+        return true;
+    }
+
     // Drain any network messages BEFORE rendering this frame's screen.
     // EngineResponse arrivals may unblock the engine; handling them here
     // means drawDuel sees the freshest selection state.
@@ -3660,6 +3666,86 @@ bool UI::draw(int winW, int winH) {
         }
     }
     return true;
+}
+
+// ─── Startup splash ──────────────────────────────────────────────────────────
+// Two fade beats over ~6s: the sponsor (logo + "Sponsored by Dark Side"),
+// then "Made by Ryunix". Click / Space / Enter / Esc skips straight to the
+// lobby. Drawn on the foreground list over a full black wash.
+void UI::drawIntro(int w, int h) {
+    const float W = (float)w, H = (float)h;
+    if (m_introStart < 0.0) m_introStart = ImGui::GetTime();
+    double el = ImGui::GetTime() - m_introStart;
+
+    // Any input skips.
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)  ||
+        ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+        ImGui::IsKeyPressed(ImGuiKey_Space,  false) ||
+        ImGui::IsKeyPressed(ImGuiKey_Enter,  false) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        el = 99.0;
+
+    // Fade envelope: 0→1 over fi, hold, 1→0 over fo.
+    auto seg = [](double t, double fi, double hold, double fo) -> float {
+        if (t < 0.0)            return 0.f;
+        if (t < fi)             return (float)(t / fi);
+        if (t < fi + hold)      return 1.f;
+        if (t < fi + hold + fo) return (float)(1.0 - (t - fi - hold) / fo);
+        return 0.f;
+    };
+    float aS = seg(el,        0.8, 1.7, 0.6);   // sponsor: 0.0 .. 3.1
+    float aR = seg(el - 3.3,  0.8, 1.7, 0.6);   // author : 3.3 .. 6.4
+    bool  done = el >= 6.4;
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled({0.f, 0.f}, {W, H}, IM_COL32(0, 0, 0, 255));
+
+    ImFont* f = UIStyle::fHeader ? UIStyle::fHeader : ImGui::GetFont();
+    auto bigText = [&](const char* s, float sz, ImVec2 center, ImU32 col) {
+        ImVec2 ts = f->CalcTextSizeA(sz, 1.0e6f, 0.f, s);
+        dl->AddText(f, sz, {center.x - ts.x * 0.5f, center.y - ts.y * 0.5f},
+                    col, s);
+    };
+
+    // Sponsor beat — logo above, caption below, with a soft red core glow.
+    if (aS > 0.001f) {
+        ImVec2 c = {W * 0.5f, H * 0.42f};
+        float glow = std::min(W, H) * 0.34f;
+        for (int i = 6; i >= 0; --i)
+            dl->AddCircleFilled(c, glow * (0.4f + i * 0.09f),
+                IM_COL32(120, 26, 30, (int)(10 * aS)), 48);
+        void* tex = m_rend.loadCachedImage("assets/sponsor_logo.png");
+        float logoSz = std::min(W, H) * 0.30f;
+        if (tex) {
+            ImVec2 p0 = {c.x - logoSz * 0.5f, c.y - logoSz * 0.5f};
+            ImVec2 p1 = {c.x + logoSz * 0.5f, c.y + logoSz * 0.5f};
+            dl->AddImage((ImTextureID)tex, p0, p1, {0, 0}, {1, 1},
+                         IM_COL32(255, 255, 255, (int)(255 * aS)));
+        }
+        bigText("SPONSORED BY DARK SIDE", 34.f,
+                {c.x, c.y + logoSz * 0.5f + 36.f},
+                IM_COL32(236, 224, 230, (int)(255 * aS)));
+    }
+
+    // Author beat.
+    if (aR > 0.001f) {
+        ImVec2 c = {W * 0.5f, H * 0.46f};
+        bigText("MADE BY RYUNIX", 44.f, c,
+                IM_COL32(232, 64, 70, (int)(255 * aR)));
+        bigText("YGO: Nova", 22.f, {c.x, c.y + 46.f},
+                IM_COL32(206, 206, 214, (int)(210 * aR)));
+    }
+
+    // Skip hint.
+    {
+        const char* sk = "click to skip";
+        float sz = 15.f;
+        ImVec2 ts = f->CalcTextSizeA(sz, 1.0e6f, 0.f, sk);
+        dl->AddText(f, sz, {W - ts.x - 20.f, H - 30.f},
+                    IM_COL32(150, 150, 162, 120), sk);
+    }
+
+    if (done) { m_introActive = false; m_screen = Screen::Lobby; }
 }
 
 // ─── Lobby (Master Duel-inspired LAYOUT, fully original artwork) ─────────────
