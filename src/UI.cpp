@@ -3355,9 +3355,39 @@ void UI::stopReplayPlayback() {
     m_dm.setLocalMode(m_replayPrevLocal);
 }
 
+void UI::seekReplayTo(int target) {
+    if (!m_replayMode) return;
+    int total = (int)m_replayActive.responses.size();
+    target = std::clamp(target, 0, total);
+    std::string path = m_replayActivePath;
+    float prevSpeed = m_replaySpeed;
+    bool  prevMute  = gAudio().muted();
+    stopReplayPlayback();
+    startReplayPlayback(path);           // rebuild from the seed (idx = 0)
+    m_replaySpeed       = prevSpeed;
+    m_replaySeekTarget  = target;        // fast-feed up to here, muted
+    m_replaySeekMutePrev = prevMute;
+    gAudio().setMuted(true);
+    m_replayPlaying     = false;         // pause once we arrive
+}
+
 void UI::feedReplayTick() {
     if (!m_replayMode || !m_dm.isRunning()) return;
-    if (!m_replayDesyncMsg.empty()) return;   // frozen on desync
+    if (!m_replayDesyncMsg.empty()) {
+        // A desync while seeking can't resolve — abandon the seek cleanly.
+        if (m_replaySeekTarget >= 0) {
+            m_replaySeekTarget = -1;
+            gAudio().setMuted(m_replaySeekMutePrev);
+        }
+        return;   // frozen on desync
+    }
+    // Seeking: when we've reached the target index, stop and unmute.
+    if (m_replaySeekTarget >= 0 && m_replayIdx >= m_replaySeekTarget) {
+        m_replaySeekTarget = -1;
+        gAudio().setMuted(m_replaySeekMutePrev);
+        m_anim.clear();
+        m_replayPlaying = false;
+    }
 
     const SelectionRequest& sel = currentSelection();
     // Two paths the engine signals "I need a response":
@@ -3381,7 +3411,9 @@ void UI::feedReplayTick() {
     }
 
     // Step-pulse: fed by the Step button — one response then auto-clear.
-    bool feedNow = m_replayStepPulse;
+    // While seeking we feed one response per frame (timing ignored) until the
+    // target index is reached.
+    bool feedNow = m_replayStepPulse || (m_replaySeekTarget >= 0);
     if (m_replayPlaying) {
         if (ImGui::GetTime() >= m_replayNextAt) feedNow = true;
     }
@@ -6732,13 +6764,24 @@ void UI::drawDuel(int w, int h) {
         // earlier dead-end; the desync re-arms on the next bad frame if
         // the underlying issue persists.
         const char* pp = m_replayPlaying ? "II  Pause" : ">  Play";
-        if (UIStyle::SecondaryButton(pp, {104.f, 32.f})) {
+        if (UIStyle::SecondaryButton(pp, {96.f, 32.f})) {
             m_replayPlaying = !m_replayPlaying;
             if (m_replayPlaying) {
                 m_replayNextAt = ImGui::GetTime();
                 m_replayDesyncMsg.clear();
             }
             gAudio().play("click");
+        }
+        ImGui::SameLine(0.f, 6.f);
+        // Step Back — rewind one response via deterministic rebuild.
+        {
+            bool canBack = (m_replayIdx > 0 && m_replaySeekTarget < 0);
+            if (!canBack) ImGui::BeginDisabled();
+            if (UIStyle::SecondaryButton("<< Back", {72.f, 32.f})) {
+                seekReplayTo(m_replayIdx - 1);
+                gAudio().play("click");
+            }
+            if (!canBack) ImGui::EndDisabled();
         }
         ImGui::SameLine(0.f, 6.f);
         // Step — feeds exactly one response then auto-pauses. Also clears
@@ -6790,6 +6833,21 @@ void UI::drawDuel(int w, int h) {
         ImGui::PushStyleColor(ImGuiCol_Text, {0.84f, 0.80f, 0.96f, 1.f});
         ImGui::TextUnformatted(status);
         ImGui::PopStyleColor();
+        // Seek slider — drag to jump anywhere; releases trigger a rebuild to
+        // that response index. Shows "seeking..." while the rebuild catches up.
+        if (total > 0) {
+            ImGui::SameLine(0.f, 14.f);
+            if (m_replaySeekTarget >= 0) {
+                ImGui::TextDisabled("seeking...");
+            } else {
+                int seekVal = m_replayIdx;
+                ImGui::SetNextItemWidth(260.f);
+                if (ImGui::SliderInt("##replay_seek", &seekVal, 0, total,
+                                     "jump to %d") &&
+                    seekVal != m_replayIdx)
+                    seekReplayTo(seekVal);
+            }
+        }
 
         ImGui::End();
         ImGui::PopStyleVar(3);

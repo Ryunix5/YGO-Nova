@@ -866,6 +866,11 @@ private:
     bool        m_replayStepPulse   = false;     // one-shot "Step" trigger
     int         m_replayIdx         = 0;         // next response index
     float       m_replaySpeed       = 1.0f;
+    // Seek (rewind / jump): replays are forward-only, so seeking restarts the
+    // duel from the seed and fast-feeds responses (muted) up to the target
+    // index. -1 = not seeking.
+    int         m_replaySeekTarget  = -1;
+    bool        m_replaySeekMutePrev = false;
     double      m_replayNextAt      = 0.0;       // next auto-feed time
     std::string m_replayDesyncMsg;
     edo::Replay m_replayActive;                  // the loaded replay being played
@@ -875,6 +880,7 @@ private:
     void startReplayPlayback(const std::string& path);
     void stopReplayPlayback();
     void feedReplayTick();      // called once per frame in drawDuel
+    void seekReplayTo(int responseIndex);   // rewind/jump via deterministic rebuild
 
     // Push a player-facing line into BOTH the on-screen Game Log and the
     // currently-recording replay's event timeline. Centralised so every
