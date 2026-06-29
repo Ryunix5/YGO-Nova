@@ -815,6 +815,7 @@ private:
     void handleGameOver(const edo::NetMessage& m);     // client receives
     // client → host concede; host forfeits the client's seat on its engine.
     void sendSurrender();
+    void sendChatLine(const std::string& text);   // chat / emote / rematch
     void handleSurrender(const edo::NetMessage& m);    // host receives
     // ── Client-side: snapshot ingest ───────────────────────────────────
     void handleFieldSnapshot(const edo::NetMessage& m);

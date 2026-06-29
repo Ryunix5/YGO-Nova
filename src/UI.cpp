@@ -1819,6 +1819,21 @@ void UI::sendSurrender() {
     pushToast("You surrendered", IM_COL32(232, 110, 100, 255), 3.0);
 }
 
+// Send a chat / emote line to the peer (online only) and echo it locally so
+// the sender sees their own message in the game log.
+void UI::sendChatLine(const std::string& text) {
+    if (m_net.isOffline() || text.empty()) return;
+    edo::NetMessage m; m.type = edo::NetMsgType::Chat;
+    std::string named = m_settings.mpDisplayName.empty()
+        ? text : (m_settings.mpDisplayName + ": " + text);
+    m.payload.assign(named.begin(), named.end());
+    m_net.send(m);
+    pushGameLog(std::string("<chat> ") + named, IM_COL32(150, 235, 170, 255));
+    // A rematch request also pops a toast on the sender for clarity.
+    if (text.find("rematch") != std::string::npos)
+        pushToast("Rematch requested", IM_COL32(180, 220, 255, 255), 2.0);
+}
+
 void UI::handleSurrender(const edo::NetMessage& m) {
     // Host-only: a client conceded. Forfeit its seat on the authoritative
     // engine; the per-frame pump then ships GameOver to the client.
@@ -2047,6 +2062,12 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
         std::string txt = r.str();
         pushGameLog(std::string("<chat> ") + txt,
                     IM_COL32(180, 220, 255, 255));
+        // Surface emotes / rematch requests as a toast so they're not missed.
+        if (txt.find("rematch") != std::string::npos)
+            pushToast("Opponent wants a rematch!",
+                      IM_COL32(180, 220, 255, 255), 4.0);
+        else
+            pushToast(txt, IM_COL32(150, 235, 170, 255), 2.6);
         break;
     }
     case edo::NetMsgType::Disconnect: {
@@ -3545,6 +3566,43 @@ bool UI::draw(int winW, int winH) {
         drawExcavateReveal(winW, winH);
         drawCardContextMenu();
         drawPauseMenu(winW, winH);
+
+        // Online emote bar — quick chat presets so an online match has some
+        // life. Sending also echoes to the game log; a rematch request pops a
+        // toast on the opponent. Shown only in a live online duel.
+        if (!m_net.isOffline() && m_mpInDuel) {
+            ImGui::SetNextWindowPos({12.f, (float)winH - 96.f},
+                                    ImGuiCond_Always);
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(14, 9, 11, 220));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8.f, 6.f});
+            ImGui::Begin("##emotebar", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoFocusOnAppearing |
+                ImGuiWindowFlags_NoSavedSettings);
+            struct E { const char* lbl; const char* msg; };
+            static const E emotes[] = {
+                {"GL!",     "Good luck!"},
+                {"Nice!",   "Nice play!"},
+                {"Oops",    "Oops..."},
+                {"Hmm",     "Thinking..."},
+                {"GG",      "Good game!"},
+            };
+            for (int i = 0; i < (int)(sizeof(emotes)/sizeof(emotes[0])); ++i) {
+                if (i) ImGui::SameLine(0.f, 4.f);
+                if (UIStyle::GhostButton(emotes[i].lbl, {52.f, 24.f}))
+                    sendChatLine(emotes[i].msg);
+            }
+            if (m_dm.isDone()) {
+                ImGui::SameLine(0.f, 10.f);
+                if (UIStyle::SecondaryButton("Rematch?", {86.f, 24.f}))
+                    sendChatLine("Wants a rematch!");
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor();
+        }
     }
     // Card-art download indicator — a small pill, bottom-right, while the
     // background fetcher has art in flight (deck prefetch or on-demand views).
