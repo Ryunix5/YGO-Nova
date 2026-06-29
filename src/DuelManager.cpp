@@ -471,6 +471,25 @@ bool DuelManager::startBoardBreak(const PuzzleSetup& board, const Deck& humanDec
     return true;
 }
 
+bool DuelManager::debugAddCardToHand(uint32_t code, int player) {
+    if (!m_running || !m_duel || code == 0) return false;
+    player &= 1;
+    int seq = (int)m_field.hand[player].size();
+    // Debug.AddCard(code, owner, player, location, sequence, position).
+    //   location 0x02 = LOCATION_HAND, position 0x01 = POS_FACEUP_ATTACK.
+    std::string chunk = "Debug.AddCard(" + std::to_string(code) + "," +
+                        std::to_string(player) + "," + std::to_string(player) +
+                        ",2," + std::to_string(seq) + ",1)\n";
+    int r = OCG_LoadScript(m_duel, chunk.c_str(), (uint32_t)chunk.size(),
+                           "testing_add_hand");
+    if (!r) { addLog("[testing] add-to-hand script failed (code " +
+                     std::to_string(code) + ")"); return false; }
+    queryField();
+    addLog("[testing] added " + std::to_string(code) + " to P" +
+           std::to_string(player + 1) + " hand");
+    return true;
+}
+
 // Advance the duel engine. Called once per UI frame.
 //
 // ocgcore protocol: OCG_DuelProcess() returns END / AWAITING / CONTINUE.

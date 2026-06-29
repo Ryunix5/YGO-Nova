@@ -312,6 +312,9 @@ private:
 
     // Testing mode
     bool   m_testingMode = false;
+    // Testing-only "add card to hand" search box + results.
+    char                   m_testHandSearch[64] = {};
+    std::vector<CardInfo>  m_testHandResults;
     bool   m_debugLog    = false;   // verbose ocgcore message logging
 
     // ── Testing Mode timeline (offline deterministic rewind) ──────────────

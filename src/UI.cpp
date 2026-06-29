@@ -11238,6 +11238,42 @@ void UI::drawTestingBar(int /*w*/) {
             UIStyle::DrawDivider(6.f, 6.f);
             drawTestingTimeline();
         }
+
+        // ── Add card to hand (running offline duel, not puzzle/replay) ────
+        if (m_dm.isRunning() && !m_replayMode && !m_puzzleMode) {
+            UIStyle::DrawDivider(6.f, 6.f);
+            UIStyle::Subtle("Add card to hand");
+            ImGui::SetNextItemWidth(-1.f);
+            if (ImGui::InputTextWithHint("##addhand", "Search name or code...",
+                    m_testHandSearch, sizeof(m_testHandSearch))) {
+                if (strlen(m_testHandSearch) >= 2)
+                    m_testHandResults = m_db.search(m_testHandSearch, 12);
+                else
+                    m_testHandResults.clear();
+            }
+            if (!m_testHandResults.empty()) {
+                ImGui::BeginChild("##addhandlist", {-1.f, 132.f}, true);
+                for (auto& c : m_testHandResults) {
+                    ImGui::PushID((int)c.id);
+                    std::string nm = c.name.empty()
+                        ? ("#" + std::to_string(c.id)) : c.name;
+                    if (nm.size() > 24) nm = nm.substr(0, 23) + ".";
+                    ImGui::TextUnformatted(nm.c_str());
+                    if (ImGui::SmallButton("To my hand")) {
+                        if (m_dm.debugAddCardToHand(c.id, m_dm.humanSeat()))
+                            gAudio().play("draw");
+                    }
+                    ImGui::SameLine(0.f, 4.f);
+                    if (ImGui::SmallButton("To opp")) {
+                        m_dm.debugAddCardToHand(c.id, m_dm.humanSeat() ^ 1);
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndChild();
+            }
+            ImGui::TextDisabled("Added cards become playable at your next");
+            ImGui::TextDisabled("priority. (Breaks rewind determinism.)");
+        }
     }
 
     // ── Developer-only tools (hidden for release) ────────────────────────

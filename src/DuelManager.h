@@ -273,6 +273,12 @@ public:
     // on its own turn but DEFENDS on yours (see m_defensiveAI).
     bool startBoardBreak(const PuzzleSetup& board, const Deck& humanDeck);
 
+    // Testing-mode only: drop a card straight into a player's hand via the
+    // engine's Debug.AddCard, then refresh the field snapshot. Becomes
+    // actionable at the next idle evaluation. Returns false if not running or
+    // the script failed.
+    bool debugAddCardToHand(uint32_t code, int player);
+
     void endDuel();
 
     // Run the engine — returns false when duel ends
