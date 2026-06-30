@@ -21,7 +21,7 @@
     powershell -ExecutionPolicy Bypass -File tools\package_release.ps1 -Version 1.0.0
 #>
 param(
-    [string]$Version = "1.0.2",
+    [string]$Version = "1.0.3",
     [string]$Config  = "Release",
     # Card images (~300 MB, Konami IP) are NOT bundled by default — the app
     # downloads them on demand on first view. Pass this to ship them anyway.
@@ -58,6 +58,28 @@ Copy-Item $exePath (Join-Path $stageDir "YGONova.exe") -Force
 $exeDir = Split-Path -Parent $exePath
 Get-ChildItem -Path $exeDir -Filter *.dll -ErrorAction SilentlyContinue |
     ForEach-Object { Copy-Item $_.FullName $stageDir -Force }
+
+# 1b) Bundle the VC++ 2015-2022 runtime DLLs app-local (next to the exe) so the
+#     app starts on machines WITHOUT the redistributable installed. This is the
+#     #1 cause of "crashes on start" on a clean PC for an MD-CRT build. The api-
+#     ms-win-crt-* UCRT DLLs are a Windows 10+ component and need not be shipped.
+$crtDlls = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
+$redistDir = Get-ChildItem `
+    "C:\Program Files*\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" `
+    -Directory -ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -Last 1
+foreach ($d in $crtDlls) {
+    $src = $null
+    if ($redistDir) {
+        $p = Join-Path $redistDir.FullName $d
+        if (Test-Path $p) { $src = $p }
+    }
+    if (-not $src) {
+        $p = Join-Path $env:WINDIR "System32\$d"
+        if (Test-Path $p) { $src = $p }
+    }
+    if ($src) { Copy-Item $src $stageDir -Force; Write-Host "  bundled runtime $d" -ForegroundColor DarkGray }
+    else      { Write-Host "  WARN: could not find $d to bundle" -ForegroundColor Yellow }
+}
 
 # 2) Game assets (canonical source tree). Copy top-level entries selectively so
 #    the ~300 MB card-image folder is never even copied when excluded — far

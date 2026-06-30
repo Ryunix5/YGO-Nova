@@ -8,7 +8,7 @@
 ; exe, which a Program Files install would block.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.2"
+  #define MyAppVersion "1.0.3"
 #endif
 #define MyAppName "YGO Nova"
 #define MyAppExeName "YGONova.exe"
@@ -66,22 +66,6 @@ Name: "{autodesktop}\{#MyAppName}";      Filename: "{app}\{#MyAppExeName}"; Work
 [Run]
 Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
-[Code]
-// Warn (don't block) if the Visual C++ runtime is missing - the static-md
-// build needs it. We can't easily detect every install, so we probe for the
-// CRT DLL on the system path.
-function InitializeSetup(): Boolean;
-var
-  Dummy: String;
-begin
-  Result := True;
-  if not FileExists(ExpandConstant('{sys}\vcruntime140.dll')) then
-  begin
-    if MsgBox('YGO Nova needs the Microsoft Visual C++ 2015-2022 Redistributable (x64),'
-      + #13#10 + 'which does not appear to be installed.' + #13#10#13#10
-      + 'Install YGO Nova anyway? (Get the runtime from https://aka.ms/vs/17/release/vc_redist.x64.exe)',
-      mbConfirmation, MB_YESNO) = IDNO then
-      Result := False;
-    Dummy := '';
-  end;
-end;
+// The VC++ 2015-2022 runtime DLLs (msvcp140 / vcruntime140 / vcruntime140_1)
+// are bundled app-local next to the exe by package_release.ps1, so no system
+// redistributable is required and no pre-install check is needed.
