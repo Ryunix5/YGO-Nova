@@ -8,15 +8,37 @@
 #ifndef GL_CLAMP_TO_EDGE
 #  define GL_CLAMP_TO_EDGE 0x812F
 #endif
-// GL_GENERATE_MIPMAP (GL 1.4) auto-builds mipmaps on upload — no GL 3.0
-// glGenerateMipmap function pointer needed. Pairs with a trilinear MIN filter
-// so card art stays crisp (no aliasing/shimmer) when drawn smaller than native.
-#ifndef GL_GENERATE_MIPMAP
-#  define GL_GENERATE_MIPMAP 0x8191
-#endif
 #ifndef GL_LINEAR_MIPMAP_LINEAR
 #  define GL_LINEAR_MIPMAP_LINEAR 0x2703
 #endif
+// EXT_texture_filter_anisotropic — universally supported on desktop GL;
+// sharpens minified card art beyond what trilinear alone gives.
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#  define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#endif
+
+// The app runs a CORE-profile 3.3 context (Game.cpp), where the legacy
+// GL_GENERATE_MIPMAP texparameter was REMOVED — setting it is ignored, so
+// textures ended up with a mipmap MIN filter but no mip levels: incomplete
+// sampling and the "blurry / low quality" card art testers reported. Core
+// mipmaps must be built with glGenerateMipmap (GL 3.0+), which the 1.1
+// Windows headers don't declare — load it once via wglGetProcAddress.
+typedef void (APIENTRY* PFNGLGENERATEMIPMAPPROC)(GLenum target);
+static PFNGLGENERATEMIPMAPPROC glGenerateMipmapPtr() {
+#if defined(_WIN32)
+    static PFNGLGENERATEMIPMAPPROC fn = []() -> PFNGLGENERATEMIPMAPPROC {
+        void* p = (void*)wglGetProcAddress("glGenerateMipmap");
+        // wglGetProcAddress returns small sentinel values on failure.
+        if (p == nullptr || p == (void*)1 || p == (void*)2 ||
+            p == (void*)3 || p == (void*)-1)
+            return nullptr;
+        return (PFNGLGENERATEMIPMAPPROC)p;
+    }();
+    return fn;
+#else
+    return nullptr;
+#endif
+}
 #include <cstring>
 #include <cmath>
 #include <cstdio>
@@ -215,14 +237,22 @@ void* Renderer::loadTexture(const std::string& path) {
     GLuint texID;
     glGenTextures(1, &texID);
     glBindTexture(GL_TEXTURE_2D, texID);
-    // Auto-generate mipmaps (set BEFORE glTexImage2D) and filter trilinearly so
-    // downscaled card art reads crisp instead of aliased/blocky.
-    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    // Build real mip levels (core-profile way) and filter trilinearly +
+    // anisotropically so card art stays crisp at every draw size. Without
+    // glGenerateMipmap we must NOT use a mipmap MIN filter — the texture
+    // would be incomplete — so fall back to plain linear.
+    if (auto genMips = glGenerateMipmapPtr()) {
+        genMips(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                        GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4.0f);
+    } else {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    }
     stbi_image_free(data);
 
     return (void*)(uintptr_t)texID;
