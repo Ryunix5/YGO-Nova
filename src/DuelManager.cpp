@@ -69,6 +69,7 @@ bool DuelManager::startDuel(const Deck& p0deck, const Deck& p1deck,
     endDuel();
     m_field = {};   // clear stale board/turn/phase state from any prior duel
     m_defensiveAI = false;   // only board-break puzzles defend on the human turn
+    m_gauntletAI  = false;   // hand-trap gauntlet re-arms it after startDuel
 
     // Seed strategy:
     //   * If a replay forced a seed via setForcedSeed(), consume it once
@@ -268,6 +269,7 @@ bool DuelManager::startPuzzle(const PuzzleSetup& pz) {
     endDuel();
     m_field = {};
     m_defensiveAI = false;
+    m_gauntletAI  = false;
 
     uint64_t base = (uint64_t)std::chrono::high_resolution_clock::now()
                         .time_since_epoch().count();
@@ -2618,7 +2620,10 @@ bool DuelManager::autoRespondP2() {
         // Mirrorjade banishing itself). Waiting for a human monster also times
         // the negate to the player's real play instead of their first draw.
         bool humanHasThreat = !m_field.monsters[humanSeat].empty();
-        if (m_defensiveAI && !ownTurn && humanHasThreat &&
+        // Hand-trap gauntlet: the AI's disruptions are hand traps that answer
+        // CHAINS (searches, summons, effects), not board threats — the whole
+        // point is interrupting the combo early, so the threat gate is lifted.
+        if (m_defensiveAI && !ownTurn && (humanHasThreat || m_gauntletAI) &&
             !m_selection.cards.empty()) {
             for (int i = 0; i < (int)m_selection.cards.size(); ++i) {
                 uint32_t code = m_selection.cards[i].code;

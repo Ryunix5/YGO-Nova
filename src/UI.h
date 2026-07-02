@@ -326,6 +326,10 @@ private:
     int    m_setupHand      = 5;
     bool   m_setupNoShuffle = false;
     bool   m_setupPassiveAI = false;
+    // Hand-trap gauntlet: opponent opens with hand traps and fires them at
+    // the player's combo. Forces the player to take turn 1.
+    bool   m_setupGauntlet  = false;
+    bool   m_forceHumanFirstOnce = false;
     // Preset opponent decks (#6): assets/decks/presets/*.ydk.
     //   m_opponentPreset: -1 = off (use chosen P2 deck), 0 = random, >=1 = file.
     std::vector<std::string> m_presetFiles;   // filenames in presets/

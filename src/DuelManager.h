@@ -372,6 +372,14 @@ public:
     // Goldfish: the AI does nothing on its turn (just passes) so the human can
     // practise combos. It still answers forced/mandatory prompts.
     void setPassiveAI(bool b) { m_passiveAI = b; }
+    // Hand-trap gauntlet: the AI defends on the human's turn (like board-break)
+    // but with the "human must control a monster" gate lifted, so hand traps
+    // answer searches/summons mid-combo. Call AFTER startDuel (which resets it).
+    void setGauntletAI(bool b) {
+        m_gauntletAI = b;
+        m_defensiveAI = b;
+        m_aiDefenseDoneThisTurn.clear();
+    }
     bool passiveAI() const    { return m_passiveAI; }
     // Defensive AI: on the HUMAN's turn the opponent activates its board's
     // disruptions (negates / banishes) instead of always passing. Used by
@@ -574,6 +582,7 @@ private:
     bool                     m_noShuffle = false;   // DUEL_PSEUDO_SHUFFLE
     bool                     m_passiveAI = false;   // goldfish opponent
     bool                     m_defensiveAI = false; // defend on the human's turn
+    bool                     m_gauntletAI  = false; // hand-trap gauntlet mode
     std::vector<uint32_t>    m_aiDefenseDoneThisTurn;  // disruptions fired/turn
     // AI per-turn guard: which (card,effect) the offline AI already activated
     // this turn, so it never re-activates the same effect into an endless loop.

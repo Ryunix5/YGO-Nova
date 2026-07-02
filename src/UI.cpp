@@ -3016,6 +3016,9 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
         std::random_device rd;
         humanFirst = (rd() & 1u) == 0u;
     }
+    // One-shot override (hand-trap gauntlet: the player must take turn 1 so
+    // the AI's traps answer THEIR combo, not the other way round).
+    if (m_forceHumanFirstOnce) { humanFirst = true; m_forceHumanFirstOnce = false; }
     // Team 0 = first turn. Human owns the P1 deck regardless of order.
     const std::string& t0 = humanFirst ? p1Path : p2Path;
     const std::string& t1 = humanFirst ? p2Path : p1Path;
@@ -5328,6 +5331,12 @@ void UI::drawLobby(int w, int h) {
                         &m_setupPassiveAI);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("The opponent just passes, so you can practise combos");
+        ImGui::Checkbox("Hand-Trap Gauntlet — combo through disruption",
+                        &m_setupGauntlet);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("You go first; the opponent opens with a hand full of\n"
+                              "hand traps (Ash, Imperm, Droll...) and fires them at\n"
+                              "your plays. Can you still end on a board?");
         ImGui::Checkbox("Best of 3 match (with side decking)", &m_setupMatchMode);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Play a 3-game match; adjust your deck from your Side "
@@ -5353,9 +5362,34 @@ void UI::drawLobby(int w, int h) {
                           m_presetFiles[(size_t)m_opponentPreset - 1];
                 oppName = presetLabel(m_presetFiles[(size_t)m_opponentPreset - 1]);
             }
+            // Hand-Trap Gauntlet: opponent = a built-in wall of hand traps,
+            // diluted with vanillas so a 5-card hand holds ~3-5 live traps.
+            // The player is forced onto turn 1; the AI passes its own turns
+            // (passive) but fires traps on yours (gauntlet defensive AI).
+            if (m_setupGauntlet) {
+                Deck ht;
+                auto add = [&](uint32_t c, int n) {
+                    for (int i = 0; i < n; ++i) ht.main.push_back(c);
+                };
+                add(14558127, 3);   // Ash Blossom & Joyous Spring
+                add(10045474, 3);   // Infinite Impermanence
+                add(97268402, 3);   // Effect Veiler
+                add(59438930, 3);   // Ghost Ogre & Snow Rabbit
+                add(94145021, 3);   // Droll & Lock Bird
+                add(27204311, 1);   // Nibiru, the Primal Being
+                add(73642296, 2);   // Ghost Belle & Haunted Mansion
+                add(24508238, 2);   // D.D. Crow
+                add(55144522, 7);   // vanilla filler — dilutes the trap count
+                ht.name = "Hand-Trap Gauntlet";
+                const std::string tmp = "assets/decks/.gauntlet.ydk";
+                saveYdk(ht, tmp);
+                oppPath = tmp;
+                oppName = "Hand-Trap Gauntlet";
+                m_forceHumanFirstOnce = true;
+            }
             // Apply the custom options before the duel registers its engine.
             m_dm.setNoShuffle(m_setupNoShuffle);
-            m_dm.setPassiveAI(m_setupPassiveAI);
+            m_dm.setPassiveAI(m_setupPassiveAI || m_setupGauntlet);
             // Deck-legality heads-up (#E) — non-blocking so casual/test decks
             // still play, but the player is told why a deck is non-tournament.
             {
@@ -5364,8 +5398,9 @@ void UI::drawLobby(int w, int h) {
                     pushToast("Heads up — your deck isn't legal: " + issue,
                               IM_COL32(235, 185, 60, 255), 4.0);
             }
-            // Best-of-3: store the decks and run a match; otherwise a single duel.
-            m_matchActive = m_setupMatchMode;
+            // Best-of-3: store the decks and run a match; otherwise a single
+            // duel. Gauntlet is a single-duel drill — it bypasses match mode.
+            m_matchActive = m_setupMatchMode && !m_setupGauntlet;
             bool ok;
             if (m_matchActive) {
                 m_matchWins[0] = m_matchWins[1] = 0;
@@ -5384,6 +5419,12 @@ void UI::drawLobby(int w, int h) {
                                                   (uint32_t)m_setupHand, 1);
             }
             if (ok) {
+                // Gauntlet AI must be armed AFTER startDuel (which resets it).
+                if (m_setupGauntlet) {
+                    m_dm.setGauntletAI(true);
+                    pushToast("Gauntlet: combo through the hand traps!",
+                              IM_COL32(255, 150, 90, 255), 3.2);
+                }
                 m_screen = Screen::Duel;
                 gAudio().play("duel_start");
                 if (!oppName.empty())
