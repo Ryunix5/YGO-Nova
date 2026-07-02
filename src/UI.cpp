@@ -4377,11 +4377,22 @@ void UI::drawLobby(int w, int h) {
 
     // ── Left vertical navigation: DUEL / DECK / QUIT ────────────────────────
     {
+        // Spread the nav over the space between the active-deck card and the
+        // status panel instead of cramming 8 rows into a fixed 430px window
+        // (which scrolled/looked compacted). Row height + gaps derive from the
+        // window height so the menu breathes on any resolution.
         const float NAV_X = 48.f;
-        const float NAV_Y = H * 0.26f;
-        const float NAV_W = 300.f;
+        const float NAV_Y = std::max(200.f, H * 0.24f);
+        const float NAV_W = 340.f;
+        const float navBottom = H - 170.f;           // clear of SYSTEM STATUS
+        const int   kNavItems = 8;
+        const float navAvail = std::max(400.f, navBottom - NAV_Y);
+        float itemH = std::clamp(navAvail / kNavItems - 6.f, 50.f, 86.f);
+        float navGap = std::clamp(
+            (navAvail - itemH * kNavItems) / (kNavItems - 1), 4.f, 14.f);
         ImGui::SetNextWindowPos({NAV_X, NAV_Y});
-        ImGui::SetNextWindowSize({NAV_W, 430.f});
+        ImGui::SetNextWindowSize({NAV_W,
+            (itemH + navGap) * kNavItems + 8.f});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
@@ -4394,7 +4405,7 @@ void UI::drawLobby(int w, int h) {
         auto navItem = [&](const char* label, const char* subtitle,
                            bool primary) -> bool {
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImVec2 sz  = {NAV_W, subtitle ? 68.f : 54.f};
+            ImVec2 sz  = {NAV_W, itemH};
             ImGui::InvisibleButton(label, sz);
             bool hov = ImGui::IsItemHovered();
             bool clk = ImGui::IsItemClicked();
@@ -4413,21 +4424,23 @@ void UI::drawLobby(int w, int h) {
             ImU32 barCol = (primary || hov) ? C.accentHi
                                             : IM_COL32(96, 40, 46, 210);
             dl->AddRectFilled(
-                {pos.x, pos.y + 9.f},
-                {pos.x + 4.f, pos.y + sz.y - 9.f}, barCol, 2.f);
-            // Label.
+                {pos.x, pos.y + 10.f},
+                {pos.x + 4.f, pos.y + sz.y - 10.f}, barCol, 2.f);
+            // Label + subtitle, positioned proportionally so any row height
+            // keeps the pair vertically balanced.
             if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
             ImU32 textCol = (primary || hov) ? C.textHi : C.textMd;
-            dl->AddText({pos.x + 20.f, pos.y + (subtitle ? 10.f : 16.f)},
+            dl->AddText({pos.x + 22.f,
+                         pos.y + itemH * (subtitle ? 0.16f : 0.30f)},
                         textCol, label);
             if (UIStyle::fHeader) ImGui::PopFont();
-            // Subtitle.
             if (subtitle) {
                 UIStyle::PushFont(UIStyle::fSmall);
-                dl->AddText({pos.x + 20.f, pos.y + 36.f},
+                dl->AddText({pos.x + 22.f, pos.y + itemH * 0.58f},
                             hov ? C.textLo : C.textMuted, subtitle);
                 UIStyle::PopFont();
             }
+            ImGui::Dummy({1.f, navGap});   // breathing room between rows
             return clk;
         };
         // Primary entry point — the live online lobby. Jumps straight to the

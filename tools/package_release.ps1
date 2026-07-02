@@ -83,7 +83,8 @@ foreach ($d in $crtDlls) {
 
 # 2) Game assets (canonical source tree). Copy top-level entries selectively so
 #    the ~300 MB card-image folder is never even copied when excluded — far
-#    faster than copy-everything-then-delete.
+#    faster than copy-everything-then-delete. PERSONAL data (the developer's
+#    own decks, settings, match history, tags, custom sleeves) must never ship.
 $assetsSrc = Join-Path $root "assets"
 $assetsDst = Join-Path $stageDir "assets"
 New-Item -ItemType Directory -Path $assetsDst -Force | Out-Null
@@ -96,6 +97,42 @@ Get-ChildItem -Path $assetsSrc -Force | ForEach-Object {
     # Dev script backups are not part of a release.
     if ($_.PSIsContainer -and $_.Name -like "scripts_backup_*") {
         Write-Host "  excluded $($_.Name) (dev backup)" -ForegroundColor DarkGray
+        return
+    }
+    # Decks: ship ONLY the bundled AI presets — the developer's personal
+    # decks (and dot-temp decks like .gauntlet.ydk) are private.
+    if ($_.PSIsContainer -and $_.Name -eq "decks") {
+        $dst = Join-Path $assetsDst "decks"
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        $presets = Join-Path $_.FullName "presets"
+        if (Test-Path $presets) { Copy-Item $presets $dst -Recurse -Force }
+        Write-Host "  decks: shipped presets only (personal decks excluded)" -ForegroundColor DarkGray
+        return
+    }
+    # Config: ship ONLY strings.conf (engine data). settings.cfg, favorites,
+    # per-deck sleeve maps etc. are the developer's personal state.
+    if ($_.PSIsContainer -and $_.Name -eq "config") {
+        $dst = Join-Path $assetsDst "config"
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        $sc = Join-Path $_.FullName "strings.conf"
+        if (Test-Path $sc) { Copy-Item $sc $dst -Force }
+        Write-Host "  config: shipped strings.conf only (settings excluded)" -ForegroundColor DarkGray
+        return
+    }
+    # Sleeves: ship only the built-in "classic" sleeves; custom (possibly
+    # copyrighted anime) sleeves stay local.
+    if ($_.PSIsContainer -and $_.Name -eq "sleeves") {
+        $dst = Join-Path $assetsDst "sleeves"
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        Get-ChildItem $_.FullName -File | Where-Object { $_.Name -like "*classic*" } |
+            ForEach-Object { Copy-Item $_.FullName $dst -Force }
+        Write-Host "  sleeves: shipped classic sleeves only" -ForegroundColor DarkGray
+        return
+    }
+    # Personal progress/preference files at the assets root.
+    if (-not $_.PSIsContainer -and
+        ($_.Name -eq "match_history.txt" -or $_.Name -eq "card_tags.txt")) {
+        Write-Host "  excluded $($_.Name) (personal data)" -ForegroundColor DarkGray
         return
     }
     Copy-Item $_.FullName -Destination $assetsDst -Recurse -Force
