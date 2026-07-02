@@ -4375,79 +4375,104 @@ void UI::drawLobby(int w, int h) {
         ImGui::PopStyleColor(2);
     }
 
-    // ── Left vertical navigation: DUEL / DECK / QUIT ────────────────────────
+    // ── Mode tiles — four large glass cards along the lower centre ──────────
+    // Modern console-style menu: the primary modes are big clickable tiles
+    // (hover = lift + glow), secondary actions live in a slim pill strip
+    // below. The cinematic backdrop stays fully visible behind them.
     {
-        // Spread the nav over the space between the active-deck card and the
-        // status panel instead of cramming 8 rows into a fixed 430px window
-        // (which scrolled/looked compacted). Row height + gaps derive from the
-        // window height so the menu breathes on any resolution.
-        const float NAV_X = 48.f;
-        const float NAV_Y = std::max(200.f, H * 0.24f);
-        const float NAV_W = 340.f;
-        const float navBottom = H - 170.f;           // clear of SYSTEM STATUS
-        const int   kNavItems = 8;
-        const float navAvail = std::max(400.f, navBottom - NAV_Y);
-        float itemH = std::clamp(navAvail / kNavItems - 6.f, 50.f, 86.f);
-        float navGap = std::clamp(
-            (navAvail - itemH * kNavItems) / (kNavItems - 1), 4.f, 14.f);
-        ImGui::SetNextWindowPos({NAV_X, NAV_Y});
-        ImGui::SetNextWindowSize({NAV_W,
-            (itemH + navGap) * kNavItems + 8.f});
+        const int   kTiles = 4;
+        const float gap    = 18.f;
+        float tileW = std::clamp((W - 220.f - (kTiles - 1) * gap) / kTiles,
+                                 170.f, 250.f);
+        float tileH = tileW * 0.80f;
+        float rowW  = kTiles * tileW + (kTiles - 1) * gap;
+        float rowX  = (W - rowW) * 0.5f;
+        float rowY  = H - tileH - 168.f;
+        // Window over-sized a little so the hover lift + glow aren't clipped.
+        ImGui::SetNextWindowPos({rowX - 10.f, rowY - 14.f});
+        ImGui::SetNextWindowSize({rowW + 20.f, tileH + 24.f});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    ImVec2{0.f, 0.f});
-        ImGui::Begin("##lobby_nav", nullptr,
+        ImGui::Begin("##lobby_tiles", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground |
             ImGuiWindowFlags_NoSavedSettings);
-        // Custom nav row: gold accent bar + large label + subtitle.
-        auto navItem = [&](const char* label, const char* subtitle,
-                           bool primary) -> bool {
+        ImDrawList* tdl = ImGui::GetWindowDrawList();
+        ImGui::SetCursorScreenPos({rowX, rowY});
+
+        // Small procedural emblems so tiles read at a glance without assets.
+        auto emblem = [&](int id, ImVec2 c, float s, ImU32 col) {
+            switch (id) {
+                case 0:   // globe — online duel
+                    tdl->AddCircle(c, s, col, 32, 2.f);
+                    tdl->AddLine({c.x - s, c.y}, {c.x + s, c.y}, col, 1.6f);
+                    tdl->AddCircle(c, s * 0.45f, col, 24, 1.6f);
+                    break;
+                case 1: { // crossed swords — solo practice
+                    tdl->AddLine({c.x - s, c.y - s}, {c.x + s, c.y + s}, col, 2.2f);
+                    tdl->AddLine({c.x + s, c.y - s}, {c.x - s, c.y + s}, col, 2.2f);
+                    float g = s * 0.45f;
+                    tdl->AddLine({c.x - g - 4, c.y + g - 4}, {c.x - g + 4, c.y + g + 4}, col, 2.f);
+                    tdl->AddLine({c.x + g - 4, c.y + g + 4}, {c.x + g + 4, c.y + g - 4}, col, 2.f);
+                    break;
+                }
+                case 2:   // puzzle piece
+                    tdl->AddRect({c.x - s * 0.8f, c.y - s * 0.55f},
+                                 {c.x + s * 0.8f, c.y + s * 0.75f}, col,
+                                 3.f, 0, 2.f);
+                    tdl->AddCircle({c.x, c.y - s * 0.55f}, s * 0.32f, col, 20, 2.f);
+                    break;
+                default:  // fanned cards — deck builder
+                    tdl->AddRect({c.x - s * 0.95f, c.y - s * 0.45f},
+                                 {c.x + s * 0.15f, c.y + s * 0.85f}, col, 2.f, 0, 1.6f);
+                    tdl->AddRect({c.x - s * 0.55f, c.y - s * 0.65f},
+                                 {c.x + s * 0.55f, c.y + s * 0.65f}, col, 2.f, 0, 1.8f);
+                    tdl->AddRect({c.x - s * 0.15f, c.y - s * 0.85f},
+                                 {c.x + s * 0.95f, c.y + s * 0.45f}, col, 2.f, 0, 2.f);
+                    break;
+            }
+        };
+
+        auto tile = [&](const char* title, const char* sub, int iconId,
+                        bool primary) -> bool {
             ImVec2 pos = ImGui::GetCursorScreenPos();
-            ImVec2 sz  = {NAV_W, itemH};
-            ImGui::InvisibleButton(label, sz);
+            ImGui::InvisibleButton(title, {tileW, tileH});
             bool hov = ImGui::IsItemHovered();
             bool clk = ImGui::IsItemClicked();
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImVec2 br = {pos.x + sz.x, pos.y + sz.y};
-            // Hover background pill — a soft crimson wash + left-edge fade so
-            // the row reads as selected without a boxy outline.
-            if (hov) {
-                dl->AddRectFilledMultiColor(pos, br,
-                    (C.accent & 0x00FFFFFF) | 0x2A000000,
-                    (C.accent & 0x00FFFFFF) | 0x06000000,
-                    (C.accent & 0x00FFFFFF) | 0x06000000,
-                    (C.accent & 0x00FFFFFF) | 0x2A000000);
-            }
-            // Left accent bar — bright crimson on primary/hover, deep red idle.
-            ImU32 barCol = (primary || hov) ? C.accentHi
-                                            : IM_COL32(96, 40, 46, 210);
-            dl->AddRectFilled(
-                {pos.x, pos.y + 10.f},
-                {pos.x + 4.f, pos.y + sz.y - 10.f}, barCol, 2.f);
-            // Label + subtitle, positioned proportionally so any row height
-            // keeps the pair vertically balanced.
+            float lift = hov ? 6.f : 0.f;
+            ImVec2 a{pos.x, pos.y - lift};
+            ImVec2 b{pos.x + tileW, pos.y + tileH - lift};
+            if (hov || primary)
+                UIStyle::DrawGlow(tdl, a, b,
+                    (C.accent & 0x00FFFFFF) | (hov ? 0x30000000 : 0x14000000),
+                    UIStyle::M().radL, hov ? 3 : 2);
+            UIStyle::DrawGlassPanel(tdl, a, b, UIStyle::M().radL,
+                hov ? IM_COL32(40, 20, 24, 240) : IM_COL32(26, 14, 17, 226));
+            // Accent strip along the top edge — the tile's "lit" cue.
+            tdl->AddRectFilled({a.x + 12.f, a.y}, {b.x - 12.f, a.y + 3.f},
+                (hov || primary) ? C.accentHi
+                                 : (C.accent & 0x00FFFFFF) | 0x88000000, 2.f);
+            emblem(iconId, {(a.x + b.x) * 0.5f, a.y + tileH * 0.30f},
+                   tileW * 0.13f, hov ? C.accentHi : C.accent);
             if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-            ImU32 textCol = (primary || hov) ? C.textHi : C.textMd;
-            dl->AddText({pos.x + 22.f,
-                         pos.y + itemH * (subtitle ? 0.16f : 0.30f)},
-                        textCol, label);
+            ImVec2 ts = ImGui::CalcTextSize(title);
+            tdl->AddText({(a.x + b.x - ts.x) * 0.5f, a.y + tileH * 0.56f},
+                         hov ? C.textHi : C.textMd, title);
             if (UIStyle::fHeader) ImGui::PopFont();
-            if (subtitle) {
-                UIStyle::PushFont(UIStyle::fSmall);
-                dl->AddText({pos.x + 22.f, pos.y + itemH * 0.58f},
-                            hov ? C.textLo : C.textMuted, subtitle);
-                UIStyle::PopFont();
-            }
-            ImGui::Dummy({1.f, navGap});   // breathing room between rows
+            UIStyle::PushFont(UIStyle::fSmall);
+            ImVec2 ss = ImGui::CalcTextSize(sub);
+            tdl->AddText({(a.x + b.x - ss.x) * 0.5f, a.y + tileH * 0.76f},
+                         hov ? C.textLo : C.textMuted, sub);
+            UIStyle::PopFont();
+            ImGui::SameLine(0.f, gap);
+            if (clk) gAudio().play("click");
             return clk;
         };
-        // Primary entry point — the live online lobby. Jumps straight to the
-        // Multiplayer screen with the Online (relay) tab active and forces an
-        // immediate room-list refresh so the list is warm on arrival.
-        if (navItem("ONLINE ROOMS", "Browse and join live online rooms", true)) {
-            gAudio().play("click");
+
+        // Primary entry point — the live online lobby (relay tab, warm list).
+        if (tile("DUEL", "Online rooms & matches", 0, true)) {
             strncpy(m_mpNameBuf, m_settings.mpDisplayName.c_str(),
                     sizeof(m_mpNameBuf) - 1);
             m_mpNameBuf[sizeof(m_mpNameBuf) - 1] = '\0';
@@ -4458,17 +4483,37 @@ void UI::drawLobby(int w, int h) {
             m_lobbyNextRefreshAt = 0.0;   // refresh the lobby immediately
             m_screen             = Screen::Multiplayer;
         }
-        // Single-player practice duel (the offline duel we have).
-        if (navItem("TESTING", "Single-player practice duel", false)) {
-            gAudio().play("click");
+        if (tile("SOLO", "Practice vs the AI", 1, false))
             m_duelSetupOpen = true;
+        if (tile("PUZZLES", "Break the boss boards", 2, false)) {
+            if (m_puzzles.empty()) loadPuzzles();
+            m_puzzleBrowserOpen = true;
         }
-        if (navItem("DECK BUILDER", "Build and edit your decks", false)) {
-            gAudio().play("click");
+        if (tile("DECKS", "Build and edit decks", 3, false)) {
             refreshDeckFiles();
             m_screen = Screen::DeckBuilder;
         }
-        if (navItem("REPLAYS", "Browse and play back saved matches", false)) {
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
+    }
+
+    // ── Secondary strip — slim pills centred under the tiles ────────────────
+    {
+        const float kPillH = 30.f;
+        const float pw[] = {104.f, 132.f, 140.f, 76.f};
+        float totalW = pw[0] + pw[1] + pw[2] + pw[3] + 3 * 8.f;
+        ImGui::SetNextWindowPos({(W - totalW) * 0.5f, H - 120.f});
+        ImGui::SetNextWindowSize({totalW + 8.f, kPillH + 10.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    ImVec2{0.f, 0.f});
+        ImGui::Begin("##lobby_secondary", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_NoSavedSettings);
+        if (UIStyle::GhostButton("Replays", {pw[0], kPillH})) {
             gAudio().play("click");
             m_replayFiles = edo::Replay::list();
             m_selectedReplay = m_replayFiles.empty() ? -1 : 0;
@@ -4477,37 +4522,13 @@ void UI::drawLobby(int w, int h) {
                 m_viewerReplayValid = m_viewerReplay.load(m_replayFiles[0]);
             m_screen = Screen::Replays;
         }
-        if (navItem("PUZZLES", "Go second and break a preset boss board", false)) {
-            gAudio().play("click");
-            if (m_puzzles.empty()) loadPuzzles();
-            m_puzzleBrowserOpen = true;
-        }
-        // Win/loss record + current streak from match history (#D).
-        std::string histSub = "Win/loss record and stats";
-        if (!m_matchHistory.empty()) {
-            int wins = 0, losses = 0;
-            for (auto& r : m_matchHistory) {
-                if (r.result == 'W') wins++; else if (r.result == 'L') losses++;
-            }
-            char last = m_matchHistory.back().result;
-            int streak = 0;
-            for (auto it = m_matchHistory.rbegin();
-                 it != m_matchHistory.rend() && it->result == last; ++it)
-                streak++;
-            char sb[80];
-            if (last == 'W' || last == 'L')
-                snprintf(sb, sizeof(sb), "%d W - %d L   ·   %d %s streak",
-                         wins, losses, streak, last == 'W' ? "win" : "loss");
-            else
-                snprintf(sb, sizeof(sb), "%d W - %d L", wins, losses);
-            histSub = sb;
-        }
-        if (navItem("MATCH HISTORY", histSub.c_str(), false)) {
+        ImGui::SameLine(0.f, 8.f);
+        if (UIStyle::GhostButton("Match History", {pw[1], kPillH})) {
             gAudio().play("click");
             m_historyOpen = true;
         }
-        if (navItem("LAN MULTIPLAYER", "Direct match on your local network",
-                    false)) {
+        ImGui::SameLine(0.f, 8.f);
+        if (UIStyle::GhostButton("LAN Multiplayer", {pw[2], kPillH})) {
             gAudio().play("click");
             strncpy(m_mpNameBuf, m_settings.mpDisplayName.c_str(),
                     sizeof(m_mpNameBuf) - 1);
@@ -4517,7 +4538,8 @@ void UI::drawLobby(int w, int h) {
             m_mpTransport = 0;     // LAN (direct) tab
             m_screen = Screen::Multiplayer;
         }
-        if (navItem("QUIT", "Exit the application", false)) {
+        ImGui::SameLine(0.f, 8.f);
+        if (UIStyle::GhostButton("Quit", {pw[3], kPillH})) {
             gAudio().play("cancel");
             ImGui::End();
             ImGui::PopStyleVar(2);
