@@ -348,6 +348,10 @@ private:
     // Queue all of a deck's card art for background download up front, so the
     // field/builder don't pop in card-by-card on first view.
     void   prefetchDeckArt(const Deck& d);
+    // Download any missing card scripts for these decks before the duel
+    // starts (blocking, but a no-op unless the deck holds cards newer than
+    // the installed script collection).
+    void   ensureDeckScripts(const Deck& a, const Deck& b);
 
     // Testing mode
     bool   m_testingMode = false;

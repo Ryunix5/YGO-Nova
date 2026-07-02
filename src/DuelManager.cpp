@@ -3061,6 +3061,26 @@ std::string DuelManager::findCardScript(uint32_t code) {
     return std::string();
 }
 
+std::vector<uint32_t> DuelManager::missingScriptCodes(const Deck& deck) const {
+    std::vector<uint32_t> seen, out;
+    auto check = [&](uint32_t code) {
+        for (uint32_t s : seen) if (s == code) return;
+        seen.push_back(code);
+        if (!findCardScript(code).empty()) return;
+        uint32_t alias = m_db.getCard(code).alias;
+        if (alias && alias != code && !findCardScript(alias).empty()) return;
+        // Fetch the canonical (alias-base) script — that's the file ocgcore
+        // actually loads effects from for aliased reprints.
+        uint32_t canonical = (alias && alias != code) ? alias : code;
+        for (uint32_t o : out) if (o == canonical) return;
+        out.push_back(canonical);
+    };
+    for (uint32_t c : deck.main)  check(c);
+    for (uint32_t c : deck.extra) check(c);
+    for (uint32_t c : deck.side)  check(c);
+    return out;
+}
+
 // Duel-start audit: list every distinct deck card whose script is missing.
 // This surfaces a script-collection that is out of date relative to cards.cdb
 // BEFORE the duel, instead of waiting for a silent no-effect card mid-game.

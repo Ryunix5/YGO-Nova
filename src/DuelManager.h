@@ -279,6 +279,11 @@ public:
     // the script failed.
     bool debugAddCardToHand(uint32_t code, int player);
 
+    // Distinct deck cards (main/extra/side) whose Lua script is missing from
+    // every local script folder — alias-aware, returning the CANONICAL code
+    // (the alias base) whose c<code>.lua the on-demand fetcher should pull.
+    std::vector<uint32_t> missingScriptCodes(const Deck& deck) const;
+
     void endDuel();
 
     // Run the engine — returns false when duel ends

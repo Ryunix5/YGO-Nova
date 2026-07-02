@@ -104,6 +104,10 @@ struct Settings {
     // assets/cards/. On by default so online releases (shipped without the ~9k
     // images) still show art; turn off for fully offline / local-only use.
     bool   downloadCardImages = true;
+    // Download missing card SCRIPTS on demand at duel start (a few KB per new
+    // card, from the ProjectIgnis CardScripts repo). Cards newer than this
+    // install get real effects without waiting for an app update.
+    bool   downloadScripts    = true;
     // Check GitHub for a newer release on launch (notice only — never auto-
     // installs). No-op unless EDOPRO_UPDATE_REPO was set at build time.
     bool   checkForUpdates    = true;
@@ -254,6 +258,7 @@ struct Settings {
         f << "clickFirstHints="   << (clickFirstHints   ? "1" : "0") << "\n";
         f << "coinTossEnabled="   << (coinTossEnabled   ? "1" : "0") << "\n";
         f << "downloadCardImages="<< (downloadCardImages? "1" : "0") << "\n";
+        f << "downloadScripts="   << (downloadScripts   ? "1" : "0") << "\n";
         f << "checkForUpdates="    << (checkForUpdates    ? "1" : "0") << "\n";
         f << "discordPresence="    << (discordPresence    ? "1" : "0") << "\n";
         f << "discordClientId="    << discordClientId                  << "\n";
@@ -329,6 +334,7 @@ private:
         else if (k == "clickFirstHints")   clickFirstHints   = boolFromStr(v);
         else if (k == "coinTossEnabled")   coinTossEnabled   = boolFromStr(v);
         else if (k == "downloadCardImages")downloadCardImages= boolFromStr(v);
+        else if (k == "downloadScripts")   downloadScripts   = boolFromStr(v);
         else if (k == "checkForUpdates")   checkForUpdates    = boolFromStr(v);
         else if (k == "discordPresence")   discordPresence    = boolFromStr(v);
         else if (k == "discordClientId")   discordClientId    = v;

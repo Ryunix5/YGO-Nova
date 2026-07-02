@@ -1,0 +1,6 @@
+YGO: Nova crash report
+version : 1.0.3
+reason  : unhandled SEH exception
+code    : 0xC0000005
+address : 00007FF7E6FEF064
+windows : 6.2 build 9200

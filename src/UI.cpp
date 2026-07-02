@@ -7,6 +7,7 @@
 #include "UIStyle.h"
 #include "AudioManager.h"
 #include "DiscordRPC.h"
+#include "ScriptFetcher.h"
 #include "Version.h"
 #include "imgui.h"
 #include <filesystem>
@@ -3030,6 +3031,7 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
     Deck d1 = loadYdk(t1);
     prefetchDeckArt(d0);    // warm the art cache so the field doesn't pop in
     prefetchDeckArt(d1);
+    ensureDeckScripts(d0, d1);    // fetch scripts for cards newer than install
     applySleeveForDeck(p1Path);   // per-deck sleeve override (yours)
     m_puzzleMode = false;   // a normal practice duel is not a puzzle
     m_dm.setHumanSeat(humanSeat);
@@ -5288,6 +5290,11 @@ void UI::drawLobby(int w, int h) {
             m_rend.setImageDownload(m_settings.downloadCardImages);
             saveSettings();
         }
+        savedToggle("Download missing card scripts at duel start",
+                    &m_settings.downloadScripts);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Cards newer than this install get their effects\n"
+                              "fetched automatically (a few KB per card).");
         if (ImGui::Checkbox("Check for updates on launch",
                             &m_settings.checkForUpdates)) {
             m_update.setEnabled(m_settings.checkForUpdates);
@@ -13025,6 +13032,26 @@ void UI::prefetchDeckArt(const Deck& d) {
     for (uint32_t c : d.main)  m_rend.prefetchCard(c);
     for (uint32_t c : d.extra) m_rend.prefetchCard(c);
     for (uint32_t c : d.side)  m_rend.prefetchCard(c);
+}
+
+void UI::ensureDeckScripts(const Deck& a, const Deck& b) {
+    if (!m_settings.downloadScripts) return;
+    std::vector<uint32_t> miss = m_dm.missingScriptCodes(a);
+    for (uint32_t c : m_dm.missingScriptCodes(b)) {
+        bool dup = false;
+        for (uint32_t s : miss) if (s == c) { dup = true; break; }
+        if (!dup) miss.push_back(c);
+    }
+    if (miss.empty()) return;
+    int got = edo::fetchCardScripts(miss);
+    m_dm.logEvent("[scripts] on-demand fetch: " + std::to_string(got) + "/" +
+                  std::to_string(miss.size()) + " missing script(s) downloaded");
+    if (got > 0)
+        pushToast("Downloaded " + std::to_string(got) + " new card script" +
+                  (got == 1 ? "" : "s"), IM_COL32(110, 220, 140, 255), 2.6);
+    else
+        pushToast("Some cards have no script yet — they'll play as vanilla",
+                  IM_COL32(235, 185, 60, 255), 3.0);
 }
 
 void UI::loadPresetDecks() {

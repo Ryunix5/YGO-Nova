@@ -61,6 +61,7 @@ set(GAME_SOURCES
     src/UpdateChecker.cpp
     src/CrashHandler.cpp
     src/DiscordRPC.cpp
+    src/ScriptFetcher.cpp
 )
 
 # ─── Executable ───────────────────────────────────────────────────────────────
