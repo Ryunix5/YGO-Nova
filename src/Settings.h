@@ -106,6 +106,10 @@ struct Settings {
     // Check GitHub for a newer release on launch (notice only — never auto-
     // installs). No-op unless EDOPRO_UPDATE_REPO was set at build time.
     bool   checkForUpdates    = true;
+    // Discord Rich Presence: shows "Playing YGO: Nova — <activity>" on the
+    // player's profile. Needs a (free) Discord Application ID; empty = off.
+    bool        discordPresence = true;
+    std::string discordClientId = "";
     // Fast turns: drop the cosmetic per-phase pause (offline) so duels move
     // quickly. Zero-option response windows already auto-pass in the engine, so
     // this never skips a real decision — purely timing. Toggle in-duel too.
@@ -248,6 +252,8 @@ struct Settings {
         f << "coinTossEnabled="   << (coinTossEnabled   ? "1" : "0") << "\n";
         f << "downloadCardImages="<< (downloadCardImages? "1" : "0") << "\n";
         f << "checkForUpdates="    << (checkForUpdates    ? "1" : "0") << "\n";
+        f << "discordPresence="    << (discordPresence    ? "1" : "0") << "\n";
+        f << "discordClientId="    << discordClientId                  << "\n";
         f << "fastTurns="          << (fastTurns          ? "1" : "0") << "\n";
         f << "\n# Replays\n";
         f << "autoSaveReplays="   << (autoSaveReplays   ? "1" : "0") << "\n";
@@ -319,6 +325,8 @@ private:
         else if (k == "coinTossEnabled")   coinTossEnabled   = boolFromStr(v);
         else if (k == "downloadCardImages")downloadCardImages= boolFromStr(v);
         else if (k == "checkForUpdates")   checkForUpdates    = boolFromStr(v);
+        else if (k == "discordPresence")   discordPresence    = boolFromStr(v);
+        else if (k == "discordClientId")   discordClientId    = v;
         else if (k == "fastTurns")         fastTurns          = boolFromStr(v);
         else if (k == "autoSaveReplays")   autoSaveReplays   = boolFromStr(v);
         else if (k == "mpDisplayName")     mpDisplayName     = v;

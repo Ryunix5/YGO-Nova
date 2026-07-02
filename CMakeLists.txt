@@ -59,6 +59,8 @@ set(GAME_SOURCES
     src/NetSession.cpp
     src/ImageFetcher.cpp
     src/UpdateChecker.cpp
+    src/CrashHandler.cpp
+    src/DiscordRPC.cpp
 )
 
 # ─── Executable ───────────────────────────────────────────────────────────────

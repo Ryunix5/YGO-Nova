@@ -2,6 +2,7 @@
 #include "AssetPaths.h"
 #include "UIStyle.h"
 #include "AudioManager.h"
+#include "DiscordRPC.h"
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_opengl3.h"
@@ -398,6 +399,7 @@ void Game::shutdown() {
     // something via in-line UI but never opened the Settings popup. The
     // popup itself also saves on every change.
     if (m_ui) m_ui->saveSettings();
+    discordrpc::shutdown();
     delete m_ui;   m_ui   = nullptr;
     delete m_duel; m_duel = nullptr;
 

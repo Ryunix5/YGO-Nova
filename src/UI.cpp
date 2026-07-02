@@ -6,6 +6,7 @@
 #include "UI.h"
 #include "UIStyle.h"
 #include "AudioManager.h"
+#include "DiscordRPC.h"
 #include "Version.h"
 #include "imgui.h"
 #include <filesystem>
@@ -3551,13 +3552,42 @@ bool UI::draw(int winW, int winH) {
     // means drawDuel sees the freshest selection state.
     pumpMultiplayer();
 
-    // Background music: loop it on the menus, silence it during a live duel so
-    // the duel SFX have the stage. Cheap idempotent toggle by screen.
+    // Background music, per context. Menus play a track from assets/music/menu/
+    // (fallback: the legacy assets/sfx/main menu loop.wav); duels play a random
+    // track from assets/music/duel/ — drop .wav files in those folders and they
+    // just work. No duel tracks = silent duels (SFX get the stage), as before.
     {
-        bool wantMusic = (m_screen != Screen::Duel);
-        if (wantMusic) {
-            if (gAudio().musicLoaded() && !gAudio().musicPlaying())
-                gAudio().playMusic();
+        bool inDuel = (m_screen == Screen::Duel);
+        static int s_prevCat = -1;                 // 0 = menus, 1 = duel
+        int cat = inDuel ? 1 : 0;
+        if (cat != s_prevCat) {
+            s_prevCat = cat;
+            namespace fs = std::filesystem;
+            auto pick = [&](const char* dir) -> std::string {
+                std::vector<std::string> tracks;
+                std::error_code ec;
+                if (fs::is_directory(dir, ec))
+                    for (auto& e : fs::directory_iterator(dir, ec)) {
+                        std::string ext = e.path().extension().string();
+                        for (char& c : ext) c = (char)tolower((unsigned char)c);
+                        if (ext == ".wav") tracks.push_back(e.path().string());
+                    }
+                if (tracks.empty()) return {};
+                std::random_device rd;
+                return tracks[rd() % tracks.size()];
+            };
+            std::string want = inDuel ? pick("assets/music/duel")
+                                      : pick("assets/music/menu");
+            if (!inDuel && want.empty())
+                want = "assets/sfx/main menu loop.wav";  // legacy fallback
+            if (want != m_musicPath) {
+                gAudio().stopMusic();
+                if (!want.empty()) gAudio().loadMusic(want);
+                m_musicPath = want;
+            }
+        }
+        if (!m_musicPath.empty() && gAudio().musicLoaded()) {
+            if (!gAudio().musicPlaying()) gAudio().playMusic();
         } else if (gAudio().musicPlaying()) {
             gAudio().stopMusic();
         }
@@ -3624,6 +3654,41 @@ bool UI::draw(int winW, int winH) {
             ImGui::PopStyleColor();
         }
     }
+    // Discord Rich Presence — throttled to one update per 5s; the RPC layer
+    // no-ops (with backoff) when Discord isn't running or no app id is set.
+    if (m_settings.discordPresence && !m_settings.discordClientId.empty()) {
+        static double s_nextRp = 0.0;
+        double now = ImGui::GetTime();
+        if (now >= s_nextRp) {
+            s_nextRp = now + 5.0;
+            char details[64];
+            const char* state = "YGO: Nova";
+            switch (m_screen) {
+                case Screen::Duel:
+                    snprintf(details, sizeof(details), "Dueling — turn %d",
+                             m_dm.field().turnCount);
+                    state = m_puzzleMode ? "Board-break puzzle"
+                          : !m_net.isOffline() ? "Online match"
+                          : "Practice duel";
+                    break;
+                case Screen::DeckBuilder:
+                    snprintf(details, sizeof(details), "Building a deck");
+                    break;
+                case Screen::Replays:
+                    snprintf(details, sizeof(details), "Watching a replay");
+                    break;
+                case Screen::Multiplayer:
+                    snprintf(details, sizeof(details), "Looking for a match");
+                    break;
+                default:
+                    snprintf(details, sizeof(details), "In the main menu");
+                    break;
+            }
+            discordrpc::update(m_settings.discordClientId.c_str(),
+                               details, state);
+        }
+    }
+
     // Card-art download indicator — a small pill, bottom-right, while the
     // background fetcher has art in flight (deck prefetch or on-demand views).
     {
@@ -5176,6 +5241,30 @@ void UI::drawLobby(int w, int h) {
                             &m_settings.checkForUpdates)) {
             m_update.setEnabled(m_settings.checkForUpdates);
             saveSettings();
+        }
+        ImGui::Separator();
+
+        // — Discord Rich Presence
+        UIStyle::SectionHeader("Discord");
+        savedToggle("Show activity on Discord (Rich Presence)",
+                    &m_settings.discordPresence);
+        {
+            static char idBuf[40] = {};
+            static bool idSeeded = false;
+            if (!idSeeded) {
+                strncpy(idBuf, m_settings.discordClientId.c_str(),
+                        sizeof(idBuf) - 1);
+                idSeeded = true;
+            }
+            ImGui::SetNextItemWidth(260.f);
+            if (ImGui::InputTextWithHint("##discordid",
+                    "Discord Application ID", idBuf, sizeof(idBuf))) {
+                m_settings.discordClientId = idBuf;
+                saveSettings();
+            }
+            ImGui::TextDisabled("Create a free app named \"YGO Nova\" at");
+            ImGui::TextDisabled("discord.com/developers and paste its "
+                                "Application ID.");
         }
         ImGui::Separator();
 

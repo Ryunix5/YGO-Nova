@@ -59,6 +59,10 @@ private:
 
     Screen  m_screen = Screen::Lobby;
 
+    // Currently loaded BGM track ("" = silence). Chosen per context (menu vs
+    // duel) from assets/music/{menu,duel}/*.wav; see UI::draw.
+    std::string m_musicPath;
+
     // Startup splash: fade "Sponsored by Dark Side" (with logo), then
     // "Made by Ryunix", then hand off to the lobby. Skippable.
     bool    m_introActive = true;
