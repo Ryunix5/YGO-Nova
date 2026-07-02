@@ -2,6 +2,32 @@
 
 All notable changes to YGO: Nova are documented here.
 
+## 1.0.4
+
+### Fixed (image quality — the big one)
+- **Crisp app on scaled displays** — the app is now per-monitor DPI-aware;
+  previously Windows bitmap-stretched the whole window on 125%/150% display
+  scaling (the "blurry / low-res / old" look). Fonts rasterize at native
+  physical resolution with oversampling.
+- **Sharp card art** — the bundled image pack was 177×254 thumbnails; art
+  smaller than full size now auto-re-downloads at 813×1185 from the CDN and
+  hot-swaps in as you play. Mipmaps are also now generated correctly on the
+  core-profile GL context (trilinear + anisotropic filtering).
+
+### Added
+- **On-demand card scripts** — decks are scanned at duel start and any
+  missing card scripts are fetched automatically (a few KB per new card), so
+  cards newer than your install just work. Toggleable in Settings.
+- **Hand-Trap Gauntlet** — you go first; the AI opens with a hand of meta
+  hand traps (Ash, Imperm, Droll…) and fires them at your combo.
+- **Crash reporter** — fatal errors write a dump + report and offer a
+  one-click pre-filled GitHub issue.
+- **UI theme packs** — Crimson / Midnight / Emerald / Mono.
+- **Per-deck sleeves** and **custom field mats** (assets/mats/).
+- **Duel & menu music playlists** — drop .wav files into assets/music/.
+- **Discord Rich Presence** (needs a free Discord Application ID in Settings).
+- Deck builder layout: card info on the left, search on the right.
+
 ## 1.0.3
 
 ### Fixed (important)
