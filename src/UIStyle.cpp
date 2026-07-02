@@ -1,8 +1,11 @@
 #include "UIStyle.h"
 #include "imgui_internal.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 
 namespace UIStyle {
 
@@ -483,10 +486,34 @@ void SectionHeader(const char* label) {
 // ── Custom-drawn buttons ────────────────────────────────────────────────────
 // Shared core: lays out an InvisibleButton of size `sz`, runs hit testing,
 // then asks the caller-supplied painter to draw the visible button at the
-// resolved screen rect. Returns whether the button was clicked this frame.
+// resolved screen rect. Hover state is EASED (per-widget 0..1) so every
+// button in the app fades between rest/hover instead of snapping — the
+// single biggest "feels modern" cue. Returns whether it was clicked.
+
+// Per-channel colour lerp between two IM_COL32 values.
+static ImU32 lerpCol(ImU32 x, ImU32 y, float t) {
+    if (t <= 0.f) return x;
+    if (t >= 1.f) return y;
+    ImVec4 a = ImGui::ColorConvertU32ToFloat4(x);
+    ImVec4 b = ImGui::ColorConvertU32ToFloat4(y);
+    return ImGui::ColorConvertFloat4ToU32(
+        {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+         a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t});
+}
+
+// Eased hover value for the LAST-submitted item, keyed by its ImGui ID.
+static float hoverAnimT(bool hovered) {
+    static std::unordered_map<ImGuiID, float> s_anim;
+    float& t = s_anim[ImGui::GetItemID()];
+    float target = hovered ? 1.f : 0.f;
+    t += (target - t) * std::min(1.f, ImGui::GetIO().DeltaTime * 14.f);
+    if (std::fabs(t - target) < 0.01f) t = target;
+    return t;
+}
+
 static bool ButtonCore(const char* label, ImVec2 sz, float defaultH,
                        void (*paint)(ImDrawList*, ImVec2, ImVec2,
-                                     bool hovered, bool active,
+                                     float t, bool active,
                                      const char* label)) {
     if (sz.x <= 0.f) sz.x = ImGui::GetContentRegionAvail().x;
     if (sz.y <= 0.f) sz.y = defaultH;
@@ -495,8 +522,11 @@ static bool ButtonCore(const char* label, ImVec2 sz, float defaultH,
     bool hovered = ImGui::IsItemHovered();
     bool active  = ImGui::IsItemActive();
     bool clicked = ImGui::IsItemClicked();
+    float t = hoverAnimT(hovered);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    paint(dl, pos, {pos.x + sz.x, pos.y + sz.y}, hovered, active, label);
+    // Press feedback: the whole button sinks 1px while held.
+    if (active) { pos.y += 1.f; }
+    paint(dl, pos, {pos.x + sz.x, pos.y + sz.y}, t, active, label);
     return clicked;
 }
 
@@ -527,53 +557,85 @@ static void drawButtonLabel(ImDrawList* dl, ImVec2 a, ImVec2 b,
     PopFont();
 }
 
-static void paintPrimary(ImDrawList* dl, ImVec2 a, ImVec2 b,
-                         bool hovered, bool active, const char* label) {
-    // One clean solid fill — state just shifts it: brighter on hover, dimmer
-    // on press. Subtle top highlight, single border (original treatment).
-    ImU32 fill = active  ? gC.accentDim
-              : hovered  ? gC.accentHi
-                         : gC.accent;
-    dl->AddRectFilled(a, b, fill, gM.radM);
+// Shared body shading: top sheen + bottom shade over a solid rounded fill —
+// reads as a lit, slightly convex surface without loud borders.
+static void shadeBody(ImDrawList* dl, ImVec2 a, ImVec2 b,
+                      int sheenA, int shadeA) {
     float h = b.y - a.y;
     dl->AddRectFilledMultiColor(
-        a, {b.x, a.y + h * 0.5f},
-        IM_COL32(255, 255, 255, 38), IM_COL32(255, 255, 255, 38),
-        IM_COL32(255, 255, 255,  0), IM_COL32(255, 255, 255,  0));
-    dl->AddRect(a, b, hovered ? gC.accentHi : gC.accent,
-                gM.radM, 0, hovered ? 1.4f : 1.f);
+        {a.x + 1.f, a.y + 1.f}, {b.x - 1.f, a.y + h * 0.45f},
+        IM_COL32(255, 255, 255, sheenA), IM_COL32(255, 255, 255, sheenA),
+        IM_COL32(255, 255, 255, 0),      IM_COL32(255, 255, 255, 0));
+    dl->AddRectFilledMultiColor(
+        {a.x + 1.f, b.y - h * 0.38f}, {b.x - 1.f, b.y - 1.f},
+        IM_COL32(0, 0, 0, 0),      IM_COL32(0, 0, 0, 0),
+        IM_COL32(0, 0, 0, shadeA), IM_COL32(0, 0, 0, shadeA));
+}
+
+// Soft drop shadow so raised buttons float off the panel.
+static void dropShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float strength) {
+    for (int i = 3; i >= 1; --i)
+        dl->AddRectFilled({a.x - i * 0.5f, a.y + i * 0.8f},
+                          {b.x + i * 0.5f, b.y + i},
+                          IM_COL32(0, 0, 0, (int)(11.f * strength)),
+                          gM.radM + i);
+}
+
+static void paintPrimary(ImDrawList* dl, ImVec2 a, ImVec2 b,
+                         float t, bool active, const char* label) {
+    dropShadow(dl, a, b, 1.f - t * 0.3f);
+    ImU32 base = active ? gC.primaryAct : lerpCol(gC.primary, gC.primaryHi, t);
+    dl->AddRectFilled(a, b, base, gM.radM);
+    shadeBody(dl, a, b, 46, 46);
+    // Animated halo — brightens in as the cursor arrives.
+    if (t > 0.02f)
+        dl->AddRect({a.x - 1.5f, a.y - 1.5f}, {b.x + 1.5f, b.y + 1.5f},
+                    (gC.accentHi & 0x00FFFFFF) | ((unsigned)(90 * t) << 24),
+                    gM.radM + 1.5f, 0, 2.f);
+    dl->AddRect(a, b, lerpCol(gC.accent, gC.accentHi, t), gM.radM, 0, 1.2f);
     drawButtonLabel(dl, a, b, gC.primaryText, label);
 }
 
 static void paintSecondary(ImDrawList* dl, ImVec2 a, ImVec2 b,
-                           bool hovered, bool active, const char* label) {
-    ImU32 fill = active  ? IM_COL32(70, 34, 40, 255)
-              : hovered  ? IM_COL32(62, 30, 36, 255)
-                         : IM_COL32(46, 24, 28, 255);
-    dl->AddRectFilled(a, b, fill, gM.radM);
-    dl->AddRect(a, b, hovered ? gC.primaryHi : gC.border,
-                gM.radM, 0, hovered ? 1.4f : 1.f);
-    drawButtonLabel(dl, a, b, gC.textHi, label);
+                           float t, bool active, const char* label) {
+    dropShadow(dl, a, b, 0.7f);
+    ImU32 rest = gC.bgRaised;
+    ImU32 hot  = lerpCol(gC.bgRaised, gC.accentDim, 0.45f);
+    dl->AddRectFilled(a, b, active ? hot : lerpCol(rest, hot, t), gM.radM);
+    shadeBody(dl, a, b, 22, 30);
+    dl->AddRect(a, b, lerpCol(gC.borderSoft, gC.accent, t), gM.radM, 0,
+                1.f + 0.4f * t);
+    drawButtonLabel(dl, a, b, lerpCol(gC.textMd, gC.textHi, t), label);
 }
 
 static void paintGhost(ImDrawList* dl, ImVec2 a, ImVec2 b,
-                       bool hovered, bool active, const char* label) {
-    ImU32 fill = active  ? IM_COL32(255, 255, 255, 22)
-              : hovered  ? IM_COL32(255, 255, 255, 12)
-                         : IM_COL32(0,   0,   0,   0);
-    dl->AddRectFilled(a, b, fill, gM.radM);
-    dl->AddRect(a, b, hovered ? gC.border : gC.borderSoft,
-                gM.radM, 0, 1.f);
-    drawButtonLabel(dl, a, b, hovered ? gC.textHi : gC.textMd, label);
+                       float t, bool active, const char* label) {
+    int fillA = (int)(14.f * t) + (active ? 8 : 0);
+    if (fillA > 0)
+        dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, fillA), gM.radM);
+    dl->AddRect(a, b, lerpCol(gC.borderSoft, gC.border, t), gM.radM, 0, 1.f);
+    // Accent underline that grows from the centre on hover — quiet but alive.
+    if (t > 0.02f) {
+        float cx = (a.x + b.x) * 0.5f;
+        float half = ((b.x - a.x) * 0.5f - 10.f) * t;
+        dl->AddRectFilled({cx - half, b.y - 2.5f}, {cx + half, b.y - 1.f},
+            (gC.accentHi & 0x00FFFFFF) | ((unsigned)(200 * t) << 24), 1.f);
+    }
+    drawButtonLabel(dl, a, b, lerpCol(gC.textMd, gC.textHi, t), label);
 }
 
 static void paintDanger(ImDrawList* dl, ImVec2 a, ImVec2 b,
-                        bool hovered, bool active, const char* label) {
-    ImU32 fill = active  ? IM_COL32(190,  60,  60, 255)
-              : hovered  ? IM_COL32(220,  82,  82, 255)
-                         : IM_COL32(180,  64,  64, 255);
-    dl->AddRectFilled(a, b, fill, gM.radM);
-    dl->AddRect(a, b, IM_COL32(255, 120, 120, 220), gM.radM, 0, 1.2f);
+                        float t, bool active, const char* label) {
+    dropShadow(dl, a, b, 1.f);
+    ImU32 base = active ? IM_COL32(232, 96, 92, 255)
+                        : lerpCol(IM_COL32(172, 58, 58, 255),
+                                  IM_COL32(214, 78, 76, 255), t);
+    dl->AddRectFilled(a, b, base, gM.radM);
+    shadeBody(dl, a, b, 40, 44);
+    dl->AddRect(a, b,
+                lerpCol(IM_COL32(214, 96, 92, 200),
+                        IM_COL32(255, 132, 128, 235), t),
+                gM.radM, 0, 1.2f);
     drawButtonLabel(dl, a, b, IM_COL32(255, 240, 240, 255), label);
 }
 

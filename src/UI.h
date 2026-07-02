@@ -223,6 +223,8 @@ private:
     bool                   m_dbFilterTrp  = true;
     bool                   m_dbFilterMain = true;
     bool                   m_dbFilterExtra= true;
+    // One-shot "focus the search box" flag (Ctrl+F in the deck builder).
+    bool                   m_focusDeckSearch = false;
     // Advanced search: match effect text instead of names, plus attribute /
     // level filters applied to the result set.
     bool                   m_dbTextSearch  = false;  // search desc, not name

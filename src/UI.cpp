@@ -4441,7 +4441,12 @@ void UI::drawLobby(int w, int h) {
             ImGui::InvisibleButton(title, {tileW, tileH});
             bool hov = ImGui::IsItemHovered();
             bool clk = ImGui::IsItemClicked();
-            float lift = hov ? 6.f : 0.f;
+            // Eased hover so the tile glides up instead of snapping.
+            static std::unordered_map<ImGuiID, float> s_tileAnim;
+            float& tt = s_tileAnim[ImGui::GetItemID()];
+            tt += ((hov ? 1.f : 0.f) - tt) *
+                  std::min(1.f, ImGui::GetIO().DeltaTime * 12.f);
+            float lift = 7.f * tt;
             ImVec2 a{pos.x, pos.y - lift};
             ImVec2 b{pos.x + tileW, pos.y + tileH - lift};
             if (hov || primary)
@@ -4997,7 +5002,7 @@ void UI::drawLobby(int w, int h) {
         ImGui::OpenPopup("Settings");
         m_settingsPopupOpen = false;
     }
-    ImGui::SetNextWindowSize({560.f, 0.f}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({620.f, 0.f}, ImGuiCond_Always);
     if (ImGui::BeginPopupModal("Settings", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
         if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
@@ -5010,8 +5015,11 @@ void UI::drawLobby(int w, int h) {
             if (ImGui::Checkbox(label, val)) saveSettings();
         };
 
-        // — Audio
-        UIStyle::SectionHeader("Audio");
+        // Tabbed layout — one page per topic instead of one huge scroll.
+        if (ImGui::BeginTabBar("##settings_tabs",
+                               ImGuiTabBarFlags_FittingPolicyScroll)) {
+
+        if (ImGui::BeginTabItem("Audio")) {
         bool muted = gAudio().muted();
         if (ImGui::Checkbox("Mute SFX", &muted)) {
             gAudio().setMuted(muted);
@@ -5027,10 +5035,12 @@ void UI::drawLobby(int w, int h) {
         }
         if (UIStyle::SecondaryButton("Test Sound", {160.f, 30.f}))
             gAudio().play("confirm");
-        ImGui::Separator();
+        ImGui::TextDisabled("The Audio button on the main menu has the full "
+                            "mixer (master / SFX / music).");
+        ImGui::EndTabItem();
+        }
 
-        // — Keybindings (duel) ────────────────────────────────────────────
-        UIStyle::SectionHeader("Keybindings");
+        if (ImGui::BeginTabItem("Keybinds")) {
         ImGui::TextDisabled("Click a key, press the new one. Esc cancels.");
         {
             struct KB { const char* label; int* slot; ImGuiKey def; };
@@ -5089,10 +5099,10 @@ void UI::drawLobby(int w, int h) {
                 }
             }
         }
-        ImGui::Separator();
+        ImGui::EndTabItem();
+        }
 
-        // — Visual
-        UIStyle::SectionHeader("Visual");
+        if (ImGui::BeginTabItem("Visuals")) {
         // Theme pack — the palette swap is picked up on the next frame.
         {
             const char* kThemes[] = {"Crimson", "Midnight", "Emerald", "Mono"};
@@ -5224,10 +5234,10 @@ void UI::drawLobby(int w, int h) {
             }
             ImGui::TextDisabled("Drop more PNGs in assets/sleeves/ to add sleeves.");
         }
-        ImGui::Separator();
+        ImGui::EndTabItem();
+        }
 
-        // — Animations (Stage A) — every change re-syncs the live AnimManager.
-        UIStyle::SectionHeader("Animations");
+        if (ImGui::BeginTabItem("Animations")) {
         auto animToggle = [this](const char* label, bool* val) {
             if (ImGui::Checkbox(label, val)) { syncAnimConfig(); saveSettings(); }
         };
@@ -5293,25 +5303,10 @@ void UI::drawLobby(int w, int h) {
             m_settings.enginePhasePacing = (float)paceMs / 1000.f;
             saveSettings();
         }
-        ImGui::Separator();
-
-        // — Developer / Logs
-        UIStyle::SectionHeader("Developer");
-        savedToggle("Developer mode (unlocks dev tools + Debug panel)",
-                    &m_settings.developerMode);
-        if (m_settings.developerMode) {
-            if (ImGui::Checkbox("Debug Log (verbose engine traces)",
-                                &m_debugLog)) {
-                m_dm.setDebugMessages(m_debugLog);
-                saveSettings();
-            }
-            savedToggle("Verbose internal messages", &m_settings.verboseLog);
+        ImGui::EndTabItem();
         }
-        savedToggle("Collapse log panel by default", &m_logCollapsed);
-        ImGui::Separator();
 
-        // — Gameplay UI
-        UIStyle::SectionHeader("Gameplay UI");
+        if (ImGui::BeginTabItem("Game")) {
         savedToggle("Confirm before Restart Duel", &m_settings.confirmRestart);
         savedToggle("Show click-first hints",      &m_settings.clickFirstHints);
         savedToggle("Compact prompts (full text in side panel)",
@@ -5365,16 +5360,34 @@ void UI::drawLobby(int w, int h) {
         UIStyle::SectionHeader("Replays");
         savedToggle("Auto-save replays on duel end", &m_settings.autoSaveReplays);
         ImGui::TextDisabled("Saved to %s", edo::Replay::defaultDir().c_str());
-        ImGui::Separator();
+        ImGui::EndTabItem();
+        }
 
-        // — Assets summary (read-only)
+        if (ImGui::BeginTabItem("Advanced")) {
+        UIStyle::SectionHeader("Developer");
+        savedToggle("Developer mode (unlocks dev tools + Debug panel)",
+                    &m_settings.developerMode);
+        if (m_settings.developerMode) {
+            if (ImGui::Checkbox("Debug Log (verbose engine traces)",
+                                &m_debugLog)) {
+                m_dm.setDebugMessages(m_debugLog);
+                saveSettings();
+            }
+            savedToggle("Verbose internal messages", &m_settings.verboseLog);
+        }
+        savedToggle("Collapse log panel by default", &m_logCollapsed);
+        UIStyle::DrawDivider(6.f, 6.f);
         UIStyle::SectionHeader("Assets");
         ImGui::Text("SFX bank   : %d / %d loaded",
             gAudio().loadedCount(), AudioManager::expectedSfxCount());
         ImGui::Text("Card DBs   : %d", m_db.databaseCount());
         ImGui::TextDisabled("(open the Assets popup on the lobby for full paths)");
-        ImGui::Separator();
+        ImGui::EndTabItem();
+        }
 
+        ImGui::EndTabBar();
+        }
+        ImGui::Dummy({1.f, 6.f});
         if (UIStyle::PrimaryButton("Close", {-1.f, 32.f})) {
             saveSettings();
             ImGui::CloseCurrentPopup();
@@ -13126,6 +13139,69 @@ void UI::drawDeckBuilder(int w, int h) {
     };
     bool dirty = !decksEqual(m_editDeck, m_savedDeck);
 
+    // ── Keyboard shortcuts ──────────────────────────────────────────────────
+    // Ctrl+C copy deck (ydke URL) · Ctrl+V paste (.ydk / ydke) · Ctrl+S save ·
+    // Ctrl+F focus search · Esc back to lobby (when there's nothing unsaved).
+    // Suppressed while typing or while any popup owns the input.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        bool popupOpen = ImGui::IsPopupOpen(nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if (!io.WantTextInput && !popupOpen) {
+            if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                ImGui::SetClipboardText(deckToYdke(m_editDeck).c_str());
+                gAudio().play("confirm");
+                pushToast("Deck copied as ydke:// URL (Ctrl+V to paste back)",
+                          IM_COL32(110, 220, 140, 255), 2.2);
+            }
+            if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+                const char* clip = ImGui::GetClipboardText();
+                Deck pasted = clip ? deckFromYdkText(clip) : Deck{};
+                int total = (int)(pasted.main.size() + pasted.extra.size() +
+                                  pasted.side.size());
+                if (total > 0) {
+                    pasted.name = m_editDeck.name;
+                    m_editDeck  = pasted;
+                    gAudio().play("confirm");
+                    pushToast("Deck pasted (" + std::to_string(total) +
+                              " cards)", IM_COL32(110, 220, 140, 255), 2.2);
+                } else {
+                    gAudio().play("error");
+                    pushToast("Clipboard has no deck (.ydk text or ydke://)",
+                              IM_COL32(232, 110, 100, 255), 2.4);
+                }
+            }
+            if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) &&
+                m_deckNameBuf[0]) {
+                std::string path =
+                    std::string("assets/decks/") + m_deckNameBuf + ".ydk";
+                saveYdk(m_editDeck, path);
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(path, ec)) {
+                    m_savedDeck = m_editDeck;
+                    gAudio().play("confirm");
+                    pushToast(std::string("Deck saved: ") + m_deckNameBuf,
+                              IM_COL32(110, 220, 140, 255), 2.2);
+                    refreshDeckFiles();
+                } else {
+                    gAudio().play("error");
+                    pushToast("Deck save failed", IM_COL32(232, 110, 100, 255),
+                              2.4);
+                }
+            }
+            if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false))
+                m_focusDeckSearch = true;
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                if (!dirty && !m_matchSiding) {
+                    m_screen = Screen::Lobby;
+                } else if (dirty) {
+                    pushToast("Unsaved changes — Ctrl+S to save, or use Back",
+                              IM_COL32(235, 185, 60, 255), 2.4);
+                }
+            }
+        }
+    }
+
     // ── geometry ────────────────────────────────────────────────────────────
     const float BAR_H     = 56.f;
     const float SEARCH_W  = std::max(320.f, (float)w * 0.27f);
@@ -13440,7 +13516,11 @@ void UI::drawDeckBuilder(int w, int h) {
             }
         };
 
-        // Themed search box with a leading magnifier glyph.
+        // Themed search box with a leading magnifier glyph. Ctrl+F jumps here.
+        if (m_focusDeckSearch) {
+            ImGui::SetKeyboardFocusHere();
+            m_focusDeckSearch = false;
+        }
         const char* hint = m_dbTextSearch ? "Search effect text (e.g. \"banish\")..."
                                           : "Search card name or code...";
         if (UIStyle::SearchInput("##db_search_in", m_searchBuf,
