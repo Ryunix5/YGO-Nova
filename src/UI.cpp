@@ -3865,46 +3865,126 @@ void UI::drawIntro(int w, int h) {
         if (t < fi + hold + fo) return (float)(1.0 - (t - fi - hold) / fo);
         return 0.f;
     };
-    float aS = seg(el,        0.8, 1.7, 0.6);   // sponsor: 0.0 .. 3.1
-    float aR = seg(el - 3.3,  0.8, 1.7, 0.6);   // author : 3.3 .. 6.4
+    auto easeOut = [](float x) {                 // cubic ease-out
+        float inv = 1.f - x;
+        return 1.f - inv * inv * inv;
+    };
+    // Beat progress 0..1 across a beat's full life (for motion, not alpha).
+    auto beatT = [&](double start, double len) -> float {
+        double x = (el - start) / len;
+        return x < 0.0 ? 0.f : x > 1.0 ? 1.f : (float)x;
+    };
+    float aS = seg(el,        0.7, 1.9, 0.5);   // sponsor: 0.0 .. 3.1
+    float aR = seg(el - 3.3,  0.7, 1.9, 0.5);   // author : 3.3 .. 6.4
+    float tS = beatT(0.0, 3.1);
+    float tR = beatT(3.3, 3.1);
     bool  done = el >= 6.4;
 
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     dl->AddRectFilled({0.f, 0.f}, {W, H}, IM_COL32(0, 0, 0, 255));
 
+    // Slow rising embers behind everything — the splash breathes instead of
+    // sitting on flat black.
+    {
+        unsigned s = 0xA11CEu;
+        auto frand = [&](){ s = s * 1664525u + 1013904223u;
+                            return (s >> 8) * (1.f / 16777216.f); };
+        for (int i = 0; i < 46; ++i) {
+            float bx   = frand() * W;
+            float spd  = 10.f + frand() * 30.f;
+            float ph   = frand();
+            float span = H + 100.f;
+            float y  = H + 50.f - std::fmod((float)el * spd + ph * span, span);
+            float x  = bx + std::sin((float)el * 0.6f + ph * 6.28f) * 12.f;
+            float rr = 0.6f + frand() * 1.6f;
+            float lifeT = 1.f - (H - y) / span;
+            float fade  = std::clamp(lifeT * 1.3f, 0.f, 1.f);
+            bool hot = frand() > 0.85f;
+            int aa = (int)((hot ? 150.f : 70.f) * fade);
+            dl->AddCircleFilled({x, y}, rr,
+                hot ? IM_COL32(255, 150, 90, aa) : IM_COL32(200, 70, 62, aa), 6);
+        }
+    }
+
     ImFont* f = UIStyle::fHeader ? UIStyle::fHeader : ImGui::GetFont();
-    auto bigText = [&](const char* s, float sz, ImVec2 center, ImU32 col) {
-        ImVec2 ts = f->CalcTextSizeA(sz, 1.0e6f, 0.f, s);
+    auto bigText = [&](const char* s2, float sz, ImVec2 center, ImU32 col) {
+        ImVec2 ts = f->CalcTextSizeA(sz, 1.0e6f, 0.f, s2);
         dl->AddText(f, sz, {center.x - ts.x * 0.5f, center.y - ts.y * 0.5f},
-                    col, s);
+                    col, s2);
+        return ts;
+    };
+    // Expanding shockwave ring fired at a beat's start.
+    auto shockwave = [&](ImVec2 c, float t) {
+        if (t <= 0.f || t > 0.55f) return;
+        float k = t / 0.55f;
+        float r = 40.f + easeOut(k) * std::min(W, H) * 0.42f;
+        dl->AddCircle(c, r, IM_COL32(220, 70, 66, (int)(160 * (1.f - k))),
+                      64, 2.5f * (1.f - k) + 0.5f);
     };
 
-    // Sponsor beat — logo above, caption below, with a soft red core glow.
+    // ── Sponsor beat — logo scales in over a pulsing glow, caption rises,
+    //    accent lines sweep in from the sides.
     if (aS > 0.001f) {
         ImVec2 c = {W * 0.5f, H * 0.42f};
+        float scale = 1.10f - 0.10f * easeOut(std::min(1.f, tS * 2.4f));
+        float pulse = 0.5f + 0.5f * std::sin((float)el * 2.2f);
         float glow = std::min(W, H) * 0.34f;
         for (int i = 6; i >= 0; --i)
-            dl->AddCircleFilled(c, glow * (0.4f + i * 0.09f),
-                IM_COL32(120, 26, 30, (int)(10 * aS)), 48);
+            dl->AddCircleFilled(c, glow * (0.4f + i * 0.09f) * scale,
+                IM_COL32(130, 28, 32, (int)((9 + 3 * pulse) * aS)), 48);
+        shockwave(c, (float)el - 0.15f);
         void* tex = m_rend.loadCachedImage("assets/sponsor_logo.png");
-        float logoSz = std::min(W, H) * 0.30f;
+        float logoSz = std::min(W, H) * 0.30f * scale;
         if (tex) {
             ImVec2 p0 = {c.x - logoSz * 0.5f, c.y - logoSz * 0.5f};
             ImVec2 p1 = {c.x + logoSz * 0.5f, c.y + logoSz * 0.5f};
             dl->AddImage((ImTextureID)tex, p0, p1, {0, 0}, {1, 1},
                          IM_COL32(255, 255, 255, (int)(255 * aS)));
         }
-        bigText("SPONSORED BY DARK SIDE", 34.f,
-                {c.x, c.y + logoSz * 0.5f + 36.f},
+        // Caption rises 14px as it fades in.
+        float rise = (1.f - easeOut(std::min(1.f, tS * 2.f))) * 14.f;
+        ImVec2 cap = {c.x, c.y + std::min(W, H) * 0.15f + 40.f + rise};
+        ImVec2 ts = bigText("SPONSORED BY DARK SIDE", 34.f, cap,
                 IM_COL32(236, 224, 230, (int)(255 * aS)));
+        // Accent lines sweeping toward the caption from both sides.
+        float sweep = easeOut(std::min(1.f, std::max(0.f, tS * 1.6f - 0.2f)));
+        float lineY = cap.y;
+        float inner = ts.x * 0.5f + 24.f;
+        float outer = inner + 120.f * sweep;
+        ImU32 lc = IM_COL32(214, 70, 66, (int)(200 * aS * sweep));
+        dl->AddLine({cap.x - outer, lineY}, {cap.x - inner, lineY}, lc, 2.f);
+        dl->AddLine({cap.x + inner, lineY}, {cap.x + outer, lineY}, lc, 2.f);
     }
 
-    // Author beat.
+    // ── Author beat — name scales in with an underline sweep, over a faint
+    //    rotating sigil diamond (echoes the main menu's centrepiece).
     if (aR > 0.001f) {
-        ImVec2 c = {W * 0.5f, H * 0.46f};
-        bigText("MADE BY RYUNIX", 44.f, c,
-                IM_COL32(232, 64, 70, (int)(255 * aR)));
-        bigText("YGO: Nova", 22.f, {c.x, c.y + 46.f},
+        ImVec2 c = {W * 0.5f, H * 0.44f};
+        shockwave(c, (float)(el - 3.45));
+        // Faint rotating diamond behind the name.
+        {
+            float rot = (float)el * 0.4f;
+            float s2 = 130.f;
+            ImVec2 p[4];
+            for (int i = 0; i < 4; ++i) {
+                float a2 = rot + (float)i * 1.5707963f;
+                p[i] = {c.x + std::cos(a2) * s2, c.y + std::sin(a2) * s2};
+            }
+            dl->AddPolyline(p, 4, IM_COL32(150, 42, 46, (int)(90 * aR)),
+                            ImDrawFlags_Closed, 1.4f);
+        }
+        float scale = 0.92f + 0.08f * easeOut(std::min(1.f, tR * 2.4f));
+        bigText("MADE BY", 20.f, {c.x, c.y - 44.f},
+                IM_COL32(180, 150, 154, (int)(220 * aR)));
+        ImVec2 ts = bigText("RYUNIX", 58.f * scale, c,
+                IM_COL32(236, 70, 74, (int)(255 * aR)));
+        // Underline sweeping left → right beneath the name.
+        float sweep = easeOut(std::min(1.f, std::max(0.f, tR * 2.0f - 0.25f)));
+        float uy = c.y + ts.y * 0.5f + 10.f;
+        dl->AddRectFilled({c.x - ts.x * 0.5f, uy - 1.5f},
+                          {c.x - ts.x * 0.5f + ts.x * sweep, uy + 1.5f},
+                          IM_COL32(238, 86, 90, (int)(230 * aR)), 1.f);
+        bigText("YGO: NOVA", 22.f, {c.x, uy + 30.f},
                 IM_COL32(206, 206, 214, (int)(210 * aR)));
     }
 
@@ -4171,83 +4251,56 @@ void UI::drawLobby(int w, int h) {
             clear, clear, edge, edge);                    // bottom
     }
 
-    // ── Top-left profile / status HUD (glass, no boxy panel) ────────────────
-    // Slim left gold accent bar + transparent glass tint + diamond avatar.
-    // No filled background rectangle — the strip blends into the backdrop.
+    // ── Hero title — free-floating over the backdrop, no boxy card ──────────
+    // A big display wordmark with an accent rule and version chips reads far
+    // more modern than the old glass profile panel.
     {
-        ImVec2 a = {26.f, 24.f};
-        const float CW = 298.f, CH = 90.f;
-        ImVec2 b = {a.x + CW, a.y + CH};
-        // Premium glass card: soft gold halo, glass surface, top sheen — sits
-        // on the backdrop as one material rather than a flat tinted box.
-        UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x14000000,
-                          UIStyle::M().radL, 2);
-        UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
-                                IM_COL32(28, 15, 18, 230));
-        // Slim left accent bar reads as premium without a loud full border.
-        bg->AddRectFilled({a.x + 2.f, a.y + 12.f}, {a.x + 5.f, b.y - 12.f},
-                          (C.accent & 0x00FFFFFF) | 0xCC000000, 2.f);
-
-        // Emblem — concentric gold diamond (the logo motif; the texture icon
-        // ships as the app/window icon).
-        ImVec2 cd = {a.x + 42.f, a.y + CH * 0.5f};
-        auto diamond = [&](float r, ImU32 col, bool fill, float th) {
-            ImVec2 p[4] = {{cd.x, cd.y - r}, {cd.x + r, cd.y},
-                           {cd.x, cd.y + r}, {cd.x - r, cd.y}};
-            if (fill) bg->AddConvexPolyFilled(p, 4, col);
-            else      bg->AddPolyline(p, 4, col, ImDrawFlags_Closed, th);
-        };
-        diamond(25.f, IM_COL32(58, 26, 30, 230), true, 0.f);
-        diamond(25.f, (C.accent & 0x00FFFFFF) | 0x99000000, false, 1.5f);
-        diamond(13.f, IM_COL32(228, 74, 80, 235), true, 0.f);
-        diamond(6.f,  IM_COL32(30, 16, 20, 255), true, 0.f);
-
-        // Title in the header face, with a gold version pill + BETA tag on the
-        // same baseline.
-        const float tx = a.x + 80.f;
-        UIStyle::PushFont(UIStyle::fHeader);
-        bg->AddText({tx, a.y + 13.f}, C.textHi, edo::kAppName);
-        ImVec2 nameSz = ImGui::CalcTextSize(edo::kAppName);
+        const float hx = 36.f, hy = 30.f;
+        ImFont* tf = UIStyle::fTitle ? UIStyle::fTitle : UIStyle::fHeader;
+        UIStyle::PushFont(tf);
+        ImVec2 nameSz = ImGui::CalcTextSize("YGO: NOVA");
+        // Soft shadow lifts the wordmark off the scene.
+        bg->AddText({hx + 2.f, hy + 3.f}, IM_COL32(0, 0, 0, 180), "YGO: NOVA");
+        bg->AddText({hx, hy}, C.textHi, "YGO: NOVA");
         UIStyle::PopFont();
+        // Accent rule fading out to the right.
+        float ry = hy + nameSz.y + 6.f;
+        bg->AddRectFilledMultiColor(
+            {hx + 2.f, ry}, {hx + nameSz.x + 110.f, ry + 2.f},
+            C.accentHi, (C.accentHi & 0x00FFFFFF),
+            (C.accentHi & 0x00FFFFFF), C.accentHi);
         UIStyle::PushFont(UIStyle::fSmall);
+        bg->AddText({hx + 2.f, ry + 8.f}, C.textLo,
+                    "Modern Yu-Gi-Oh duel simulator");
+        // Version + BETA chips beside the wordmark.
         char ver[24]; snprintf(ver, sizeof(ver), "v%s", edo::kAppVersion);
         ImVec2 vs = ImGui::CalcTextSize(ver);
-        float py = a.y + 17.f;
-        ImVec2 pA{tx + nameSz.x + 10.f, py}, pB{pA.x + vs.x + 14.f, py + 17.f};
-        bg->AddRectFilled(pA, pB, (C.accent & 0x00FFFFFF) | 0x33000000, 8.f);
-        bg->AddRect(pA, pB, (C.accent & 0x00FFFFFF) | 0x99000000, 8.f, 0, 1.f);
+        float py = hy + nameSz.y * 0.5f - 9.f;
+        ImVec2 pA{hx + nameSz.x + 16.f, py}, pB{pA.x + vs.x + 14.f, py + 18.f};
+        bg->AddRectFilled(pA, pB, (C.accent & 0x00FFFFFF) | 0x33000000, 9.f);
+        bg->AddRect(pA, pB, (C.accent & 0x00FFFFFF) | 0x99000000, 9.f, 0, 1.f);
         bg->AddText({pA.x + 7.f, pA.y + 2.f}, C.accentText, ver);
         const char* beta = "BETA";
         ImVec2 bs = ImGui::CalcTextSize(beta);
-        ImVec2 betaA{pB.x + 6.f, py}, betaB{betaA.x + bs.x + 14.f, py + 17.f};
-        bg->AddRectFilled(betaA, betaB, IM_COL32(70, 38, 44, 120), 8.f);
-        bg->AddRect(betaA, betaB, IM_COL32(150, 78, 84, 190), 8.f, 0, 1.f);
-        bg->AddText({betaA.x + 7.f, betaA.y + 2.f},
-                    IM_COL32(228, 200, 204, 255), beta);
-        UIStyle::PopFont();
-
-        // Sub-lines.
-        bg->AddText({tx, a.y + 44.f}, C.textLo, "Local Profile");
-        UIStyle::PushFont(UIStyle::fSmall);
-        bg->AddText({tx, a.y + 66.f}, C.textMuted,
-                    "Modern Yu-Gi-Oh duel simulator");
+        ImVec2 bA{pB.x + 6.f, py}, bB{bA.x + bs.x + 14.f, py + 18.f};
+        bg->AddRectFilled(bA, bB, IM_COL32(70, 38, 44, 120), 9.f);
+        bg->AddRect(bA, bB, IM_COL32(150, 78, 84, 190), 9.f, 0, 1.f);
+        bg->AddText({bA.x + 7.f, bA.y + 2.f}, IM_COL32(228, 200, 204, 255),
+                    beta);
         UIStyle::PopFont();
     }
 
-    // ── Active-deck mini card (signature/boss art + name) ───────────────────
+    // ── Active deck — borderless strip under the hero (boss art + names) ────
     if (m_lobbyBossCode) {
-        ImVec2 a = {26.f, 120.f};
-        const float CW = 298.f, CH = 66.f;
-        ImVec2 b = {a.x + CW, a.y + CH};
-        UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
-                                IM_COL32(24, 13, 16, 220));
-        bg->AddRectFilled({a.x + 2.f, a.y + 12.f}, {a.x + 5.f, b.y - 12.f},
-                          (C.accent & 0x00FFFFFF) | 0xCC000000, 2.f);
+        ImVec2 a = {38.f, 128.f};
         void* tex = m_rend.getCardTexture(m_lobbyBossCode);
-        ImVec2 ip = {a.x + 14.f, a.y + 9.f}, ie = {ip.x + 34.f, ip.y + 48.f};
+        ImVec2 ip = {a.x, a.y}, ie = {ip.x + 38.f, ip.y + 54.f};
         if (tex) {
+            // Shadowed art with a hairline accent frame — no panel box.
+            bg->AddRectFilled({ip.x + 2.f, ip.y + 3.f}, {ie.x + 2.f, ie.y + 3.f},
+                              IM_COL32(0, 0, 0, 140), 3.f);
             bg->AddImage((ImTextureID)tex, ip, ie);
-            bg->AddRect(ip, ie, C.borderSoft, 3.f, 0, 1.f);
+            bg->AddRect(ip, ie, (C.accent & 0x00FFFFFF) | 0xAA000000, 3.f, 0, 1.2f);
         }
         std::string nm = m_settings.lastDeckP1;
         auto sl = nm.find_last_of("/\\");
@@ -4256,11 +4309,11 @@ void UI::drawLobby(int w, int h) {
             nm = nm.substr(0, nm.size() - 4);
         const float tx2 = ie.x + 12.f;
         UIStyle::PushFont(UIStyle::fSmall);
-        bg->AddText({tx2, a.y + 12.f}, C.textLo, "ACTIVE DECK");
+        bg->AddText({tx2, a.y + 2.f}, C.textLo, "ACTIVE DECK");
         UIStyle::PopFont();
-        bg->AddText({tx2, a.y + 28.f}, C.textHi, nm.c_str());
+        bg->AddText({tx2, a.y + 18.f}, C.textHi, nm.c_str());
         UIStyle::PushFont(UIStyle::fSmall);
-        bg->AddText({tx2, a.y + 47.f}, C.textMuted,
+        bg->AddText({tx2, a.y + 38.f}, C.textMuted,
                     m_db.getCard(m_lobbyBossCode).name.c_str());
         UIStyle::PopFont();
     }
@@ -4387,7 +4440,7 @@ void UI::drawLobby(int w, int h) {
         float tileH = tileW * 0.80f;
         float rowW  = kTiles * tileW + (kTiles - 1) * gap;
         float rowX  = (W - rowW) * 0.5f;
-        float rowY  = H - tileH - 168.f;
+        float rowY  = H - tileH - 96.f;   // just above the footer bar
         // Window over-sized a little so the hover lift + glow aren't clipped.
         ImGui::SetNextWindowPos({rowX - 10.f, rowY - 14.f});
         ImGui::SetNextWindowSize({rowW + 20.f, tileH + 24.f});
@@ -4508,7 +4561,8 @@ void UI::drawLobby(int w, int h) {
         const float kPillH = 30.f;
         const float pw[] = {104.f, 132.f, 140.f, 76.f};
         float totalW = pw[0] + pw[1] + pw[2] + pw[3] + 3 * 8.f;
-        ImGui::SetNextWindowPos({(W - totalW) * 0.5f, H - 120.f});
+        // Docked into the right half of the footer bar.
+        ImGui::SetNextWindowPos({W - totalW - 34.f, H - 53.f});
         ImGui::SetNextWindowSize({totalW + 8.f, kPillH + 10.f});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(0, 0, 0, 0));
@@ -4558,74 +4612,59 @@ void UI::drawLobby(int w, int h) {
         ImGui::PopStyleColor(2);
     }
 
-    // ── Lower-left news / status card ────────────────────────────────────────
-    int dbCount = m_db.databaseCount();
-    int scriptCount = 0;
+    // ── Footer bar — one slim strip: status dots left, actions right ────────
+    // Replaces the old boxy SYSTEM STATUS panel + floating build line; the
+    // secondary pill window (Replays/History/LAN/Quit) sits over its right
+    // half. One consolidated footer reads modern, three floating boxes don't.
     {
-        namespace fs = std::filesystem;
-        std::error_code ec;
-        if (fs::is_directory("assets/scripts/official", ec))
-            for (auto& e : fs::directory_iterator("assets/scripts/official", ec))
-                if (e.path().extension() == ".lua") ++scriptCount;
-    }
-    // Lower-left SYSTEM STATUS panel — a premium game panel with coloured
-    // status chips (DB / Scripts / Audio / Online) so the readiness of the
-    // runtime reads at a glance instead of a plain text strip.
-    {
-        const float NW = 300.f, NH = 120.f;
-        ImVec2 a = {26.f, H - NH - 28.f};
-        ImVec2 b = {a.x + NW, a.y + NH};
-        // Match the identity card's material: gold halo + glass + top sheen.
-        UIStyle::DrawGlow(bg, a, b, (C.accent & 0x00FFFFFF) | 0x20000000,
-                          UIStyle::M().radL, 3);
-        UIStyle::DrawGlassPanel(bg, a, b, UIStyle::M().radL,
-                                IM_COL32(28, 15, 18, 230));
-        bg->AddLine({a.x + 16.f, a.y + 1.5f}, {b.x - 16.f, a.y + 1.5f},
-                    (C.accent & 0x00FFFFFF) | 0x55000000, 1.f);
-        // Header row: small gold marker + label.
-        bg->AddRectFilled({a.x + 18.f, a.y + 16.f}, {a.x + 25.f, a.y + 23.f},
-                          C.accent, 2.f);
-        UIStyle::PushFont(UIStyle::fSmall);
-        bg->AddText({a.x + 33.f, a.y + 15.f}, C.textLo, "SYSTEM STATUS");
-        UIStyle::PopFont();
+        int dbCount = m_db.databaseCount();
+        // Counting ~10k script files was a per-frame directory scan — cache it.
+        static int s_scriptCount = -1;
+        if (s_scriptCount < 0) {
+            s_scriptCount = 0;
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            if (fs::is_directory("assets/scripts/official", ec))
+                for (auto& e : fs::directory_iterator("assets/scripts/official", ec))
+                    if (e.path().extension() == ".lua") ++s_scriptCount;
+        }
+        ImVec2 fa = {16.f, H - 62.f};
+        ImVec2 fb = {W - 16.f, H - 14.f};
+        UIStyle::DrawGlassPanel(bg, fa, fb, 12.f, IM_COL32(18, 10, 12, 216));
+        bg->AddLine({fa.x + 14.f, fa.y + 1.f}, {fb.x - 14.f, fa.y + 1.f},
+                    (C.accent & 0x00FFFFFF) | 0x44000000, 1.f);
 
-        // Chip drawer: status dot + label, coloured by state, in a soft pill.
-        auto chip = [&](ImVec2 p, ImU32 col, const char* text) {
-            ImVec2 ts = ImGui::CalcTextSize(text);
-            ImVec2 c0{p.x, p.y}, c1{p.x + ts.x + 28.f, p.y + 24.f};
-            bg->AddRectFilled(c0, c1, (col & 0x00FFFFFF) | 0x26000000, 12.f);
-            bg->AddRect(c0, c1, (col & 0x00FFFFFF) | 0x99000000, 12.f, 0, 1.f);
-            bg->AddCircleFilled({p.x + 13.f, p.y + 12.f}, 4.f, col, 12);
-            bg->AddText({p.x + 23.f, p.y + 5.f}, C.textHi, text);
-            return c1.x;
-        };
+        // Status dots: coloured dot + quiet label, laid out horizontally.
         bool audioOk = gAudio().isAvailable() && !gAudio().muted();
         bool relayCfg = !m_settings.mpHostIP.empty() &&
                         m_settings.mpHostIP != "127.0.0.1";
-        char dbTxt[40]; snprintf(dbTxt, sizeof(dbTxt), "Card DB  %d", dbCount);
-        char scTxt[40]; snprintf(scTxt, sizeof(scTxt), "Scripts  %d", scriptCount);
-        const char* auTxt = !gAudio().isAvailable() ? "Audio  off"
-                          : gAudio().muted()        ? "Audio  muted"
-                                                    : "Audio  ready";
-        const char* rlTxt = relayCfg ? "Relay  set" : "Relay  local";
-        // 2x2 grid so the panel reads at a glance.
-        float rowA = a.y + 42.f, rowB = a.y + 76.f;
-        chip({a.x + 18.f, rowA}, dbCount > 0 ? C.success : C.danger, dbTxt);
-        chip({a.x + 162.f, rowA}, scriptCount > 0 ? C.success : C.warning, scTxt);
-        chip({a.x + 18.f, rowB}, audioOk ? C.success : C.warning, auTxt);
-        chip({a.x + 162.f, rowB}, relayCfg ? C.primaryHi : C.textMuted, rlTxt);
-    }
-
-    // ── Bottom-right footer build line ──────────────────────────────────────
-    UIStyle::PushFont(UIStyle::fSmall);
-    {
-        char foot[64];
-        snprintf(foot, sizeof(foot), "%s  ·  v%s  ·  modern duel client",
-                 edo::kAppName, edo::kAppVersion);
+        char dbTxt[40]; snprintf(dbTxt, sizeof(dbTxt), "Card DB %d", dbCount);
+        char scTxt[40]; snprintf(scTxt, sizeof(scTxt), "Scripts %d", s_scriptCount);
+        const char* auTxt = !gAudio().isAvailable() ? "Audio off"
+                          : gAudio().muted()        ? "Audio muted"
+                                                    : "Audio ready";
+        const char* rlTxt = relayCfg ? "Relay set" : "Relay local";
+        UIStyle::PushFont(UIStyle::fSmall);
+        float dx = fa.x + 22.f;
+        float dyC = (fa.y + fb.y) * 0.5f;
+        auto dot = [&](ImU32 col, const char* text) {
+            bg->AddCircleFilled({dx, dyC}, 4.f, col, 12);
+            bg->AddCircle({dx, dyC}, 6.f, (col & 0x00FFFFFF) | 0x55000000, 12, 1.f);
+            ImVec2 ts = ImGui::CalcTextSize(text);
+            bg->AddText({dx + 11.f, dyC - ts.y * 0.5f}, C.textLo, text);
+            dx += 11.f + ts.x + 28.f;
+        };
+        dot(dbCount > 0 ? C.success : C.danger, dbTxt);
+        dot(s_scriptCount > 0 ? C.success : C.warning, scTxt);
+        dot(audioOk ? C.success : C.warning, auTxt);
+        dot(relayCfg ? C.primaryHi : C.textMuted, rlTxt);
+        // Version, tucked before the action pills.
+        char foot[32];
+        snprintf(foot, sizeof(foot), "v%s", edo::kAppVersion);
         ImVec2 fsz = ImGui::CalcTextSize(foot);
-        bg->AddText({W - fsz.x - 26.f, H - 26.f}, C.textMuted, foot);
+        bg->AddText({dx + 6.f, dyC - fsz.y * 0.5f}, C.textMuted, foot);
+        UIStyle::PopFont();
     }
-    UIStyle::PopFont();
 
     // Match-history popup (opened from the MATCH HISTORY nav item).
     drawHistory();
