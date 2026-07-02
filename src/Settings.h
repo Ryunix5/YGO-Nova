@@ -35,6 +35,7 @@ struct Settings {
 
     // ── Visual toggles ───────────────────────────────────────────────────
     float  uiScale           = 1.00f;    // global UI/font scale (0.8–1.5)
+    int    uiTheme           = 0;        // 0 Crimson, 1 Midnight, 2 Emerald, 3 Mono
     bool   colorblindMode    = false;    // blue/orange legality cues vs green/red
     int    fpsCap            = 0;        // frame cap (0 = uncapped); 30/60/120/144
     bool   showFieldNames    = false;
@@ -131,6 +132,7 @@ struct Settings {
 #define EDOPRO_DEFAULT_RELAY ""
 #endif
     std::string cardSleeve    = "";   // file in assets/sleeves/ ("" = default back)
+    std::string fieldMat      = "";   // file in assets/mats/ ("" = plain field)
     std::string mpDisplayName = "Player";
     std::string mpHostIP      = (EDOPRO_DEFAULT_RELAY[0] ? EDOPRO_DEFAULT_RELAY
                                                          : "127.0.0.1");
@@ -213,6 +215,7 @@ struct Settings {
     f << "muteUiSfx="         << (muteUiSfx ? "1" : "0")         << "\n";
         f << "\n# Visual\n";
         f << "uiScale="           << uiScale                         << "\n";
+        f << "uiTheme="           << uiTheme                         << "\n";
         f << "colorblindMode="    << (colorblindMode    ? "1" : "0") << "\n";
         f << "fpsCap="            << fpsCap                          << "\n";
         f << "showFieldNames="    << (showFieldNames    ? "1" : "0") << "\n";
@@ -260,6 +263,7 @@ struct Settings {
         f << "\n# Multiplayer\n";
         f << "mpDisplayName="     << mpDisplayName << "\n";
         f << "cardSleeve="        << cardSleeve    << "\n";
+        f << "fieldMat="          << fieldMat      << "\n";
         f << "mpHostIP="          << mpHostIP      << "\n";
         f << "mpPort="            << mpPort        << "\n";
         f << "mpMode="            << mpMode        << "\n";
@@ -289,6 +293,7 @@ private:
         else if (k == "masterVolume")      masterVolume      = floatFromStr(v, masterVolume);
         else if (k == "muteUiSfx")         muteUiSfx         = boolFromStr(v);
         else if (k == "uiScale")           uiScale           = floatFromStr(v, uiScale);
+        else if (k == "uiTheme")           uiTheme           = intFromStr(v, uiTheme);
         else if (k == "colorblindMode")    colorblindMode    = boolFromStr(v);
         else if (k == "fpsCap")            fpsCap            = intFromStr(v, fpsCap);
         else if (k == "showFieldNames")    showFieldNames    = boolFromStr(v);
@@ -331,6 +336,7 @@ private:
         else if (k == "autoSaveReplays")   autoSaveReplays   = boolFromStr(v);
         else if (k == "mpDisplayName")     mpDisplayName     = v;
         else if (k == "cardSleeve")        cardSleeve        = v;
+        else if (k == "fieldMat")          fieldMat          = v;
         else if (k == "mpHostIP")          mpHostIP          = v;
         else if (k == "mpPort")            mpPort            = intFromStr(v, mpPort);
         else if (k == "mpMode")            mpMode            = v;

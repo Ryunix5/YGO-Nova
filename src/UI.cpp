@@ -2559,6 +2559,7 @@ void UI::loadSettings() {
     loadCardTags();      // deck-consistency role tags (assets/card_tags.txt)
     loadMatchHistory();  // win/loss log (assets/match_history.txt)
     loadFavorites();     // favorite decks (assets/config/favorites.txt)
+    loadDeckSleeves();   // per-deck sleeve overrides (assets/config/deck_sleeves.txt)
     loadBanlists();      // format/banlist files (assets/lflists/*.lflist.conf)
     loadPresetDecks();   // bundled AI opponent decks (assets/decks/presets/)
     // Kick off the in-app update check (no-op unless a repo was baked in).
@@ -3029,6 +3030,7 @@ bool UI::startOfflineDuelWithCoinToss(const std::string& p1Path,
     Deck d1 = loadYdk(t1);
     prefetchDeckArt(d0);    // warm the art cache so the field doesn't pop in
     prefetchDeckArt(d1);
+    applySleeveForDeck(p1Path);   // per-deck sleeve override (yours)
     m_puzzleMode = false;   // a normal practice duel is not a puzzle
     m_dm.setHumanSeat(humanSeat);
     m_net.setSeatOverride(humanSeat);
@@ -3528,8 +3530,12 @@ bool UI::draw(int winW, int winH) {
     // Apply the EdoPro+ global theme once — skins every raw ImGui widget
     // (combos, inputs, checkboxes, sliders, popups, scrollbars, tooltips)
     // so the whole app shares the custom chrome's visual language.
-    static bool s_themeApplied = false;
-    if (!s_themeApplied) { UIStyle::ApplyTheme(); s_themeApplied = true; }
+    static int s_appliedTheme = -1;
+    if (s_appliedTheme != m_settings.uiTheme) {
+        UIStyle::SetPalette(m_settings.uiTheme);
+        UIStyle::ApplyTheme();
+        s_appliedTheme = m_settings.uiTheme;
+    }
 
     // Global UI scale (fonts) — cheap to set per frame, applies everywhere.
     // Fonts are rasterized at g_dpiScale× physical resolution (Game.cpp), so
@@ -5050,6 +5056,21 @@ void UI::drawLobby(int w, int h) {
 
         // — Visual
         UIStyle::SectionHeader("Visual");
+        // Theme pack — the palette swap is picked up on the next frame.
+        {
+            const char* kThemes[] = {"Crimson", "Midnight", "Emerald", "Mono"};
+            int cur = std::clamp(m_settings.uiTheme, 0, 3);
+            ImGui::TextDisabled("Theme");
+            ImGui::SetNextItemWidth(220.f);
+            if (ImGui::BeginCombo("##uitheme", kThemes[cur])) {
+                for (int i = 0; i < 4; ++i)
+                    if (ImGui::Selectable(kThemes[i], cur == i)) {
+                        m_settings.uiTheme = i;
+                        saveSettings();
+                    }
+                ImGui::EndCombo();
+            }
+        }
         // UI scale (font global scale).
         ImGui::TextDisabled("UI scale");
         ImGui::SetNextItemWidth(220.f);
@@ -5082,6 +5103,36 @@ void UI::drawLobby(int w, int h) {
         savedToggle("Large card preview",       &m_largePreview);
         savedToggle("Show zone labels",         &m_showZoneLabels);
         savedToggle("Show legal-action glow",   &m_showLegalGlow);
+
+        // — Field mat — a user image painted behind the duel field. —
+        UIStyle::SectionHeader("Field mat");
+        {
+            std::string curMat = m_settings.fieldMat.empty()
+                ? std::string("(none)") : m_settings.fieldMat;
+            ImGui::SetNextItemWidth(260.f);
+            if (ImGui::BeginCombo("##fieldmat", curMat.c_str())) {
+                if (ImGui::Selectable("(none)", m_settings.fieldMat.empty())) {
+                    m_settings.fieldMat.clear();
+                    saveSettings();
+                }
+                namespace fs = std::filesystem;
+                std::error_code ec;
+                if (fs::is_directory("assets/mats", ec))
+                    for (auto& e : fs::directory_iterator("assets/mats", ec)) {
+                        std::string ext = e.path().extension().string();
+                        for (char& ch : ext) ch = (char)tolower((unsigned char)ch);
+                        if (ext != ".png" && ext != ".jpg") continue;
+                        std::string s = e.path().filename().string();
+                        if (ImGui::Selectable(s.c_str(),
+                                              s == m_settings.fieldMat)) {
+                            m_settings.fieldMat = s;
+                            saveSettings();
+                        }
+                    }
+                ImGui::EndCombo();
+            }
+            ImGui::TextDisabled("Drop .png/.jpg playmats into assets/mats/");
+        }
 
         // — Card sleeve picker — click a thumbnail to set the card back. —
         UIStyle::SectionHeader("Card sleeve");
@@ -5803,6 +5854,17 @@ void UI::drawDuel(int w, int h) {
     const float MID_H       = (float)h - TOP_H - ACT_H;     // arena height
     const float INFO_W      = ((float)w >= 1100.f) ? 330.f : 0.f;
     const float FLD_W       = (float)w;
+
+    // Custom field mat — a user image (assets/mats/) painted across the arena
+    // band, dimmed so zones and card art stay readable on top of it.
+    if (!m_settings.fieldMat.empty()) {
+        if (void* mat = m_rend.loadCachedImage("assets/mats/" +
+                                               m_settings.fieldMat)) {
+            ImGui::GetBackgroundDrawList()->AddImage(
+                (ImTextureID)mat, {0.f, TOP_H}, {(float)w, TOP_H + MID_H},
+                {0, 0}, {1, 1}, IM_COL32(255, 255, 255, 120));
+        }
+    }
 
     // One-shot layout audit (re-logged when the geometry changes).
     {
@@ -12179,6 +12241,40 @@ void UI::recordMatch(const std::string& myDeck, const std::string& oppDeck,
              << result << "|" << turns << "|" << wentFirst << "\n";
 }
 
+void UI::loadDeckSleeves() {
+    m_deckSleeves.clear();
+    std::ifstream f("assets/config/deck_sleeves.txt");
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        auto bar = line.find('|');
+        if (bar == std::string::npos || bar == 0) continue;
+        m_deckSleeves[line.substr(0, bar)] = line.substr(bar + 1);
+    }
+}
+
+void UI::saveDeckSleeves() {
+    std::error_code ec;
+    std::filesystem::create_directories("assets/config", ec);
+    std::ofstream f("assets/config/deck_sleeves.txt", std::ios::trunc);
+    if (!f) return;
+    for (const auto& kv : m_deckSleeves)
+        f << kv.first << "|" << kv.second << "\n";
+}
+
+void UI::applySleeveForDeck(const std::string& deckPath) {
+    std::string fn = deckPath;
+    auto sl = fn.find_last_of("/\\");
+    if (sl != std::string::npos) fn = fn.substr(sl + 1);
+    auto it = m_deckSleeves.find(fn);
+    // Per-deck override wins; otherwise fall back to the global sleeve.
+    std::string sleeve = (it != m_deckSleeves.end()) ? it->second
+                                                     : m_settings.cardSleeve;
+    m_rend.setCardBack(sleeve.empty() ? "assets/card_back.png"
+                                      : "assets/sleeves/" + sleeve);
+}
+
 void UI::loadFavorites() {
     m_favDecks.clear();
     std::ifstream f("assets/config/favorites.txt");
@@ -13632,6 +13728,44 @@ void UI::drawDeckBuilder(int w, int h) {
                 ImGui::TextColored({0.92f, 0.40f, 0.30f, 1.f}, "1 Limited");
                 ImGui::SameLine(0.f, 10.f);
                 ImGui::TextColored({0.92f, 0.73f, 0.25f, 1.f}, "2 Semi");
+            }
+            // Per-deck sleeve — overrides the global Settings sleeve for THIS
+            // deck (applied when a duel starts with it).
+            {
+                std::string deckKey = (m_selDeckIdx >= 0 &&
+                                       m_selDeckIdx < (int)m_deckFiles.size())
+                    ? m_deckFiles[m_selDeckIdx]
+                    : (std::string(m_deckNameBuf) + ".ydk");
+                auto cur = m_deckSleeves.find(deckKey);
+                std::string curLbl = (cur != m_deckSleeves.end())
+                    ? cur->second : std::string("(global default)");
+                ImGui::SameLine(0.f, 14.f);
+                ImGui::TextDisabled("Sleeve");
+                ImGui::SameLine(0.f, 6.f);
+                ImGui::SetNextItemWidth(170.f);
+                if (ImGui::BeginCombo("##decksleeve", curLbl.c_str())) {
+                    if (ImGui::Selectable("(global default)",
+                                          cur == m_deckSleeves.end())) {
+                        m_deckSleeves.erase(deckKey);
+                        saveDeckSleeves();
+                    }
+                    namespace fs = std::filesystem;
+                    std::error_code ec;
+                    if (fs::is_directory("assets/sleeves", ec))
+                        for (auto& e : fs::directory_iterator("assets/sleeves", ec)) {
+                            std::string ext = e.path().extension().string();
+                            for (char& ch : ext) ch = (char)tolower((unsigned char)ch);
+                            if (ext != ".png" && ext != ".jpg") continue;
+                            std::string s = e.path().filename().string();
+                            bool sel = (cur != m_deckSleeves.end() &&
+                                        cur->second == s);
+                            if (ImGui::Selectable(s.c_str(), sel)) {
+                                m_deckSleeves[deckKey] = s;
+                                saveDeckSleeves();
+                            }
+                        }
+                    ImGui::EndCombo();
+                }
             }
         }
 

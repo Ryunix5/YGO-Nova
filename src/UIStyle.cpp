@@ -16,7 +16,7 @@ namespace UIStyle {
 // Deep near-black surfaces with a faint red bias, crimson accents, and a vivid
 // red hero/primary. One change here reskins the whole app (every screen reads
 // UIStyle::C()).
-static const Colors gC = {
+static const Colors kCrimson = {
     /*bgDeep*/    IM_COL32( 10,   7,   8, 255),   // app background (near-black)
     /*bgPanel*/   IM_COL32( 22,  14,  16, 255),   // panel surface
     /*bgRaised*/  IM_COL32( 36,  20,  24, 255),   // input / hover surface
@@ -45,7 +45,74 @@ static const Colors gC = {
     /*glowGreen*/ IM_COL32(110, 240, 130, 232),
     /*glowMagenta*/IM_COL32(244, 132, 232, 232),
 };
+
+// ── Alternate palettes ───────────────────────────────────────────────────────
+// Same token layout, different hue families. SetPalette() swaps the working
+// copy; ApplyTheme() must be re-run afterwards to reskin raw ImGui widgets.
+static const Colors kMidnight = {
+    IM_COL32(  7,   9,  14, 255), IM_COL32( 15,  19,  28, 255),
+    IM_COL32( 22,  28,  42, 255), IM_COL32( 11,  14,  21, 252),
+    IM_COL32( 18,  24,  36, 222),
+    IM_COL32( 52,  68, 110, 200), IM_COL32( 36,  46,  72, 140),
+    IM_COL32( 86, 132, 235, 255), IM_COL32(126, 168, 255, 255),
+    IM_COL32( 44,  66, 120, 200), IM_COL32(240, 246, 255, 255),
+    IM_COL32( 66, 112, 224, 255), IM_COL32( 96, 140, 244, 255),
+    IM_COL32(120, 162, 255, 255), IM_COL32(244, 248, 255, 255),
+    IM_COL32(244,  86,  80, 255), IM_COL32( 92, 206, 126, 255),
+    IM_COL32(236, 184,  72, 255),
+    IM_COL32(240, 243, 248, 255), IM_COL32(192, 202, 220, 255),
+    IM_COL32(134, 146, 172, 255), IM_COL32( 96, 106, 128, 255),
+    IM_COL32(  0,   0,   0, 150),
+    IM_COL32(120, 170, 255, 232), IM_COL32(112, 220, 255, 232),
+    IM_COL32(110, 240, 130, 232), IM_COL32(244, 132, 232, 232),
+};
+static const Colors kEmerald = {
+    IM_COL32(  6,  11,   9, 255), IM_COL32( 13,  23,  18, 255),
+    IM_COL32( 18,  34,  26, 255), IM_COL32( 10,  17,  13, 252),
+    IM_COL32( 16,  28,  22, 222),
+    IM_COL32( 44,  96,  68, 200), IM_COL32( 30,  64,  46, 140),
+    IM_COL32( 56, 190, 120, 255), IM_COL32( 96, 226, 152, 255),
+    IM_COL32( 30, 104,  66, 200), IM_COL32(240, 255, 246, 255),
+    IM_COL32( 32, 168,  96, 255), IM_COL32( 58, 196, 122, 255),
+    IM_COL32( 84, 224, 148, 255), IM_COL32(242, 255, 248, 255),
+    IM_COL32(244,  86,  80, 255), IM_COL32( 92, 206, 126, 255),
+    IM_COL32(236, 184,  72, 255),
+    IM_COL32(238, 246, 241, 255), IM_COL32(190, 214, 199, 255),
+    IM_COL32(128, 162, 141, 255), IM_COL32( 92, 118, 102, 255),
+    IM_COL32(  0,   0,   0, 150),
+    IM_COL32( 96, 240, 150, 232), IM_COL32(112, 220, 255, 232),
+    IM_COL32(110, 240, 130, 232), IM_COL32(244, 132, 232, 232),
+};
+static const Colors kMono = {
+    IM_COL32(  9,   9,  10, 255), IM_COL32( 18,  18,  20, 255),
+    IM_COL32( 28,  28,  31, 255), IM_COL32( 13,  13,  15, 252),
+    IM_COL32( 22,  22,  25, 222),
+    IM_COL32( 70,  70,  78, 200), IM_COL32( 48,  48,  54, 140),
+    IM_COL32(150, 150, 162, 255), IM_COL32(200, 200, 212, 255),
+    IM_COL32( 84,  84,  92, 200), IM_COL32(255, 255, 255, 255),
+    IM_COL32( 92,  92, 102, 255), IM_COL32(122, 122, 134, 255),
+    IM_COL32(150, 150, 164, 255), IM_COL32(255, 255, 255, 255),
+    IM_COL32(244,  86,  80, 255), IM_COL32( 92, 206, 126, 255),
+    IM_COL32(236, 184,  72, 255),
+    IM_COL32(242, 242, 245, 255), IM_COL32(200, 200, 206, 255),
+    IM_COL32(146, 146, 154, 255), IM_COL32(104, 104, 112, 255),
+    IM_COL32(  0,   0,   0, 150),
+    IM_COL32(210, 210, 222, 232), IM_COL32(112, 220, 255, 232),
+    IM_COL32(110, 240, 130, 232), IM_COL32(244, 132, 232, 232),
+};
+
+// Mutable working palette (defaults to Crimson).
+static Colors gC = kCrimson;
 const Colors& C() { return gC; }
+
+void SetPalette(int themeId) {
+    switch (themeId) {
+        case 1:  gC = kMidnight; break;
+        case 2:  gC = kEmerald;  break;
+        case 3:  gC = kMono;     break;
+        default: gC = kCrimson;  break;
+    }
+}
 
 static const Metrics gM = {
     /*radS*/4.f, /*radM*/8.f, /*radL*/14.f,
@@ -136,18 +203,26 @@ void ApplyTheme() {
 
 // ── Panels ───────────────────────────────────────────────────────────────────
 void DrawAppBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {
-    // Vertical gradient dark-red → near black + a soft crimson centre vignette
-    // so empty space reads as deliberate, not a flat canvas.
+    // Vertical gradient (accent-tinted dark → near black) + a soft centre
+    // vignette. Derived from the working palette's accent so every theme's
+    // backdrop matches its hue family (the crimson ratios are the baseline).
+    ImVec4 ac = ImGui::ColorConvertU32ToFloat4(gC.accent);
+    auto mix = [&](float sr, float sg, float sb, int alpha) {
+        int r = (int)(ac.x * 255.f * sr); if (r > 255) r = 255;
+        int g = (int)(ac.y * 255.f * sg); if (g > 255) g = 255;
+        int bl2 = (int)(ac.z * 255.f * sb); if (bl2 > 255) bl2 = 255;
+        return IM_COL32(r, g, bl2, alpha);
+    };
     dl->AddRectFilledMultiColor(a, b,
-        IM_COL32( 26,  12,  15, 255),     // tl
-        IM_COL32( 30,  13,  16, 255),     // tr
-        IM_COL32(  8,   4,   6, 255),     // br
-        IM_COL32(  6,   3,   4, 255));    // bl
+        mix(0.13f, 0.22f, 0.25f, 255),    // tl
+        mix(0.15f, 0.24f, 0.27f, 255),    // tr
+        mix(0.04f, 0.07f, 0.10f, 255),    // br
+        mix(0.03f, 0.06f, 0.07f, 255));   // bl
     const float cx = (a.x + b.x) * 0.5f;
     const float cy = (a.y + b.y) * 0.55f;
     const float r  = (b.x - a.x) * 0.55f;
-    dl->AddCircleFilled({cx, cy}, r, IM_COL32(140, 30, 34, 24), 96);
-    dl->AddCircleFilled({cx, cy}, r * 0.6f, IM_COL32(180, 44, 48, 18), 96);
+    dl->AddCircleFilled({cx, cy}, r,        mix(0.70f, 0.55f, 0.57f, 24), 96);
+    dl->AddCircleFilled({cx, cy}, r * 0.6f, mix(0.90f, 0.81f, 0.80f, 18), 96);
 }
 
 void DrawModalBackdrop(ImDrawList* dl, ImVec2 a, ImVec2 b) {

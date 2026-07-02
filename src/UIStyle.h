@@ -28,6 +28,9 @@ struct Colors {
     ImU32 glowGold, glowCyan, glowGreen, glowMagenta;
 };
 const Colors& C();
+// Swap the working palette: 0 Crimson (default), 1 Midnight, 2 Emerald,
+// 3 Mono. Call ApplyTheme() afterwards so raw ImGui widgets reskin too.
+void SetPalette(int themeId);
 
 // ── Spacing / radius tokens ──────────────────────────────────────────────────
 struct Metrics {

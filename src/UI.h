@@ -211,6 +211,12 @@ private:
     char                   m_deckFilterBuf[64] = {};
     void   loadFavorites();
     void   saveFavorites();
+    // Per-deck sleeve overrides: deck filename -> sleeve filename. Applied at
+    // duel start; decks without an entry use the global Settings sleeve.
+    std::unordered_map<std::string, std::string> m_deckSleeves;
+    void   loadDeckSleeves();
+    void   saveDeckSleeves();
+    void   applySleeveForDeck(const std::string& deckPath);
     // Filter chips: monster / spell / trap / main-only / extra-only.
     bool                   m_dbFilterMon  = true;
     bool                   m_dbFilterSpl  = true;
