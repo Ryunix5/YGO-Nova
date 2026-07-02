@@ -395,6 +395,13 @@ void Game::render() {
 }
 
 void Game::shutdown() {
+    // Idempotence guard — main() calls shutdown() explicitly AND ~Game()
+    // calls it again. The second pass used to re-run the ImGui backend
+    // shutdown on an already-destroyed context: an access violation on every
+    // normal exit (the crash reporter surfaced it as a popup when quitting).
+    if (m_shutdownDone) return;
+    m_shutdownDone = true;
+
     // Defensive final save — covers the case where the user toggled
     // something via in-line UI but never opened the Settings popup. The
     // popup itself also saves on every change.

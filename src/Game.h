@@ -25,6 +25,7 @@ private:
     int           m_width   = 1280;
     int           m_height  = 800;
     bool          m_fullscreen = false;   // toggled by the UI's F11 request
+    bool          m_shutdownDone = false; // shutdown() runs exactly once
 
     CardDB          m_db;
     SnapshotManager m_snap;
