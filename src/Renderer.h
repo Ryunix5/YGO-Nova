@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstdint>
 #include "ImageFetcher.h"
 
@@ -44,12 +45,17 @@ public:
     const std::string& cardBackInfo() const { return m_backInfo; }
 
 private:
-    void* loadTexture(const std::string& path);
+    void* loadTexture(const std::string& path,
+                      int* outW = nullptr, int* outH = nullptr);
     void* generateFallbackTexture(uint8_t r, uint8_t g, uint8_t b);
     void* generateCardBackTexture();   // procedural card back when no asset exists
 
     std::unordered_map<uint32_t, void*> m_cardTextures;
     std::unordered_map<std::string, void*> m_imageCache;   // arbitrary images
+    // Cards whose on-disk art was low-res (old 177x254 thumbnail packs) and is
+    // being re-downloaded at full size; the stale texture is dropped and
+    // reloaded once the fetch lands.
+    std::unordered_set<uint32_t> m_upgradingArt;
     void* m_backTex    = nullptr;
     void* m_unknownTex = nullptr;
     std::string m_backInfo;            // card-back load diagnostics

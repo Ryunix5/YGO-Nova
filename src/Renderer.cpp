@@ -180,22 +180,49 @@ void Renderer::shutdown() {
 }
 
 void* Renderer::getCardTexture(uint32_t code) {
-    auto it = m_cardTextures.find(code);
-    if (it != m_cardTextures.end()) return it->second;
-
     const std::string jpg = "assets/cards/" + std::to_string(code) + ".jpg";
 
+    auto it = m_cardTextures.find(code);
+    if (it != m_cardTextures.end()) {
+        // A low-res upgrade finished downloading: drop the stale texture and
+        // fall through to reload the full-size file.
+        if (!m_upgradingArt.empty() && m_upgradingArt.count(code) &&
+            m_fetcher.state(code) == edo::ImageFetcher::State::Done) {
+            GLuint id = (GLuint)(uintptr_t)it->second;
+            if (it->second && it->second != m_unknownTex)
+                glDeleteTextures(1, &id);
+            m_cardTextures.erase(it);
+            m_upgradingArt.erase(code);
+        } else {
+            return it->second;
+        }
+    }
+
     // While a download for this code is in flight, show the placeholder
-    // without re-probing the disk every frame.
-    if (m_downloadImages &&
+    // (first fetch) or keep using the old file (upgrade) without re-probing
+    // the disk every frame.
+    if (m_downloadImages && !m_upgradingArt.count(code) &&
         m_fetcher.state(code) == edo::ImageFetcher::State::InFlight)
         return m_unknownTex;
 
     // Try local files (bundled art, or a previously cached download).
-    void* tex = loadTexture(jpg);
+    int w = 0, h = 0;
+    void* tex = loadTexture(jpg, &w, &h);
     if (!tex)
-        tex = loadTexture("assets/cards/" + std::to_string(code) + ".png");
-    if (tex) { m_cardTextures[code] = tex; return tex; }
+        tex = loadTexture("assets/cards/" + std::to_string(code) + ".png",
+                          &w, &h);
+    if (tex) {
+        // Old bundled packs shipped 177x254 thumbnails — too small for the
+        // preview panel and hand. Kick a full-size re-download (the CDN serves
+        // 813x1185); the texture swaps in the moment it lands.
+        if (m_downloadImages && w > 0 && w < 350 &&
+            m_fetcher.state(code) == edo::ImageFetcher::State::None) {
+            m_fetcher.request(code, jpg);
+            m_upgradingArt.insert(code);
+        }
+        m_cardTextures[code] = tex;
+        return tex;
+    }
 
     // Not on disk. Kick off an on-demand download and show the placeholder.
     // CRUCIAL: do NOT cache the placeholder while a fetch could still land —
@@ -229,10 +256,12 @@ void Renderer::prefetchCard(uint32_t code) {
         m_fetcher.request(code, base + ".jpg");
 }
 
-void* Renderer::loadTexture(const std::string& path) {
+void* Renderer::loadTexture(const std::string& path, int* outW, int* outH) {
     int w, h, ch;
     unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);
     if (!data) return nullptr;
+    if (outW) *outW = w;
+    if (outH) *outH = h;
 
     GLuint texID;
     glGenTextures(1, &texID);
