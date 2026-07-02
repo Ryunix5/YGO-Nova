@@ -29,6 +29,11 @@ bool Game::init(const std::string& title, int w, int h) {
     AssetPaths::resolve();
 
     // ── SDL init ─────────────────────────────────────────────────────────────
+    // Per-monitor DPI awareness. Without this, SDL_WINDOW_ALLOW_HIGHDPI is a
+    // no-op on Windows and the OS bitmap-stretches the whole window on 125%+
+    // display scaling — the "blurry / low-res / old" look. With it, the window
+    // renders at native pixels and we compensate via fonts + framebuffer scale.
+    SDL_SetHint("SDL_WINDOWS_DPI_SCALING", "1");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         fprintf(stderr, "SDL_Init error: %s\n", SDL_GetError());
         return false;
@@ -60,6 +65,21 @@ bool Game::init(const std::string& title, int w, int h) {
     }
     SDL_GL_MakeCurrent(m_window, m_glCtx);
     SDL_GL_SetSwapInterval(1); // vsync
+
+    // Detect the display scale (physical pixels per logical point). Fonts are
+    // rasterized at this scale so glyphs map 1:1 to physical pixels — crisp
+    // text instead of upscaled-atlas blur. UI::draw divides it back out of
+    // FontGlobalScale, so all logical sizes stay unchanged.
+    {
+        int lw = 0, lh = 0, pw = 0, ph = 0;
+        SDL_GetWindowSize(m_window, &lw, &lh);
+        SDL_GL_GetDrawableSize(m_window, &pw, &ph);
+        extern float g_dpiScale;
+        if (lw > 0 && pw > 0) g_dpiScale = (float)pw / (float)lw;
+        if (g_dpiScale < 1.f) g_dpiScale = 1.f;
+        printf("[video] window %dx%d, drawable %dx%d, dpi scale %.2f\n",
+               lw, lh, pw, ph, g_dpiScale);
+    }
 
     // ── Dear ImGui init ───────────────────────────────────────────────────────
     IMGUI_CHECKVERSION();
@@ -178,13 +198,21 @@ bool Game::init(const std::string& title, int w, int h) {
             if (fs::exists(candidates[i])) { fontPath = candidates[i]; break; }
 
         if (fontPath) {
-            UIStyle::fBody   = io.Fonts->AddFontFromFileTTF(fontPath, 16.f);
-            UIStyle::fSmall  = io.Fonts->AddFontFromFileTTF(fontPath, 13.f);
-            UIStyle::fHeader = io.Fonts->AddFontFromFileTTF(fontPath, 22.f);
-            UIStyle::fTitle  = io.Fonts->AddFontFromFileTTF(fontPath, 34.f);
+            // Rasterize glyphs at the display's physical scale (UI::draw folds
+            // 1/g_dpiScale back into FontGlobalScale so logical sizes stay the
+            // same) and oversample so text stays crisp under any UI scale.
+            extern float g_dpiScale;
+            const float ds = g_dpiScale;
+            ImFontConfig fc;
+            fc.OversampleH = 2;
+            fc.OversampleV = 2;
+            UIStyle::fBody   = io.Fonts->AddFontFromFileTTF(fontPath, 16.f * ds, &fc);
+            UIStyle::fSmall  = io.Fonts->AddFontFromFileTTF(fontPath, 13.f * ds, &fc);
+            UIStyle::fHeader = io.Fonts->AddFontFromFileTTF(fontPath, 22.f * ds, &fc);
+            UIStyle::fTitle  = io.Fonts->AddFontFromFileTTF(fontPath, 34.f * ds, &fc);
             io.FontDefault   = UIStyle::fBody;
-            printf("[font] loaded '%s' (body 16 / small 13 / header 22 / title 34)\n",
-                   fontPath);
+            printf("[font] loaded '%s' (body 16 / small 13 / header 22 / title 34"
+                   " @ %.2fx dpi, 2x oversample)\n", fontPath, ds);
         } else {
             printf("[font] WARN: no UI font found; using ImGui default\n");
         }
@@ -278,6 +306,11 @@ bool Game::init(const std::string& title, int w, int h) {
 // Frame-rate cap (0 = uncapped). Set by the UI from Settings; read here so the
 // render loop can pad each frame to the target without threading settings in.
 int g_fpsCap = 0;
+
+// Physical-pixels-per-logical-point of the display (1.0 on 100% scaling,
+// 1.5 on 150%, ...). Set once at init; fonts rasterize at this scale and
+// UI::draw folds the inverse into FontGlobalScale.
+float g_dpiScale = 1.0f;
 
 // Window focus + a taskbar-flash helper, used by the UI's "your turn" alert.
 bool g_windowFocused = true;

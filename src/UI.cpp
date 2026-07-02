@@ -3528,8 +3528,14 @@ bool UI::draw(int winW, int winH) {
     if (!s_themeApplied) { UIStyle::ApplyTheme(); s_themeApplied = true; }
 
     // Global UI scale (fonts) — cheap to set per frame, applies everywhere.
-    ImGui::GetIO().FontGlobalScale =
-        std::clamp(m_settings.uiScale, 0.7f, 1.6f);
+    // Fonts are rasterized at g_dpiScale× physical resolution (Game.cpp), so
+    // divide it back out: logical sizes stay the same, glyphs render 1:1 on
+    // physical pixels — crisp on 125%/150% Windows display scaling.
+    {
+        extern float g_dpiScale;
+        ImGui::GetIO().FontGlobalScale =
+            std::clamp(m_settings.uiScale, 0.7f, 1.6f) / g_dpiScale;
+    }
 
     // Startup splash — sponsor then author fade — before anything else.
     if (m_introActive) {
@@ -13115,9 +13121,9 @@ void UI::drawDeckBuilder(int w, int h) {
     // Custom format / banlist editor popup.
     drawBanlistEditor();
 
-    // ── LEFT — Card Search ──────────────────────────────────────────────────
+    // ── RIGHT — Card Search (tester feedback: search right, info left) ──────
     {
-        ImGui::SetNextWindowPos({0.f, COL_Y});
+        ImGui::SetNextWindowPos({(float)w - SEARCH_W, COL_Y});
         ImGui::SetNextWindowSize({SEARCH_W, COL_H});
         ImGui::PushStyleColor(ImGuiCol_WindowBg,
             ImGui::ColorConvertU32ToFloat4(C.bgPanel));
@@ -13436,7 +13442,7 @@ void UI::drawDeckBuilder(int w, int h) {
 
     // ── CENTER — Deck editor (Main + Extra + Side) ──────────────────────────
     {
-        ImGui::SetNextWindowPos({SEARCH_W, COL_Y});
+        ImGui::SetNextWindowPos({PREVIEW_W, COL_Y});
         ImGui::SetNextWindowSize({DECK_W, COL_H});
         ImGui::PushStyleColor(ImGuiCol_WindowBg,
             ImGui::ColorConvertU32ToFloat4(C.bgDeep));
@@ -14017,9 +14023,9 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::PopStyleColor();
     }
 
-    // ── RIGHT — Card Preview ────────────────────────────────────────────────
+    // ── LEFT — Card Preview / info (tester feedback) ────────────────────────
     {
-        ImGui::SetNextWindowPos({(float)w - PREVIEW_W, COL_Y});
+        ImGui::SetNextWindowPos({0.f, COL_Y});
         ImGui::SetNextWindowSize({PREVIEW_W, COL_H});
         ImGui::PushStyleColor(ImGuiCol_WindowBg,
             ImGui::ColorConvertU32ToFloat4(C.bgPanel));
