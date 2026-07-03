@@ -16894,7 +16894,7 @@ void UI::drawArcade(int w, int h) {
             if (UIStyle::GhostButton("I Won", {half, 34.f})) {
                 m_arcade.wins++;
                 m_arcade.masterLeft += 10;
-                m_arcade.secretLeft += 10;
+                m_arcade.secretLeft  = 10;   // secret packs RESET, not stack
                 m_arcade.spins++;
                 m_arcade.save();
                 m_arcadeWheelState = 0;   // wheel button below lights up
@@ -16904,7 +16904,7 @@ void UI::drawArcade(int w, int h) {
             if (UIStyle::GhostButton("I Lost", {half, 34.f})) {
                 m_arcade.losses++;
                 m_arcade.masterLeft += 10;
-                m_arcade.secretLeft += 10;
+                m_arcade.secretLeft  = 10;   // secret packs RESET, not stack
                 m_arcade.tokens += 5;
                 m_arcade.save();
                 gAudio().play("confirm");
@@ -16930,9 +16930,9 @@ void UI::drawArcade(int w, int h) {
         }
         UIStyle::PushFont(UIStyle::fSmall);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
-            "Every duel: both players restock +10 master and\n"
-            "+10 secret packs. Winner also spins the wheel,\n"
-            "loser also gets 5 wild pack tokens. Honor system.");
+            "Every duel: +10 master packs, secret packs reset\n"
+            "to 10. Winner also spins the wheel, loser also\n"
+            "gets 5 wild pack tokens. Honor system.");
         UIStyle::PopFont();
 
         // Close Save pinned to the panel bottom.
@@ -16952,22 +16952,29 @@ void UI::drawArcade(int w, int h) {
     // ── Right area: Last Pack / Collection ──────────────────────────────
     {
         float ax = 16.f + PANEL_W + 14.f;
-        ImGui::SetNextWindowPos({ax, TOP_Y});
-        ImGui::SetNextWindowSize({(float)w - ax - 16.f,
-                                  (float)h - TOP_Y - 16.f});
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,
-            ImGui::ColorConvertU32ToFloat4(C.bgDeep));
+        ImVec2 mp0 = {ax, TOP_Y};
+        ImVec2 mp1 = {(float)w - 16.f, (float)h - 16.f};
+        ImGui::SetNextWindowPos(mp0);
+        ImGui::SetNextWindowSize({mp1.x - mp0.x, mp1.y - mp0.y});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{18.f, 14.f});
         ImGui::Begin("##arc_main", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoSavedSettings);
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+        // Premium framed surface instead of a flat fill.
+        UIStyle::DrawGamePanel(ImGui::GetWindowDrawList(), mp0, mp1,
+                               12.f, C.accent);
 
+        char collTab[32];
+        snprintf(collTab, sizeof(collTab), "Collection (%d)",
+                 (int)m_arcade.pool.size());
         if (UIStyle::SegmentedButton("Last Pack", m_arcadeView == 0, true,
-                                     {120.f, 30.f}))
+                                     {130.f, 34.f}))
             m_arcadeView = 0;
         ImGui::SameLine(0.f, 6.f);
-        if (UIStyle::SegmentedButton("Collection", m_arcadeView == 1, true,
-                                     {120.f, 30.f}))
+        if (UIStyle::SegmentedButton(collTab, m_arcadeView == 1, true,
+                                     {160.f, 34.f}))
             m_arcadeView = 1;
         // Rarity legend, right-aligned on the tab row.
         {
@@ -16975,7 +16982,7 @@ void UI::drawArcade(int w, int h) {
             float lx = ImGui::GetWindowPos().x
                      + ImGui::GetWindowContentRegionMax().x - 4.f;
             float ly = ImGui::GetWindowPos().y
-                     + ImGui::GetCursorPosY() - 24.f;
+                     + ImGui::GetCursorPosY() - 26.f;
             for (int r = 0; r < 4; ++r) {
                 ImVec2 ts = ImGui::CalcTextSize(kRarityName[r]);
                 lx -= ts.x;
@@ -16986,7 +16993,7 @@ void UI::drawArcade(int w, int h) {
                 lx -= 18.f;
             }
         }
-        UIStyle::DrawDivider(8.f, 8.f);
+        UIStyle::DrawDivider(10.f, 10.f);
 
         float availW = ImGui::GetContentRegionAvail().x;
         float availH = ImGui::GetContentRegionAvail().y;
@@ -16997,29 +17004,63 @@ void UI::drawArcade(int w, int h) {
                 UIStyle::EmptyState(availH - 8.f, "Open a pack",
                                     "Your last 8 pulls appear here");
             } else {
-                // Pack title, centred over the reveal grid.
+                double t = ImGui::GetTime() - m_arcadeRevealAt;
+                bool allIn = t > 7 * 0.14 + 0.30;
+                // Pack title with an accent underline, centred.
                 {
                     UIStyle::PushFont(UIStyle::fHeader);
-                    const char* t = m_arcadeLastPack.empty()
-                                  ? "Pack" : m_arcadeLastPack.c_str();
-                    ImVec2 ts = ImGui::CalcTextSize(t);
-                    ImGui::SetCursorPosX(
-                        (ImGui::GetWindowContentRegionMax().x - ts.x) * 0.5f);
+                    const char* pt = m_arcadeLastPack.empty()
+                                   ? "Pack" : m_arcadeLastPack.c_str();
+                    ImVec2 ts = ImGui::CalcTextSize(pt);
+                    float cxp = (ImGui::GetWindowContentRegionMax().x
+                                 - ts.x) * 0.5f;
+                    ImGui::SetCursorPosX(cxp);
                     ImGui::TextColored(
-                        ImGui::ColorConvertU32ToFloat4(C.accentHi), "%s", t);
+                        ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                        "%s", pt);
                     UIStyle::PopFont();
+                    ImVec2 up = ImGui::GetCursorScreenPos();
+                    float  ux = up.x + cxp - 18.f;
+                    ImGui::GetWindowDrawList()->AddRectFilled(
+                        {ux, up.y + 1.f}, {ux + ts.x + 4.f, up.y + 3.f},
+                        C.accentDim, 2.f);
+                    // Pulls summary on the same line, once the reveal ends.
+                    if (allIn) {
+                        int news = 0, best = 0;
+                        for (size_t i2 = 0; i2 < m_arcadeReveal.size(); ++i2) {
+                            if (m_arcadeRevealNew[i2]) news++;
+                            auto rit = m_mdRarity.find(m_arcadeReveal[i2]);
+                            if (rit != m_mdRarity.end() && rit->second > best)
+                                best = rit->second;
+                        }
+                        char sum[64];
+                        snprintf(sum, sizeof(sum), "%d new  •  best pull ",
+                                 news);
+                        ImVec2 ss = ImGui::CalcTextSize(sum);
+                        float sx = up.x + (ImGui::GetWindowContentRegionMax().x
+                                   - ss.x - 24.f) * 0.5f;
+                        ImGui::GetWindowDrawList()->AddText(
+                            {sx, up.y + 8.f}, C.textMuted, sum);
+                        ImGui::GetWindowDrawList()->AddText(
+                            {sx + ss.x, up.y + 8.f}, kRarityCol[best],
+                            kRarityName[best]);
+                    }
+                    ImGui::Dummy({1.f, 26.f});
                 }
                 const int cols = 4;
                 float gap = 18.f;
                 float cw  = std::min(190.f, (availW - gap * (cols - 1)) / cols);
                 float ch  = cw * 254.f / 177.f;
                 float rowsH = ch * 2 + gap + 64.f;
-                ImGui::Dummy({1.f, std::max(0.f, (availH - rowsH) * 0.30f)});
-                double t = ImGui::GetTime() - m_arcadeRevealAt;
+                ImGui::Dummy({1.f, std::max(0.f, (availH - rowsH) * 0.22f)});
                 ImVec2 base = ImGui::GetCursorScreenPos();
                 float  gridW = cols * cw + (cols - 1) * gap;
                 base.x += (availW - gridW) * 0.5f;
                 ImDrawList* dl = ImGui::GetWindowDrawList();
+                // Glass slab behind the whole grid ties the cards together.
+                UIStyle::DrawGlassPanel(dl,
+                    {base.x - 22.f, base.y - 18.f},
+                    {base.x + gridW + 22.f, base.y + rowsH + 4.f}, 10.f);
                 for (int i = 0; i < (int)m_arcadeReveal.size() && i < 8; ++i) {
                     uint32_t code = m_arcadeReveal[i];
                     int r = m_mdRarity.count(code) ? m_mdRarity[code] : 0;
@@ -17035,9 +17076,18 @@ void UI::drawArcade(int w, int h) {
                     ImVec2 ca = {a.x + grow, a.y + grow * 254.f / 177.f};
                     ImVec2 cb = {a.x + cw - grow,
                                  a.y + ch - grow * 254.f / 177.f};
+                    // Hover lift once landed.
+                    bool hov = k >= 1.f &&
+                               ImGui::IsMouseHoveringRect(ca, cb);
+                    if (hov) {
+                        ca.x -= 5.f; ca.y -= 7.f;
+                        cb.x += 5.f; cb.y += 7.f;
+                    }
                     // Rarity glow behind SR/UR the moment they land.
-                    if (k >= 1.f && r >= 2)
-                        UIStyle::DrawGlow(dl, ca, cb, kRarityCol[r], 6.f, 3);
+                    if (k >= 1.f && (r >= 2 || hov))
+                        UIStyle::DrawGlow(dl, ca, cb,
+                                          r >= 2 ? kRarityCol[r] : C.accent,
+                                          6.f, hov ? 4 : 3);
                     void* tex = m_rend.getCardTexture(code);
                     if (tex)
                         dl->AddImageRounded((ImTextureID)tex, ca, cb,
@@ -17065,12 +17115,14 @@ void UI::drawArcade(int w, int h) {
                         }
                         // Name under the card, clipped to its width.
                         std::string nm = m_db.getCard(code).name;
-                        dl->PushClipRect({a.x - 6.f, cb.y},
-                                         {a.x + cw + 6.f, cb.y + 24.f}, true);
-                        dl->AddText({a.x, cb.y + 5.f}, C.textMd, nm.c_str());
+                        dl->PushClipRect({a.x - 6.f, a.y + ch},
+                                         {a.x + cw + 6.f, a.y + ch + 24.f},
+                                         true);
+                        dl->AddText({a.x, a.y + ch + 5.f},
+                                    hov ? C.textHi : C.textMd, nm.c_str());
                         dl->PopClipRect();
                         // Hover → card zoom info like everywhere else.
-                        if (ImGui::IsMouseHoveringRect(ca, cb)) {
+                        if (hov) {
                             m_hoveredCard = code;
                             m_hoveredInfo = m_db.getCard(code);
                         }
@@ -17079,7 +17131,7 @@ void UI::drawArcade(int w, int h) {
                 ImGui::Dummy({1.f, rowsH});
             }
         } else {
-            // ── Collection: rarity-sorted grid of everything owned ──────
+            // ── Collection: rarity-grouped grid of everything owned ─────
             struct Entry { uint32_t code; int cnt; int rar; std::string name; };
             static std::vector<Entry> s_entries;
             static size_t s_sig = 0;
@@ -17100,23 +17152,32 @@ void UI::drawArcade(int w, int h) {
                               return a.name < b.name;
                           });
             }
-            ImGui::TextDisabled("%d cards  •  %d unique  •  build decks from "
-                                "this pool only",
-                                m_arcade.poolTotal(),
-                                (int)m_arcade.pool.size());
-            // Per-rarity totals as coloured chips.
+            // Filter chips (ALL + one per rarity, with owned totals).
+            static int s_collFilter = -1;      // -1 = all, else rarity 0..3
             {
                 int byRar[4] = {0, 0, 0, 0};
                 for (auto& e : s_entries) byRar[e.rar] += e.cnt;
+                if (UIStyle::SegmentedButton("ALL", s_collFilter < 0, true,
+                                             {64.f, 26.f}))
+                    s_collFilter = -1;
                 for (int r = 3; r >= 0; --r) {
+                    ImGui::SameLine(0.f, 4.f);
                     char chip[24];
                     snprintf(chip, sizeof(chip), "%s %d",
                              kRarityName[r], byRar[r]);
-                    UIStyle::StatusChip(chip, kRarityCol[r]);
-                    if (r) ImGui::SameLine(0.f, 6.f);
+                    float chipW = ImGui::CalcTextSize(chip).x + 26.f;
+                    if (UIStyle::SegmentedButton(chip, s_collFilter == r,
+                                                 byRar[r] > 0,
+                                                 {chipW, 26.f}))
+                        s_collFilter = (s_collFilter == r) ? -1 : r;
                 }
+                ImGui::SameLine(0.f, 12.f);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%d cards  •  %d unique",
+                                    m_arcade.poolTotal(),
+                                    (int)m_arcade.pool.size());
             }
-            ImGui::Dummy({1.f, 4.f});
+            ImGui::Dummy({1.f, 6.f});
             ImGui::BeginChild("##arc_coll", {-1.f, -1.f}, false);
             if (s_entries.empty()) {
                 UIStyle::EmptyState(availH - 40.f, "Nothing owned yet",
@@ -17126,14 +17187,44 @@ void UI::drawArcade(int w, int h) {
                 int per = std::max(1, (int)((ImGui::GetContentRegionAvail().x
                                     + gap2) / (cw + gap2)));
                 ImDrawList* dl = ImGui::GetWindowDrawList();
-                for (int i = 0; i < (int)s_entries.size(); ++i) {
-                    const Entry& e = s_entries[(size_t)i];
-                    if (i % per) ImGui::SameLine(0.f, gap2);
+                int col = 0, lastRar = -2, shown = 0;
+                for (const Entry& e : s_entries) {
+                    if (s_collFilter >= 0 && e.rar != s_collFilter) continue;
+                    // Rarity group header whenever the tier changes.
+                    if (e.rar != lastRar) {
+                        lastRar = e.rar;
+                        col = 0;
+                        int uniq = 0;
+                        for (auto& e2 : s_entries)
+                            if (e2.rar == e.rar) uniq++;
+                        ImVec2 hp = ImGui::GetCursorScreenPos();
+                        float  hw = ImGui::GetContentRegionAvail().x;
+                        ImGui::Dummy({1.f, 26.f});
+                        dl->AddRectFilled({hp.x, hp.y + 5.f},
+                                          {hp.x + 4.f, hp.y + 21.f},
+                                          kRarityCol[e.rar], 2.f);
+                        static const char* kRarityFull[4] = {
+                            "NORMAL", "RARE", "SUPER RARE", "ULTRA RARE"};
+                        char hdr[48];
+                        snprintf(hdr, sizeof(hdr), "%s — %d",
+                                 kRarityFull[e.rar], uniq);
+                        dl->AddText({hp.x + 12.f, hp.y + 4.f},
+                                    kRarityCol[e.rar], hdr);
+                        ImVec2 hs = ImGui::CalcTextSize(hdr);
+                        dl->AddLine({hp.x + 20.f + hs.x, hp.y + 13.f},
+                                    {hp.x + hw - 4.f, hp.y + 13.f},
+                                    C.borderSoft, 1.f);
+                    }
+                    if (col) ImGui::SameLine(0.f, gap2);
                     ImVec2 a = ImGui::GetCursorScreenPos();
                     char cid[32];
                     snprintf(cid, sizeof(cid), "##own_%u", (unsigned)e.code);
                     ImGui::InvisibleButton(cid, {cw, chh + 4.f});
+                    bool hov = ImGui::IsItemHovered();
                     void* tex = m_rend.getCardTexture(e.code);
+                    if (hov)
+                        UIStyle::DrawGlow(dl, a, {a.x + cw, a.y + chh},
+                                          kRarityCol[e.rar], 4.f, 3);
                     if (tex)
                         dl->AddImageRounded((ImTextureID)tex, a,
                                             {a.x + cw, a.y + chh},
@@ -17148,17 +17239,23 @@ void UI::drawArcade(int w, int h) {
                     if (e.cnt > 1)
                         UIStyle::CountBadge(dl, {a.x + cw - 12.f,
                                                  a.y + chh - 12.f}, e.cnt);
-                    if (ImGui::IsItemHovered()) {
+                    if (hov) {
                         m_hoveredCard = e.code;
                         m_hoveredInfo = m_db.getCard(e.code);
                         ImGui::SetTooltip("%s  (%s x%d)", e.name.c_str(),
                                           kRarityName[e.rar], e.cnt);
                     }
+                    if (++col >= per) col = 0;
+                    ++shown;
                 }
+                if (!shown)
+                    UIStyle::EmptyState(availH - 60.f, "None of that rarity",
+                                        "Keep opening packs");
             }
             ImGui::EndChild();
         }
         ImGui::End();
+        ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     }
 
