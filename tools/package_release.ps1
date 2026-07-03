@@ -129,6 +129,16 @@ Get-ChildItem -Path $assetsSrc -Force | ForEach-Object {
         Write-Host "  sleeves: shipped classic sleeves only" -ForegroundColor DarkGray
         return
     }
+    # Arcade: ship the Master Duel rarity table the mode needs, but never the
+    # developer's own campaign saves (*.arcade are personal progress).
+    if ($_.PSIsContainer -and $_.Name -eq "arcade") {
+        $dst = Join-Path $assetsDst "arcade"
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        $mr = Join-Path $_.FullName "md_rarity.txt"
+        if (Test-Path $mr) { Copy-Item $mr $dst -Force }
+        Write-Host "  arcade: shipped md_rarity.txt only (saves excluded)" -ForegroundColor DarkGray
+        return
+    }
     # Personal progress/preference files at the assets root.
     if (-not $_.PSIsContainer -and
         ($_.Name -eq "match_history.txt" -or $_.Name -eq "card_tags.txt")) {

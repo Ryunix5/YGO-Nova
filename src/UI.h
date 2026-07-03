@@ -11,12 +11,13 @@
 #include "NetSession.h"
 #include "UpdateChecker.h"
 #include "NetSnapshots.h"
+#include "ArcadeSave.h"
 #include <string>
 #include <vector>
 #include <set>
 #include <unordered_map>
 
-enum class Screen { Lobby, Duel, DeckBuilder, Replays, Multiplayer };
+enum class Screen { Lobby, Duel, DeckBuilder, Replays, Multiplayer, Arcade };
 
 class UI {
 public:
@@ -81,6 +82,32 @@ private:
     // In-room screen (any transport, once hosting/connecting/connected):
     // room code header, YOU vs OPPONENT player cards, ready-up, Start Duel.
     void drawRoomScreen(int w, int h, float topY);
+
+    // ── Arcade (Master Saga) ───────────────────────────────────────────────
+    // Save-file campaigns: open 10 Master Packs + 10 Secret Packs (real MD
+    // rarities), build from your pulls, duel friends online. One save per
+    // friend group; the pool is fixed once the packs are gone.
+    void drawArcade(int w, int h);
+    void loadMdRarity();                         // lazy, one-time table build
+    std::vector<uint32_t> rollMasterPack();      // 8 cards, MD slot odds
+    std::vector<uint32_t> rollSecretPack(uint16_t setcode);
+    const std::vector<uint32_t>& mdArchetypeBucket(uint16_t setcode);
+    edo::ArcadeSave m_arcade;                    // the loaded campaign
+    bool        m_arcadeLoaded = false;
+    std::vector<std::string> m_arcadeFiles;      // save names on disk
+    char        m_arcadeNameBuf[48] = {};
+    std::vector<uint32_t> m_arcadeReveal;        // last pack, reveal order
+    std::vector<bool>     m_arcadeRevealNew;     // first copy? ("NEW" badge)
+    double      m_arcadeRevealAt = 0.0;          // reveal animation start
+    int         m_arcadeView = 0;                // 0 = pack view, 1 = collection
+    uint16_t    m_arcadeSecretPick = 0;          // selected key (setcode)
+    bool        m_poolMode = false;              // deck builder pool restriction
+    // Master Duel rarity table (assets/arcade/md_rarity.txt) + derived data.
+    std::unordered_map<uint32_t, uint8_t>  m_mdRarity;      // code -> 0..3
+    std::unordered_map<uint32_t, uint64_t> m_mdSetcodes;    // code -> packed
+    std::vector<uint32_t> m_mdByRarity[4];
+    std::unordered_map<uint16_t, std::vector<uint32_t>> m_mdArchBuckets;
+    bool        m_mdLoaded = false;
 
     // ── Duel sub-renders (content-only — called inside BeginChild blocks) ──
     void drawField(int w, int h);
