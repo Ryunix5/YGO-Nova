@@ -15620,6 +15620,11 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
     for (const auto& r : rooms) if (r.joinable()) ++openCount;
     const bool official = EDOPRO_DEFAULT_RELAY[0] &&
                           m_settings.mpHostIP == EDOPRO_DEFAULT_RELAY;
+    // "Have we ever reached the server" — with auto-refresh polling every 4s
+    // the status flips Ready→Querying→Ready constantly; UI states must key
+    // off THIS, not the transient status, or the whole lobby blinks.
+    static bool s_everReady = false;
+    if (rlStatus == edo::NetSession::RoomListStatus::Ready) s_everReady = true;
 
     const float PAD = 16.f;
     const float TB_H = 54.f;
@@ -15642,12 +15647,12 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
         m_settings.mpDisplayName = m_mpNameBuf;
         saveSettings();
     }
-    // Server status pill: green = list loaded, yellow = querying, red = error.
+    // Server status pill. Keyed off "ever reached" so it stays green while
+    // the 4-second auto-poll cycles (only errors / first contact change it).
     ImGui::SameLine(0.f, 16.f);
     {
-        ImU32 dot = rlStatus == edo::NetSession::RoomListStatus::Ready ? C.success
-                  : rlStatus == edo::NetSession::RoomListStatus::Error ? C.danger
-                  : C.warning;
+        ImU32 dot = rlStatus == edo::NetSession::RoomListStatus::Error ? C.danger
+                  : s_everReady ? C.success : C.warning;
         ImVec2 p = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
         float cy = p.y + ImGui::GetFrameHeight() * 0.5f;
@@ -15659,17 +15664,21 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
         else          ImGui::Text("%s", m_settings.mpHostIP.c_str());
     }
     // Right-aligned action cluster: Auto · Refresh · code+Join · Host Game.
+    // Positioned ABSOLUTELY from the window's content edge — SameLine spacing
+    // is relative to the previous widget and overflowed the window (which is
+    // why the buttons were invisible).
     {
         const float wAuto = 58.f, wRef = 84.f, wCode = 150.f, wJoin = 64.f,
                     wHost = 130.f, gap = 8.f;
         float clusterW = wAuto + wRef + wCode + wJoin + wHost + gap * 4.f;
-        float avail = ImGui::GetContentRegionAvail().x;
-        ImGui::SameLine(0.f, std::max(8.f, avail - clusterW));
+        ImGui::SameLine(std::max(
+            ImGui::GetCursorPosX() + 8.f,
+            ImGui::GetWindowContentRegionMax().x - clusterW));
         ImGui::Checkbox("Auto##lobby", &m_lobbyAutoRefresh);
         ImGui::SameLine(0.f, gap);
+        // Label stays constant — swapping text every poll made it blink.
         if (querying) ImGui::BeginDisabled();
-        if (UIStyle::GhostButton(querying ? "...##rl" : "Refresh##rl",
-                                 {wRef, 30.f}))
+        if (UIStyle::GhostButton("Refresh##rl", {wRef, 30.f}))
             doRefresh();
         if (querying) ImGui::EndDisabled();
         ImGui::SameLine(0.f, gap);
@@ -15712,9 +15721,10 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
             "Could not reach the server: %s", m_net.roomListError().c_str());
         ImGui::TextDisabled("It retries automatically while Auto is on.");
     } else if (rooms.empty()) {
+        // Stable across the auto-poll: once we've reached the server, an
+        // empty list always reads "no rooms" (never flashes "contacting").
         UIStyle::EmptyState(tableH - 40.f,
-            rlStatus == edo::NetSession::RoomListStatus::Ready
-                ? "No open rooms right now" : "Contacting server...",
+            s_everReady ? "No open rooms right now" : "Contacting server...",
             "Host Game creates a room others can join");
     } else if (ImGui::BeginTable("##rooms", 5,
                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
@@ -15794,7 +15804,9 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
     ImGui::AlignTextToFramePadding();
-    if (rlStatus == edo::NetSession::RoomListStatus::Ready) {
+    // Once we've reached the server, always show the counts — the transient
+    // Querying status every 4s must not swap this line (that was the blink).
+    if (s_everReady) {
         ImGui::TextDisabled("%d room%s · %d open", (int)rooms.size(),
                             rooms.size() == 1 ? "" : "s", openCount);
         if (m_lobbyLastRefreshAt > 0.0) {
@@ -15803,7 +15815,7 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
                                 now - m_lobbyLastRefreshAt);
         }
     } else {
-        ImGui::TextDisabled(querying ? "Searching..." : "Connecting...");
+        ImGui::TextDisabled("Connecting to server...");
     }
     if (m_mpRelayConnecting) {
         ImGui::SameLine(0.f, 14.f);
@@ -15814,10 +15826,11 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
         ImGui::TextColored({1.f, 0.55f, 0.55f, 1.f}, "%s",
                            m_mpRoomError.c_str());
     }
-    // Quick Match on the right: join the first open room, else host one.
+    // Quick Match on the right — absolute position from the content edge.
     {
-        float avail = ImGui::GetContentRegionAvail().x;
-        ImGui::SameLine(0.f, std::max(8.f, avail - 130.f));
+        ImGui::SameLine(std::max(
+            ImGui::GetCursorPosX() + 8.f,
+            ImGui::GetWindowContentRegionMax().x - 124.f));
         if (UIStyle::SecondaryButton("Quick Match", {124.f, 28.f})) {
             const edo::RoomInfo* pick = nullptr;
             for (const auto& r : rooms) if (r.joinable()) { pick = &r; break; }
