@@ -15083,10 +15083,16 @@ void UI::drawMultiplayer(int w, int h) {
 
     // ── Online lobby (EDOPro-style, full width) ─────────────────────────
     // While BROWSING (relay transport, not yet connected) the whole screen
-    // is the lobby: toolbar + big room table, like Project Ignis. Once a
-    // room is created/joined the two-column session layout below takes over.
+    // is the lobby: toolbar + big room table, like Project Ignis.
     if (m_mpTransport == 1 && m_net.isOffline()) {
         drawOnlineLobby(w, h, BAR_H);
+        return;
+    }
+    // ── Room screen (any transport, once hosting / connecting) ──────────
+    // Replaces the old two-column settings form with a proper room: code
+    // header, YOU-vs-OPPONENT player cards, ready-up, Start Duel.
+    if (!m_net.isOffline()) {
+        drawRoomScreen(w, h, BAR_H);
         return;
     }
 
@@ -15840,6 +15846,333 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
     }
     ImGui::End();
     ImGui::PopStyleColor();
+}
+
+// ─── Room screen ─────────────────────────────────────────────────────────────
+// The waiting room once a match is being set up (host or client, relay or
+// LAN): a code header with one-click copy, two facing player cards with a VS
+// emblem, a big ready toggle, and the host's Start Duel front and centre.
+void UI::drawRoomScreen(int w, int h, float topY) {
+    const UIStyle::Colors& C = UIStyle::C();
+    const float W = (float)w, H = (float)h;
+    const double now = ImGui::GetTime();
+
+    // ── Header strip: room code + state chips + Disconnect ──────────────
+    const float HD_H = 64.f;
+    ImGui::SetNextWindowPos({16.f, topY + 10.f});
+    ImGui::SetNextWindowSize({W - 32.f, HD_H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+        ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+    ImGui::Begin("##room_header", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::AlignTextToFramePadding();
+    if (m_mpTransport == 1 && !m_mpRoomCode.empty()) {
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextUnformatted("ROOM");
+        ImGui::SameLine(0.f, 10.f);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            ImGui::ColorConvertU32ToFloat4(C.accentHi));
+        ImGui::TextUnformatted(m_mpRoomCode.c_str());
+        ImGui::PopStyleColor();
+        UIStyle::PopFont();
+        ImGui::SameLine(0.f, 12.f);
+        if (UIStyle::GhostButton("Copy##rc", {64.f, 28.f})) {
+            ImGui::SetClipboardText(m_mpRoomCode.c_str());
+            pushToast("Room code copied", IM_COL32(180, 220, 255, 255), 1.8);
+        }
+        ImGui::SameLine(0.f, 12.f);
+        ImGui::TextDisabled("share this code with your opponent");
+    } else {
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextUnformatted(m_mpTransport == 0 ? "LAN MATCH"
+                                                  : "ONLINE MATCH");
+        UIStyle::PopFont();
+        if (m_net.state() == edo::NetState::Listening) {
+            ImGui::SameLine(0.f, 12.f);
+            ImGui::TextDisabled("listening on port %d — opponent joins your IP",
+                                m_mpPortBuf);
+        }
+    }
+    // Right cluster: state chips + Disconnect (absolute from content edge).
+    {
+        const float wDisc = 120.f;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8.f,
+            ImGui::GetWindowContentRegionMax().x - wDisc - 190.f));
+        UIStyle::StatusChip(m_net.isHost() ? "HOST" : "CLIENT", C.accent);
+        ImGui::SameLine(0.f, 6.f);
+        const char* stateStr =
+            m_net.state() == edo::NetState::Listening   ? "waiting"     :
+            m_net.state() == edo::NetState::Connecting  ? "connecting"  :
+            m_net.state() == edo::NetState::Handshaking ? "handshaking" :
+            m_net.state() == edo::NetState::Connected   ? "connected"   :
+            m_net.state() == edo::NetState::InDuel      ? "in duel"     :
+                                                          "error";
+        UIStyle::StatusChip(stateStr,
+            m_net.state() == edo::NetState::Connected ? C.success : C.textMd);
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8.f,
+            ImGui::GetWindowContentRegionMax().x - wDisc));
+        if (UIStyle::DangerButton("Disconnect", {wDisc, 30.f})) {
+            m_net.disconnect("user requested");
+            m_settings.mpMode = "offline";
+            saveSettings();
+            m_mpReady          = false;
+            m_mpRemoteDeckRcvd = false;
+            m_mpRemoteReady    = false;
+            m_mpRoomActive     = false;
+            m_mpRelayConnecting= false;
+            m_mpHandshakeSent  = false;
+            m_mpRoomCode.clear();
+            pushToast("Disconnected", IM_COL32(232, 110, 100, 255), 2.0);
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // ── Player cards: YOU  vs  OPPONENT ─────────────────────────────────
+    const float cardW = std::clamp(W * 0.34f, 320.f, 430.f);
+    const float cardH = std::min(H * 0.48f, 360.f);
+    const float vsGap = 110.f;
+    const float cardsY = topY + HD_H + 34.f;
+    const float leftX  = W * 0.5f - vsGap * 0.5f - cardW;
+    const float rightX = W * 0.5f + vsGap * 0.5f;
+    ImDrawList* bgdl = ImGui::GetBackgroundDrawList();
+
+    // VS emblem between the cards — rotated diamond + label.
+    {
+        ImVec2 c = {W * 0.5f, cardsY + cardH * 0.5f};
+        float s = 34.f;
+        float rot = (float)now * 0.5f;
+        ImVec2 p[4];
+        for (int i = 0; i < 4; ++i) {
+            float a = rot + (float)i * 1.5707963f;
+            p[i] = {c.x + std::cos(a) * s, c.y + std::sin(a) * s};
+        }
+        bgdl->AddPolyline(p, 4, (C.accent & 0x00FFFFFF) | 0x88000000,
+                          ImDrawFlags_Closed, 1.6f);
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImVec2 ts = ImGui::CalcTextSize("VS");
+        bgdl->AddText({c.x - ts.x * 0.5f, c.y - ts.y * 0.5f}, C.accentHi, "VS");
+        UIStyle::PopFont();
+    }
+
+    // ── YOUR card ────────────────────────────────────────────────────────
+    {
+        ImGui::SetNextWindowPos({leftX, cardsY});
+        ImGui::SetNextWindowSize({cardW, cardH});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+            ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(
+            m_mpReady ? C.success : C.borderSoft));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.6f);
+        ImGui::Begin("##room_you", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings);
+        UIStyle::PushFont(UIStyle::fSmall);
+        ImGui::TextDisabled("YOU");
+        UIStyle::PopFont();
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextUnformatted(m_mpNameBuf[0] ? m_mpNameBuf : "Player");
+        UIStyle::PopFont();
+        UIStyle::DrawDivider(4.f, 8.f);
+
+        // Deck pick — locked while readied so nobody swaps post-ready.
+        refreshDeckFiles();
+        const char* deckLabel = (m_mpDeckIdx >= 0 &&
+                                 m_mpDeckIdx < (int)m_deckFiles.size())
+            ? m_deckFiles[m_mpDeckIdx].c_str() : "(pick your deck)";
+        ImGui::TextDisabled("Deck");
+        if (m_mpReady) ImGui::BeginDisabled();
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::BeginCombo("##mpdeck", deckLabel)) {
+            for (int i = 0; i < (int)m_deckFiles.size(); ++i) {
+                bool sel = (m_mpDeckIdx == i);
+                if (ImGui::Selectable(m_deckFiles[i].c_str(), sel)) {
+                    m_mpDeckIdx = i;
+                    if (m_net.state() == edo::NetState::Connected ||
+                        m_net.state() == edo::NetState::Handshaking)
+                        sendMpDeckInfo();
+                }
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (m_mpReady) ImGui::EndDisabled();
+
+        // Boss art + deck counts for the selected deck (cached per pick).
+        static int  s_cachedIdx = -2;
+        static Deck s_myDeck;
+        if (s_cachedIdx != m_mpDeckIdx) {
+            s_cachedIdx = m_mpDeckIdx;
+            s_myDeck = (m_mpDeckIdx >= 0 &&
+                        m_mpDeckIdx < (int)m_deckFiles.size())
+                ? loadYdk("assets/decks/" + m_deckFiles[m_mpDeckIdx]) : Deck{};
+        }
+        if (!s_myDeck.main.empty()) {
+            ImGui::Dummy({1.f, 6.f});
+            uint32_t boss = deckSignatureCard(s_myDeck);
+            if (void* tex = boss ? m_rend.getCardTexture(boss) : nullptr) {
+                ImGui::Image(tex, {52.f, 74.f});
+                ImGui::SameLine(0.f, 10.f);
+            }
+            ImGui::BeginGroup();
+            ImGui::Text("Main %d", (int)s_myDeck.main.size());
+            ImGui::Text("Extra %d", (int)s_myDeck.extra.size());
+            ImGui::Text("Side %d", (int)s_myDeck.side.size());
+            ImGui::EndGroup();
+        }
+
+        // Big ready toggle pinned to the card's bottom.
+        ImGui::SetCursorPosY(cardH - 58.f);
+        if (!m_mpReady) {
+            bool haveDeck = m_mpDeckIdx >= 0;
+            if (!haveDeck) ImGui::BeginDisabled();
+            if (UIStyle::PrimaryButton("READY", {-1.f, 42.f})) {
+                m_mpReady = true;
+                sendMpReady(true);
+            }
+            if (!haveDeck) {
+                ImGui::EndDisabled();
+            }
+        } else {
+            if (UIStyle::SecondaryButton("READY — click to cancel",
+                                         {-1.f, 42.f})) {
+                m_mpReady = false;
+                sendMpReady(false);
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+    }
+
+    // ── OPPONENT card ────────────────────────────────────────────────────
+    {
+        bool havePeer = !m_net.peer().displayName.empty() ||
+                        !m_net.peer().addr.empty();
+        ImGui::SetNextWindowPos({rightX, cardsY});
+        ImGui::SetNextWindowSize({cardW, cardH});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+            ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(
+            m_mpRemoteReady ? C.success : C.borderSoft));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.6f);
+        ImGui::Begin("##room_opp", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings);
+        UIStyle::PushFont(UIStyle::fSmall);
+        ImGui::TextDisabled("OPPONENT");
+        UIStyle::PopFont();
+        if (havePeer) {
+            UIStyle::PushFont(UIStyle::fHeader);
+            ImGui::TextUnformatted(m_net.peer().displayName.empty()
+                ? "(connecting...)" : m_net.peer().displayName.c_str());
+            UIStyle::PopFont();
+            UIStyle::DrawDivider(4.f, 8.f);
+            ImGui::TextDisabled("Deck");
+            ImGui::TextUnformatted(
+                m_mpRemoteDeckRcvd
+                    ? (m_mpRemoteDeck.name.empty() ? "(unnamed deck)"
+                                                   : m_mpRemoteDeck.name.c_str())
+                    : "(awaiting deck)");
+            if (m_mpRemoteDeckRcvd)
+                ImGui::TextDisabled("Main %d  Extra %d  Side %d",
+                    (int)m_mpRemoteDeck.main.size(),
+                    (int)m_mpRemoteDeck.extra.size(),
+                    (int)m_mpRemoteDeck.side.size());
+            ImGui::Dummy({1.f, 8.f});
+            UIStyle::StatusChip("Connected", C.success);
+            ImGui::SameLine(0.f, 6.f);
+            UIStyle::StatusChip(m_mpRemoteDeckRcvd ? "Deck OK" : "No deck",
+                m_mpRemoteDeckRcvd ? C.success : C.warning);
+            // Ready state pinned at the bottom, mirroring your card.
+            ImGui::SetCursorPosY(cardH - 58.f);
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float bw2 = ImGui::GetContentRegionAvail().x;
+            ImU32 rc = m_mpRemoteReady ? C.success : C.bgRaised;
+            dl->AddRectFilled(p, {p.x + bw2, p.y + 42.f},
+                (rc & 0x00FFFFFF) | 0x44000000, 8.f);
+            dl->AddRect(p, {p.x + bw2, p.y + 42.f}, rc, 8.f, 0, 1.4f);
+            const char* rl = m_mpRemoteReady ? "READY" : "NOT READY";
+            ImVec2 ts = ImGui::CalcTextSize(rl);
+            dl->AddText({p.x + (bw2 - ts.x) * 0.5f, p.y + (42.f - ts.y) * 0.5f},
+                m_mpRemoteReady ? C.success : C.textMuted, rl);
+        } else {
+            // Waiting animation — name slot pulses with trailing dots.
+            UIStyle::PushFont(UIStyle::fHeader);
+            int dots = 1 + ((int)(now * 1.5) % 3);
+            char wait[40];
+            snprintf(wait, sizeof(wait), "Waiting%.*s", dots, "...");
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textLo),
+                               "%s", wait);
+            UIStyle::PopFont();
+            UIStyle::DrawDivider(4.f, 8.f);
+            ImGui::TextDisabled(m_mpTransport == 1
+                ? "Share the room code above — the lobby also\nlists this room for anyone browsing."
+                : "The opponent joins your IP from the LAN screen.");
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
+    }
+
+    // ── Bottom: host's Start Duel, centred ───────────────────────────────
+    {
+        const float BW = 340.f, BH = 50.f;
+        ImGui::SetNextWindowPos({W * 0.5f - BW * 0.5f, cardsY + cardH + 24.f});
+        ImGui::SetNextWindowSize({BW, BH + 30.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.f, 0.f});
+        ImGui::Begin("##room_start", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_NoSavedSettings);
+        if (m_net.isHost() && !m_mpInDuel) {
+            bool canStart = m_mpReady && m_mpRemoteReady &&
+                            m_mpDeckIdx >= 0 && m_mpRemoteDeckRcvd;
+            if (!canStart) ImGui::BeginDisabled();
+            if (UIStyle::PrimaryButton("START DUEL", {BW, BH}))
+                sendMpStartDuel();
+            if (!canStart) ImGui::EndDisabled();
+            if (!canStart) {
+                UIStyle::PushFont(UIStyle::fSmall);
+                const char* why = !m_mpRemoteDeckRcvd && m_mpDeckIdx < 0
+                    ? "waiting for both decks"
+                    : !m_mpRemoteReady ? "waiting for opponent to ready up"
+                    : !m_mpReady       ? "ready up to start"
+                                       : "waiting for decks";
+                ImVec2 ts = ImGui::CalcTextSize(why);
+                ImGui::SetCursorPosX((BW - ts.x) * 0.5f);
+                ImGui::TextDisabled("%s", why);
+                UIStyle::PopFont();
+            }
+        } else if (!m_net.isHost()) {
+            UIStyle::PushFont(UIStyle::fSmall);
+            const char* msg = "the host starts the duel when both are ready";
+            ImVec2 ts = ImGui::CalcTextSize(msg);
+            ImGui::SetCursorPosX((BW - ts.x) * 0.5f);
+            ImGui::TextDisabled("%s", msg);
+            UIStyle::PopFont();
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
+
+    // Errors, centred under everything.
+    if (!m_net.lastError().empty() || !m_mpRoomError.empty()) {
+        const std::string& err = !m_net.lastError().empty()
+            ? m_net.lastError() : m_mpRoomError;
+        ImVec2 ts = ImGui::CalcTextSize(err.c_str());
+        ImGui::GetForegroundDrawList()->AddText(
+            {W * 0.5f - ts.x * 0.5f, H - 40.f},
+            IM_COL32(255, 130, 126, 255), err.c_str());
+    }
 }
 
 // ─── refreshDeckFiles ─────────────────────────────────────────────────────────

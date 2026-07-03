@@ -78,6 +78,9 @@ private:
     // EDOPro-style full-width online lobby (room table + toolbar), shown
     // while browsing on the relay transport; drawMultiplayer branches here.
     void drawOnlineLobby(int w, int h, float topY);
+    // In-room screen (any transport, once hosting/connecting/connected):
+    // room code header, YOU vs OPPONENT player cards, ready-up, Start Duel.
+    void drawRoomScreen(int w, int h, float topY);
 
     // ── Duel sub-renders (content-only — called inside BeginChild blocks) ──
     void drawField(int w, int h);
