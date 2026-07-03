@@ -51,6 +51,10 @@ public:
     // Look up a card by code. Searches the primary then every fallback;
     // returns the first hit (CardInfo::source names the database).
     CardInfo getCard(uint32_t code) const;
+    // Bulk id -> setcode map across every database (primary wins on clashes).
+    // One table scan per database — vastly faster than per-code getCard calls
+    // when a caller needs thousands of setcodes (e.g. Arcade's pull tables).
+    std::unordered_map<uint32_t, uint64_t> allSetcodes() const;
     // Fetch one indexed effect string for a card. The index matches Lua's
     // aux.Stringid(code,idx): idx 0 -> texts.str1, idx 1 -> texts.str2, etc.
     // Searches the primary then every fallback; empty string if not found.

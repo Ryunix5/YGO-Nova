@@ -207,6 +207,26 @@ CardInfo CardDB::getCard(uint32_t code) const {
     return CardInfo{};
 }
 
+std::unordered_map<uint32_t, uint64_t> CardDB::allSetcodes() const {
+    std::unordered_map<uint32_t, uint64_t> out;
+    // Fallbacks first, then the primary — later inserts overwrite, so the
+    // primary database wins on any id present in both (same precedence as
+    // getCard's first-hit rule).
+    for (auto it = m_dbs.rbegin(); it != m_dbs.rend(); ++it) {
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2((sqlite3*)it->handle,
+                               "SELECT id, setcode FROM datas",
+                               -1, &st, nullptr) != SQLITE_OK)
+            continue;
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            uint32_t id = (uint32_t)sqlite3_column_int(st, 0);
+            if (id) out[id] = (uint64_t)sqlite3_column_int64(st, 1);
+        }
+        sqlite3_finalize(st);
+    }
+    return out;
+}
+
 // Fetch texts.str{index+1} for a card. ocgcore effect descriptions encode a
 // card-specific string as aux.Stringid(code,idx) == code*16+idx; idx then
 // maps onto the texts table's str1..str16 columns (idx 0 -> str1). This lets

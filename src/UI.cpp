@@ -16303,22 +16303,25 @@ void UI::loadMdRarity() {
     m_mdLoaded = true;
     std::ifstream f("assets/arcade/md_rarity.txt");
     if (!f) return;
+    // One bulk scan for every id -> setcode instead of ~14k point lookups
+    // (each miss used to walk EVERY fallback database — seconds of freeze on
+    // first Arcade open). Membership here doubles as the "card exists in our
+    // cdb and is duel-able" filter; a stale cards.cdb just shrinks the pool.
+    auto setcodes = m_db.allSetcodes();
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
         std::istringstream ss(line);
         uint32_t code; int r;
         if (!(ss >> code >> r) || r < 0 || r > 3) continue;
-        // Only cards we can actually resolve (and thus duel with) enter the
-        // pull tables; a stale cards.cdb simply shrinks the pool.
-        CardInfo ci = m_db.getCard(code);
-        if (ci.name.empty()) continue;
+        auto it = setcodes.find(code);
+        if (it == setcodes.end()) continue;
         m_mdRarity[code] = (uint8_t)r;
         m_mdByRarity[r].push_back(code);
-        if (ci.setcode) {
-            m_mdSetcodes[code] = ci.setcode;
+        if (it->second) {
+            m_mdSetcodes[code] = it->second;
             for (int i = 0; i < 4; ++i) {
-                uint16_t sc = (uint16_t)((ci.setcode >> (i * 16)) & 0xFFFF);
+                uint16_t sc = (uint16_t)((it->second >> (i * 16)) & 0xFFFF);
                 if (sc) m_mdArchBuckets[sc].push_back(code);
             }
         }
@@ -16883,12 +16886,15 @@ void UI::drawArcade(int w, int h) {
             m_screen = Screen::Multiplayer;
         }
         ImGui::Dummy({1.f, 4.f});
-        // Post-duel rewards: winning banks a wheel spin (prize wheel opens
-        // right away), losing banks 5 wild pack tokens on the spot.
+        // Post-duel rewards: EVERY duel restocks both players with the
+        // default 10 master + 10 secret packs. On top of that the winner
+        // banks a wheel spin and the loser banks 5 wild pack tokens.
         {
             float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
             if (UIStyle::GhostButton("I Won", {half, 34.f})) {
                 m_arcade.wins++;
+                m_arcade.masterLeft += 10;
+                m_arcade.secretLeft += 10;
                 m_arcade.spins++;
                 m_arcade.save();
                 m_arcadeWheelState = 0;   // wheel button below lights up
@@ -16897,6 +16903,8 @@ void UI::drawArcade(int w, int h) {
             ImGui::SameLine(0.f, 8.f);
             if (UIStyle::GhostButton("I Lost", {half, 34.f})) {
                 m_arcade.losses++;
+                m_arcade.masterLeft += 10;
+                m_arcade.secretLeft += 10;
                 m_arcade.tokens += 5;
                 m_arcade.save();
                 gAudio().play("confirm");
@@ -16922,8 +16930,9 @@ void UI::drawArcade(int w, int h) {
         }
         UIStyle::PushFont(UIStyle::fSmall);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
-            "Winner spins the wheel, loser gets 5 pack tokens\n"
-            "(spend on master OR secret packs). Honor system.");
+            "Every duel: both players restock +10 master and\n"
+            "+10 secret packs. Winner also spins the wheel,\n"
+            "loser also gets 5 wild pack tokens. Honor system.");
         UIStyle::PopFont();
 
         // Close Save pinned to the panel bottom.
