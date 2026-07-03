@@ -13592,7 +13592,9 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::SetKeyboardFocusHere();
             m_focusDeckSearch = false;
         }
-        const char* hint = m_dbTextSearch ? "Search effect text (e.g. \"banish\")..."
+        const char* hint = (m_poolMode && m_arcadeLoaded)
+                             ? "Search your pool (empty = show all)..."
+                         : m_dbTextSearch ? "Search effect text (e.g. \"banish\")..."
                                           : "Search card name or code...";
         if (UIStyle::SearchInput("##db_search_in", m_searchBuf,
                                  sizeof(m_searchBuf), hint, -1.f))
@@ -13668,14 +13670,52 @@ void UI::drawDeckBuilder(int w, int h) {
             {-1.f, ImGui::GetContentRegionAvail().y - 8.f},
             false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
+        // Arcade pool mode with no active query: browse the ENTIRE owned
+        // pool on the right (rarity-first, then name) — no typing needed.
+        bool poolBrowse = m_poolMode && m_arcadeLoaded &&
+                          m_searchBuf[0] == '\0' &&
+                          !m_dbAttrMask && m_dbLevelFilter == 0;
+        static std::vector<CardInfo> s_poolRows;
+        static size_t s_poolSig = 0;
+        if (poolBrowse) {
+            loadMdRarity();
+            size_t sig = m_arcade.pool.size() * 131071u
+                       + (size_t)m_arcade.poolTotal()
+                       + std::hash<std::string>{}(m_arcade.name);
+            if (sig != s_poolSig) {
+                s_poolSig = sig;
+                s_poolRows.clear();
+                for (auto& kv : m_arcade.pool) {
+                    CardInfo ci = m_db.getCard(kv.first);
+                    if (!ci.name.empty()) s_poolRows.push_back(ci);
+                }
+                std::sort(s_poolRows.begin(), s_poolRows.end(),
+                    [&](const CardInfo& a, const CardInfo& b) {
+                        auto ita = m_mdRarity.find(a.id);
+                        auto itb = m_mdRarity.find(b.id);
+                        int ra = ita == m_mdRarity.end() ? 0 : ita->second;
+                        int rb = itb == m_mdRarity.end() ? 0 : itb->second;
+                        if (ra != rb) return ra > rb;
+                        return a.name < b.name;
+                    });
+            }
+        }
+        const std::vector<CardInfo>& rowsSrc =
+            poolBrowse ? s_poolRows : m_searchResults;
+
         if (!m_db.isOpen()) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                 ImGui::ColorConvertU32ToFloat4(C.danger));
             ImGui::TextUnformatted("No card database found.");
             ImGui::PopStyleColor();
             ImGui::TextDisabled("Place cards.cdb in assets/ next to the exe.");
-        } else if (m_searchResults.empty()) {
-            if (m_searchBuf[0] == '\0' && !m_dbAttrMask && m_dbLevelFilter == 0) {
+        } else if (rowsSrc.empty()) {
+            if (poolBrowse) {
+                UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
+                    "Your pool is empty",
+                    "Open packs in Arcade to collect cards");
+            } else if (m_searchBuf[0] == '\0' && !m_dbAttrMask &&
+                       m_dbLevelFilter == 0) {
                 UIStyle::EmptyState(ImGui::GetContentRegionAvail().y - 8.f,
                     "Search for cards to add",
                     "Type at least 2 characters, or use the filters");
@@ -13712,8 +13752,9 @@ void UI::drawDeckBuilder(int w, int h) {
             int rendered = 0;
             // Cap displayed rows so the panel never lags on huge searches —
             // CardDB::search already limits to 80, this caps post-filter too.
-            const int kMaxRows = 80;
-            for (auto& card : m_searchResults) {
+            // Pool browsing shows the whole (bounded ~160-card) collection.
+            const int kMaxRows = poolBrowse ? 500 : 80;
+            for (auto& card : rowsSrc) {
                 if (rendered >= kMaxRows) break;
                 // Arcade pool mode: only cards you actually own can appear.
                 if (m_poolMode && m_arcadeLoaded &&
@@ -13794,6 +13835,12 @@ void UI::drawDeckBuilder(int w, int h) {
                              (unsigned)card.id);
                 else
                     snprintf(meta, sizeof(meta), "#%u", (unsigned)card.id);
+                if (m_poolMode && m_arcadeLoaded) {
+                    char own[48];
+                    snprintf(own, sizeof(own), "  •  own %d, in deck %d",
+                             m_arcade.owned(card.id), deckCopies(card.id));
+                    strncat(meta, own, sizeof(meta) - strlen(meta) - 1);
+                }
                 dl->AddText({thumb.x + 52.f, rp.y + 32.f}, C.textLo, meta);
 
                 // Desc snippet — single line, ellipsis.
@@ -16336,15 +16383,46 @@ std::vector<uint32_t> UI::rollSecretPack(uint16_t setcode) {
     return out;
 }
 
-// Human label for a secret pack: the longest leading word-run shared by most
-// of the archetype's card names ("Sky Striker", "Eldlich"...). Cached — the
-// name of a setcode never changes within a run.
+// Official archetype names (Project Ignis !setname data, baked to
+// assets/arcade/setnames.txt by tools/fetch_setnames.py). Loaded once.
+static const std::unordered_map<uint16_t, std::string>& arcadeSetNames() {
+    static std::unordered_map<uint16_t, std::string> names;
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        std::ifstream f("assets/arcade/setnames.txt");
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            size_t sp = line.find(' ');
+            if (sp == std::string::npos) continue;
+            try {
+                unsigned long code = std::stoul(line.substr(0, sp));
+                std::string nm = line.substr(sp + 1);
+                while (!nm.empty() && (nm.back() == '\r' || nm.back() == ' '))
+                    nm.pop_back();
+                if (code && code <= 0xFFFF && !nm.empty())
+                    names[(uint16_t)code] = nm;
+            } catch (...) {}
+        }
+    }
+    return names;
+}
+
+// Human label for a secret pack. Prefers the official archetype name; falls
+// back to the longest leading word-run shared by most of the archetype's
+// card names ("Sky Striker", "Eldlich"...). Cached — the name of a setcode
+// never changes within a run.
 static std::string arcadeArchLabel(const CardDB& db,
                                    const std::vector<uint32_t>& bucket,
                                    uint16_t setcode) {
     static std::unordered_map<uint16_t, std::string> s_cache;
     auto hit = s_cache.find(setcode);
     if (hit != s_cache.end()) return hit->second;
+
+    const auto& official = arcadeSetNames();
+    auto off = official.find(setcode);
+    if (off != official.end()) return s_cache[setcode] = off->second;
 
     auto words = [](const std::string& s) {
         std::vector<std::string> w; std::string cur;
@@ -16588,7 +16666,8 @@ void UI::drawArcade(int w, int h) {
     // ── Run view — campaign panel (left) + pack/collection area (right) ──
     // Opening a pack: add cards to the pool, grant keys for SR/UR archetype
     // pulls (bucket must be big enough to be a real secret pack), persist.
-    auto applyPack = [&](std::vector<uint32_t> cards) {
+    auto applyPack = [&](std::vector<uint32_t> cards, std::string packName) {
+        m_arcadeLastPack = std::move(packName);
         m_arcadeReveal = std::move(cards);
         m_arcadeRevealNew.assign(m_arcadeReveal.size(), false);
         for (size_t i = 0; i < m_arcadeReveal.size(); ++i) {
@@ -16625,95 +16704,174 @@ void UI::drawArcade(int w, int h) {
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoSavedSettings);
 
+        ImDrawList* sdl = ImGui::GetWindowDrawList();
+        // Slim progress bar with an "n / max" caption on the right.
+        auto packMeter = [&](int opened, int max) {
+            ImVec2 pp = ImGui::GetCursorScreenPos();
+            float  pw = ImGui::GetContentRegionAvail().x - 64.f;
+            UIStyle::ProgressBar(sdl, pp, {pp.x + pw, pp.y + 8.f},
+                                 max ? (float)opened / (float)max : 0.f,
+                                 C.accent);
+            char cap[24];
+            snprintf(cap, sizeof(cap), "%d / %d", opened, max);
+            sdl->AddText({pp.x + pw + 10.f, pp.y - 3.f}, C.textLo, cap);
+            ImGui::Dummy({1.f, 16.f});
+        };
+
+        // ── Campaign header ─────────────────────────────────────────────
         UIStyle::PushFont(UIStyle::fHeader);
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textHi),
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
                            "%s", m_arcade.name.c_str());
         UIStyle::PopFont();
-        ImGui::TextDisabled("Record %d W – %d L   •   %d cards owned",
-                            m_arcade.wins, m_arcade.losses,
-                            m_arcade.poolTotal());
-        ImGui::Dummy({1.f, 8.f});
-
-        UIStyle::SectionHeader("Master Packs");
         {
-            char lbl[64];
-            snprintf(lbl, sizeof(lbl), "Open Master Pack  (%d left)",
-                     m_arcade.masterLeft);
+            char chip[24];
+            snprintf(chip, sizeof(chip), "%d W", m_arcade.wins);
+            UIStyle::StatusChip(chip, C.success);
+            ImGui::SameLine(0.f, 6.f);
+            snprintf(chip, sizeof(chip), "%d L", m_arcade.losses);
+            UIStyle::StatusChip(chip, C.danger);
+            ImGui::SameLine(0.f, 6.f);
+            snprintf(chip, sizeof(chip), "%d CARDS", m_arcade.poolTotal());
+            UIStyle::StatusChip(chip, C.accent);
+        }
+        UIStyle::DrawDivider(10.f, 10.f);
+
+        // ── Master packs ────────────────────────────────────────────────
+        UIStyle::SectionHeader("MASTER PACKS");
+        packMeter(10 - m_arcade.masterLeft, 10);
+        {
             bool dis = m_arcade.masterLeft <= 0;
             if (dis) ImGui::BeginDisabled();
-            if (UIStyle::PrimaryButton(lbl, {-1.f, 44.f})) {
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "OPEN MASTER PACK  (%d left)",
+                     m_arcade.masterLeft);
+            if (UIStyle::PrimaryButton(lbl, {-1.f, 48.f})) {
                 m_arcade.masterLeft--;
-                applyPack(rollMasterPack());
+                applyPack(rollMasterPack(), "Master Pack");
             }
             if (dis) ImGui::EndDisabled();
             if (dis) ImGui::TextDisabled("All master packs opened.");
         }
-        ImGui::Dummy({1.f, 10.f});
+        ImGui::Dummy({1.f, 12.f});
 
-        UIStyle::SectionHeader("Secret Packs");
-        ImGui::TextDisabled("Keys drop from SR / UR pulls  •  %d left to open",
-                            m_arcade.secretLeft);
+        // ── Secret packs ────────────────────────────────────────────────
+        UIStyle::SectionHeader("SECRET PACKS");
+        packMeter(10 - m_arcade.secretLeft, 10);
         {
             float keysH = std::min(
-                200.f, std::max(64.f, (float)m_arcade.keys.size() * 30.f));
+                236.f, std::max(72.f, (float)m_arcade.keys.size() * 40.f + 8.f));
             ImGui::BeginChild("##arc_keys", {-1.f, keysH}, false);
             if (m_arcade.keys.empty()) {
                 UIStyle::EmptyState(keysH - 8.f, "No keys yet",
-                                    "Pull SR / UR cards to unlock packs");
+                                    "SR / UR pulls unlock secret packs");
             }
+            ImDrawList* kdl = ImGui::GetWindowDrawList();
             for (uint16_t sc : m_arcade.keys) {
-                std::string lbl =
-                    arcadeArchLabel(m_db, mdArchetypeBucket(sc), sc);
-                char sid[64];
-                snprintf(sid, sizeof(sid), "%s##key_%u",
-                         lbl.c_str(), (unsigned)sc);
-                if (ImGui::Selectable(sid, m_arcadeSecretPick == sc))
-                    m_arcadeSecretPick = sc;
+                const auto& bucket = mdArchetypeBucket(sc);
+                std::string lbl = arcadeArchLabel(m_db, bucket, sc);
+                bool sel = m_arcadeSecretPick == sc;
+                ImVec2 rp = ImGui::GetCursorScreenPos();
+                float  rw = ImGui::GetContentRegionAvail().x;
+                float  rh = 36.f;
+                char kid[32];
+                snprintf(kid, sizeof(kid), "##key_%u", (unsigned)sc);
+                if (ImGui::InvisibleButton(kid, {rw, rh}))
+                    m_arcadeSecretPick = sel ? 0 : sc;
+                bool hov = ImGui::IsItemHovered();
+                UIStyle::DrawGlassPanel(kdl, rp, {rp.x + rw, rp.y + rh}, 6.f,
+                                        sel ? C.accentDim : 0);
+                if (sel)
+                    kdl->AddRect(rp, {rp.x + rw, rp.y + rh}, C.accent,
+                                 6.f, 0, 1.6f);
+                else if (hov)
+                    kdl->AddRect(rp, {rp.x + rw, rp.y + rh}, C.borderSoft,
+                                 6.f, 0, 1.f);
+                // Gold key glyph: diamond head + stem with two teeth.
+                {
+                    ImVec2 kc = {rp.x + 16.f, rp.y + rh * 0.5f};
+                    ImU32 kcol = sel ? C.accentHi : C.accent;
+                    kdl->AddQuad({kc.x - 5.f, kc.y}, {kc.x, kc.y - 5.f},
+                                 {kc.x + 5.f, kc.y}, {kc.x, kc.y + 5.f},
+                                 kcol, 1.6f);
+                    kdl->AddLine({kc.x + 5.f, kc.y}, {kc.x + 14.f, kc.y},
+                                 kcol, 1.6f);
+                    kdl->AddLine({kc.x + 10.f, kc.y}, {kc.x + 10.f, kc.y + 4.f},
+                                 kcol, 1.6f);
+                    kdl->AddLine({kc.x + 14.f, kc.y}, {kc.x + 14.f, kc.y + 4.f},
+                                 kcol, 1.6f);
+                }
+                kdl->AddText({rp.x + 40.f, rp.y + 9.f},
+                             sel ? C.textHi : C.textMd, lbl.c_str());
+                char cnt[24];
+                snprintf(cnt, sizeof(cnt), "%d cards", (int)bucket.size());
+                ImVec2 cs = ImGui::CalcTextSize(cnt);
+                kdl->AddText({rp.x + rw - cs.x - 10.f, rp.y + 9.f},
+                             C.textMuted, cnt);
+                ImGui::Dummy({1.f, 4.f});
             }
             ImGui::EndChild();
             bool dis = m_arcade.secretLeft <= 0 || m_arcadeSecretPick == 0 ||
                        mdArchetypeBucket(m_arcadeSecretPick).empty();
             if (dis) ImGui::BeginDisabled();
-            char lbl[64];
-            snprintf(lbl, sizeof(lbl), "Open Secret Pack  (%d left)",
-                     m_arcade.secretLeft);
-            if (UIStyle::SecondaryButton(lbl, {-1.f, 40.f})) {
+            std::string lbl = "OPEN SECRET PACK";
+            if (m_arcadeSecretPick)
+                lbl += ": " + arcadeArchLabel(
+                    m_db, mdArchetypeBucket(m_arcadeSecretPick),
+                    m_arcadeSecretPick);
+            if (UIStyle::SecondaryButton(lbl.c_str(), {-1.f, 42.f})) {
+                std::string packNm = arcadeArchLabel(
+                    m_db, mdArchetypeBucket(m_arcadeSecretPick),
+                    m_arcadeSecretPick) + " Secret Pack";
                 m_arcade.secretLeft--;
-                applyPack(rollSecretPack(m_arcadeSecretPick));
+                applyPack(rollSecretPack(m_arcadeSecretPick),
+                          std::move(packNm));
             }
             if (dis) ImGui::EndDisabled();
             if (m_arcade.secretLeft <= 0)
                 ImGui::TextDisabled("All secret packs opened — pool is final.");
             else if (m_arcadeSecretPick == 0 && !m_arcade.keys.empty())
-                ImGui::TextDisabled("Select a key above first.");
+                ImGui::TextDisabled("Pick a key above, then open.");
         }
         ImGui::Dummy({1.f, 12.f});
 
-        UIStyle::SectionHeader("Play");
+        // ── Play ────────────────────────────────────────────────────────
+        UIStyle::SectionHeader("PLAY");
         if (UIStyle::SecondaryButton("Build Deck from Pool", {-1.f, 40.f})) {
             m_poolMode = true;
             refreshDeckFiles();
             m_screen = Screen::DeckBuilder;
         }
+        ImGui::Dummy({1.f, 2.f});
         if (UIStyle::SecondaryButton("Duel Online", {-1.f, 40.f})) {
             m_arcade.save();
             m_mpTransport = 1;
             m_screen = Screen::Multiplayer;
         }
-        ImGui::TextDisabled("Honor system: build only from your pool and log "
-                            "results here.");
-        if (UIStyle::GhostButton("+ Win", {(PANEL_W - 40.f) * 0.5f, 30.f})) {
-            m_arcade.wins++;  m_arcade.save();
+        ImGui::Dummy({1.f, 4.f});
+        {
+            float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
+            if (UIStyle::GhostButton("+ Win", {half, 30.f})) {
+                m_arcade.wins++;  m_arcade.save();
+            }
+            ImGui::SameLine(0.f, 8.f);
+            if (UIStyle::GhostButton("+ Loss", {half, 30.f})) {
+                m_arcade.losses++; m_arcade.save();
+            }
         }
-        ImGui::SameLine(0.f, 8.f);
-        if (UIStyle::GhostButton("+ Loss", {(PANEL_W - 40.f) * 0.5f, 30.f})) {
-            m_arcade.losses++; m_arcade.save();
-        }
-        ImGui::Dummy({1.f, 14.f});
-        if (UIStyle::GhostButton("Close Save", {-1.f, 32.f})) {
-            m_arcade.save();
-            m_arcadeLoaded = false;
-            m_arcadeFiles = edo::ArcadeSave::list();
+        UIStyle::PushFont(UIStyle::fSmall);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
+            "Honor system — build only from your pool,\nlog results here.");
+        UIStyle::PopFont();
+
+        // Close Save pinned to the panel bottom.
+        {
+            float rest = ImGui::GetContentRegionAvail().y - 40.f;
+            if (rest > 0.f) ImGui::Dummy({1.f, rest});
+            if (UIStyle::GhostButton("Close Save", {-1.f, 32.f})) {
+                m_arcade.save();
+                m_arcadeLoaded = false;
+                m_arcadeFiles = edo::ArcadeSave::list();
+            }
         }
         ImGui::End();
         ImGui::PopStyleColor();
@@ -16739,6 +16897,23 @@ void UI::drawArcade(int w, int h) {
         if (UIStyle::SegmentedButton("Collection", m_arcadeView == 1, true,
                                      {120.f, 30.f}))
             m_arcadeView = 1;
+        // Rarity legend, right-aligned on the tab row.
+        {
+            ImDrawList* ldl = ImGui::GetWindowDrawList();
+            float lx = ImGui::GetWindowPos().x
+                     + ImGui::GetWindowContentRegionMax().x - 4.f;
+            float ly = ImGui::GetWindowPos().y
+                     + ImGui::GetCursorPosY() - 24.f;
+            for (int r = 0; r < 4; ++r) {
+                ImVec2 ts = ImGui::CalcTextSize(kRarityName[r]);
+                lx -= ts.x;
+                ldl->AddText({lx, ly}, kRarityCol[r], kRarityName[r]);
+                lx -= 16.f;
+                ldl->AddRectFilled({lx, ly + 4.f}, {lx + 10.f, ly + 14.f},
+                                   kRarityCol[r], 2.f);
+                lx -= 18.f;
+            }
+        }
         UIStyle::DrawDivider(8.f, 8.f);
 
         float availW = ImGui::GetContentRegionAvail().x;
@@ -16750,6 +16925,18 @@ void UI::drawArcade(int w, int h) {
                 UIStyle::EmptyState(availH - 8.f, "Open a pack",
                                     "Your last 8 pulls appear here");
             } else {
+                // Pack title, centred over the reveal grid.
+                {
+                    UIStyle::PushFont(UIStyle::fHeader);
+                    const char* t = m_arcadeLastPack.empty()
+                                  ? "Pack" : m_arcadeLastPack.c_str();
+                    ImVec2 ts = ImGui::CalcTextSize(t);
+                    ImGui::SetCursorPosX(
+                        (ImGui::GetWindowContentRegionMax().x - ts.x) * 0.5f);
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(C.accentHi), "%s", t);
+                    UIStyle::PopFont();
+                }
                 const int cols = 4;
                 float gap = 18.f;
                 float cw  = std::min(190.f, (availW - gap * (cols - 1)) / cols);
@@ -16845,6 +17032,18 @@ void UI::drawArcade(int w, int h) {
                                 "this pool only",
                                 m_arcade.poolTotal(),
                                 (int)m_arcade.pool.size());
+            // Per-rarity totals as coloured chips.
+            {
+                int byRar[4] = {0, 0, 0, 0};
+                for (auto& e : s_entries) byRar[e.rar] += e.cnt;
+                for (int r = 3; r >= 0; --r) {
+                    char chip[24];
+                    snprintf(chip, sizeof(chip), "%s %d",
+                             kRarityName[r], byRar[r]);
+                    UIStyle::StatusChip(chip, kRarityCol[r]);
+                    if (r) ImGui::SameLine(0.f, 6.f);
+                }
+            }
             ImGui::Dummy({1.f, 4.f});
             ImGui::BeginChild("##arc_coll", {-1.f, -1.f}, false);
             if (s_entries.empty()) {

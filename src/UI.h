@@ -98,6 +98,7 @@ private:
     char        m_arcadeNameBuf[48] = {};
     std::vector<uint32_t> m_arcadeReveal;        // last pack, reveal order
     std::vector<bool>     m_arcadeRevealNew;     // first copy? ("NEW" badge)
+    std::string m_arcadeLastPack;                // last pack's display name
     double      m_arcadeRevealAt = 0.0;          // reveal animation start
     int         m_arcadeView = 0;                // 0 = pack view, 1 = collection
     uint16_t    m_arcadeSecretPick = 0;          // selected key (setcode)
