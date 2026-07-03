@@ -75,6 +75,9 @@ private:
     void drawDeckBuilder(int w, int h);
     void drawReplays(int w, int h);
     void drawMultiplayer(int w, int h);
+    // EDOPro-style full-width online lobby (room table + toolbar), shown
+    // while browsing on the relay transport; drawMultiplayer branches here.
+    void drawOnlineLobby(int w, int h, float topY);
 
     // ── Duel sub-renders (content-only — called inside BeginChild blocks) ──
     void drawField(int w, int h);

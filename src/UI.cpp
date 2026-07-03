@@ -2574,6 +2574,13 @@ void UI::loadSettings() {
     gAudio().setMusicVolume(m_settings.musicVolume);
     gAudio().setMasterVolume(m_settings.masterVolume);
     gAudio().setMuteUiSfx(m_settings.muteUiSfx);
+    // Official relay migration: fresh installs default to the baked server
+    // via Settings.h, but EXISTING installs may have "127.0.0.1" persisted
+    // from before a server existed. Upgrade those so online works with zero
+    // typing; a custom (non-localhost) address the user set is respected.
+    if (EDOPRO_DEFAULT_RELAY[0] &&
+        (m_settings.mpHostIP.empty() || m_settings.mpHostIP == "127.0.0.1"))
+        m_settings.mpHostIP = EDOPRO_DEFAULT_RELAY;
     // Push the frame cap into the render loop (Game.cpp owns the global).
     extern int g_fpsCap;
     g_fpsCap = m_settings.fpsCap;
@@ -15074,6 +15081,15 @@ void UI::drawMultiplayer(int w, int h) {
         ImGui::PopStyleColor(2);
     }
 
+    // ── Online lobby (EDOPro-style, full width) ─────────────────────────
+    // While BROWSING (relay transport, not yet connected) the whole screen
+    // is the lobby: toolbar + big room table, like Project Ignis. Once a
+    // room is created/joined the two-column session layout below takes over.
+    if (m_mpTransport == 1 && m_net.isOffline()) {
+        drawOnlineLobby(w, h, BAR_H);
+        return;
+    }
+
     // ── How-it-works banner ─────────────────────────────────────────────
     {
         ImGui::SetNextWindowPos({(float)w * 0.5f - 360.f, BAR_H + 10.f});
@@ -15193,19 +15209,22 @@ void UI::drawMultiplayer(int w, int h) {
             }
         } else {
             // ── Online relay room ───────────────────────────────────────
-            UIStyle::SectionHeader("Relay server");
-            ImGui::Text("Server address");
-            ImGui::SetNextItemWidth(-1.f);
-            if (ImGui::InputText("##mprelay", m_mpRelayAddrBuf,
-                                 sizeof(m_mpRelayAddrBuf))) {
-                m_settings.mpHostIP = m_mpRelayAddrBuf;
-                saveSettings();
+            // The official server is baked in — nobody types an address.
+            // Self-hosters can still override it under Advanced.
+            if (ImGui::CollapsingHeader("Advanced (custom server)")) {
+                ImGui::Text("Server address");
+                ImGui::SetNextItemWidth(-1.f);
+                if (ImGui::InputText("##mprelay", m_mpRelayAddrBuf,
+                                     sizeof(m_mpRelayAddrBuf))) {
+                    m_settings.mpHostIP = m_mpRelayAddrBuf;
+                    saveSettings();
+                }
+                ImGui::Text("Port");
+                ImGui::SetNextItemWidth(140.f);
+                ImGui::InputInt("##mprelayport", &m_mpRelayPortBuf);
+                if (m_mpRelayPortBuf < 1)     m_mpRelayPortBuf = 1;
+                if (m_mpRelayPortBuf > 65535) m_mpRelayPortBuf = 65535;
             }
-            ImGui::Text("Port");
-            ImGui::SetNextItemWidth(140.f);
-            ImGui::InputInt("##mprelayport", &m_mpRelayPortBuf);
-            if (m_mpRelayPortBuf < 1)     m_mpRelayPortBuf = 1;
-            if (m_mpRelayPortBuf > 65535) m_mpRelayPortBuf = 65535;
             ImGui::Dummy({1.f, 10.f});
 
             if (m_net.isOffline()) {
@@ -15561,6 +15580,253 @@ void UI::drawMultiplayer(int w, int h) {
         ImGui::End();
         ImGui::PopStyleColor();
     }
+}
+
+// ─── Online lobby (EDOPro-style) ─────────────────────────────────────────────
+// Full-width room browser modelled on Project Ignis's server lobby: a slim
+// toolbar (name · server status · refresh · join-by-code · host) over a big
+// striped room table with double-click-to-join, and a status footer. The
+// official server address is baked into the build, so there is nothing for
+// the player to type — open the lobby, see rooms, click one.
+void UI::drawOnlineLobby(int w, int h, float topY) {
+    const UIStyle::Colors& C = UIStyle::C();
+    const double now = ImGui::GetTime();
+
+    // Seed the relay buffer from settings (baked official server by default).
+    if (m_mpRelayAddrBuf[0] == '\0')
+        strncpy(m_mpRelayAddrBuf, m_settings.mpHostIP.c_str(),
+                sizeof(m_mpRelayAddrBuf) - 1);
+
+    auto rlStatus = m_net.roomListStatus();
+    const bool querying =
+        (rlStatus == edo::NetSession::RoomListStatus::Querying);
+    auto doRefresh = [&] {
+        std::string addr = m_mpRelayAddrBuf[0] ? m_mpRelayAddrBuf : "127.0.0.1";
+        m_net.requestRoomList(addr, m_mpRelayPortBuf,
+                              m_mpNameBuf[0] ? m_mpNameBuf : "Player");
+        m_lobbyLastRefreshAt = now;
+        m_lobbyNextRefreshAt = now + 4.0;
+    };
+    if (m_lobbyAutoRefresh && !querying && now >= m_lobbyNextRefreshAt)
+        doRefresh();
+
+    auto rooms = m_net.roomList();
+    auto joinCode = [&](const std::string& code) {
+        strncpy(m_mpRoomCodeBuf, code.c_str(), sizeof(m_mpRoomCodeBuf) - 1);
+        m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
+        startRelayJoin();
+    };
+    int openCount = 0;
+    for (const auto& r : rooms) if (r.joinable()) ++openCount;
+    const bool official = EDOPRO_DEFAULT_RELAY[0] &&
+                          m_settings.mpHostIP == EDOPRO_DEFAULT_RELAY;
+
+    const float PAD = 16.f;
+    const float TB_H = 54.f;
+    const float FOOT_H = 44.f;
+
+    // ── Toolbar ─────────────────────────────────────────────────────────
+    ImGui::SetNextWindowPos({PAD, topY + 10.f});
+    ImGui::SetNextWindowSize({(float)w - PAD * 2.f, TB_H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+        ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+    ImGui::Begin("##lobby_toolbar", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("Name");
+    ImGui::SameLine(0.f, 6.f);
+    ImGui::SetNextItemWidth(170.f);
+    if (ImGui::InputText("##lobname", m_mpNameBuf, sizeof(m_mpNameBuf))) {
+        m_settings.mpDisplayName = m_mpNameBuf;
+        saveSettings();
+    }
+    // Server status pill: green = list loaded, yellow = querying, red = error.
+    ImGui::SameLine(0.f, 16.f);
+    {
+        ImU32 dot = rlStatus == edo::NetSession::RoomListStatus::Ready ? C.success
+                  : rlStatus == edo::NetSession::RoomListStatus::Error ? C.danger
+                  : C.warning;
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float cy = p.y + ImGui::GetFrameHeight() * 0.5f;
+        dl->AddCircleFilled({p.x + 6.f, cy}, 4.5f, dot, 12);
+        ImGui::Dummy({14.f, 1.f});
+        ImGui::SameLine(0.f, 4.f);
+        ImGui::AlignTextToFramePadding();
+        if (official) ImGui::TextUnformatted("Official Server");
+        else          ImGui::Text("%s", m_settings.mpHostIP.c_str());
+    }
+    // Right-aligned action cluster: Auto · Refresh · code+Join · Host Game.
+    {
+        const float wAuto = 58.f, wRef = 84.f, wCode = 150.f, wJoin = 64.f,
+                    wHost = 130.f, gap = 8.f;
+        float clusterW = wAuto + wRef + wCode + wJoin + wHost + gap * 4.f;
+        float avail = ImGui::GetContentRegionAvail().x;
+        ImGui::SameLine(0.f, std::max(8.f, avail - clusterW));
+        ImGui::Checkbox("Auto##lobby", &m_lobbyAutoRefresh);
+        ImGui::SameLine(0.f, gap);
+        if (querying) ImGui::BeginDisabled();
+        if (UIStyle::GhostButton(querying ? "...##rl" : "Refresh##rl",
+                                 {wRef, 30.f}))
+            doRefresh();
+        if (querying) ImGui::EndDisabled();
+        ImGui::SameLine(0.f, gap);
+        ImGui::SetNextItemWidth(wCode);
+        bool codeEnter = ImGui::InputTextWithHint("##mproom", "ROOM CODE",
+            m_mpRoomCodeBuf, sizeof(m_mpRoomCodeBuf),
+            ImGuiInputTextFlags_CharsUppercase |
+            ImGuiInputTextFlags_CharsNoBlank |
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine(0.f, gap);
+        {
+            bool canJoin = m_mpRoomCodeBuf[0] != '\0';
+            if (!canJoin) ImGui::BeginDisabled();
+            if (UIStyle::SecondaryButton("Join##bycode", {wJoin, 30.f}) ||
+                (codeEnter && canJoin))
+                startRelayJoin();
+            if (!canJoin) ImGui::EndDisabled();
+        }
+        ImGui::SameLine(0.f, gap);
+        if (UIStyle::PrimaryButton("Host Game", {wHost, 32.f}))
+            startRelayCreate();
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // ── Room table ──────────────────────────────────────────────────────
+    float tableY = topY + 10.f + TB_H + 8.f;
+    float tableH = (float)h - tableY - FOOT_H - 20.f;
+    ImGui::SetNextWindowPos({PAD, tableY});
+    ImGui::SetNextWindowSize({(float)w - PAD * 2.f, tableH});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+        ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+    ImGui::Begin("##lobby_rooms", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoSavedSettings);
+    if (rlStatus == edo::NetSession::RoomListStatus::Error) {
+        ImGui::Dummy({1.f, 8.f});
+        ImGui::TextColored({1.f, 0.6f, 0.6f, 1.f},
+            "Could not reach the server: %s", m_net.roomListError().c_str());
+        ImGui::TextDisabled("It retries automatically while Auto is on.");
+    } else if (rooms.empty()) {
+        UIStyle::EmptyState(tableH - 40.f,
+            rlStatus == edo::NetSession::RoomListStatus::Ready
+                ? "No open rooms right now" : "Contacting server...",
+            "Host Game creates a room others can join");
+    } else if (ImGui::BeginTable("##rooms", 5,
+                   ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                   ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("Status",  ImGuiTableColumnFlags_WidthFixed, 92.f);
+        ImGui::TableSetupColumn("Host",    ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Code",    ImGuiTableColumnFlags_WidthFixed, 96.f);
+        ImGui::TableSetupColumn("Players", ImGuiTableColumnFlags_WidthFixed, 86.f);
+        ImGui::TableSetupColumn("##join",  ImGuiTableColumnFlags_WidthFixed, 92.f);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < rooms.size(); ++i) {
+            const edo::RoomInfo& rm = rooms[i];
+            bool joinable = rm.joinable();
+            ImGui::PushID((int)i);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, 34.f);
+
+            // Status: coloured dot + label.
+            ImGui::TableSetColumnIndex(0);
+            ImU32 stCol = rm.state == 0 ? C.success
+                        : rm.state == 1 ? C.warning : C.textMuted;
+            const char* stTxt = rm.state == 0 ? "OPEN"
+                              : rm.state == 1 ? "READY" : "IN DUEL";
+            {
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddCircleFilled({p.x + 7.f, p.y + 12.f}, 4.f, stCol, 12);
+                ImGui::Dummy({15.f, 1.f});
+                ImGui::SameLine(0.f, 2.f);
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImGui::ColorConvertU32ToFloat4(stCol));
+                ImGui::TextUnformatted(stTxt);
+                ImGui::PopStyleColor();
+            }
+
+            // Host name — a row-spanning selectable; double-click joins.
+            ImGui::TableSetColumnIndex(1);
+            {
+                char selId[48];
+                snprintf(selId, sizeof(selId), "%s##row%d",
+                         rm.hostName.empty() ? "Host" : rm.hostName.c_str(),
+                         (int)i);
+                ImGui::Selectable(selId, false,
+                    ImGuiSelectableFlags_SpanAllColumns |
+                    ImGuiSelectableFlags_AllowOverlap, {0.f, 26.f});
+                if (joinable && ImGui::IsItemHovered() &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    joinCode(rm.code);
+                if (joinable && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Double-click to join");
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(rm.code.c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%d / 2", rm.players);
+            ImGui::TableSetColumnIndex(4);
+            if (!joinable) ImGui::BeginDisabled();
+            if (UIStyle::SecondaryButton(joinable ? "Join##rj" : "Full##rj",
+                                         {80.f, 24.f}))
+                joinCode(rm.code);
+            if (!joinable) ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // ── Footer ──────────────────────────────────────────────────────────
+    ImGui::SetNextWindowPos({PAD, (float)h - FOOT_H - 12.f});
+    ImGui::SetNextWindowSize({(float)w - PAD * 2.f, FOOT_H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+        ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+    ImGui::Begin("##lobby_footer", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::AlignTextToFramePadding();
+    if (rlStatus == edo::NetSession::RoomListStatus::Ready) {
+        ImGui::TextDisabled("%d room%s · %d open", (int)rooms.size(),
+                            rooms.size() == 1 ? "" : "s", openCount);
+        if (m_lobbyLastRefreshAt > 0.0) {
+            ImGui::SameLine(0.f, 14.f);
+            ImGui::TextDisabled("updated %.0fs ago",
+                                now - m_lobbyLastRefreshAt);
+        }
+    } else {
+        ImGui::TextDisabled(querying ? "Searching..." : "Connecting...");
+    }
+    if (m_mpRelayConnecting) {
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::TextDisabled("Joining room...");
+    }
+    if (!m_mpRoomError.empty()) {
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::TextColored({1.f, 0.55f, 0.55f, 1.f}, "%s",
+                           m_mpRoomError.c_str());
+    }
+    // Quick Match on the right: join the first open room, else host one.
+    {
+        float avail = ImGui::GetContentRegionAvail().x;
+        ImGui::SameLine(0.f, std::max(8.f, avail - 130.f));
+        if (UIStyle::SecondaryButton("Quick Match", {124.f, 28.f})) {
+            const edo::RoomInfo* pick = nullptr;
+            for (const auto& r : rooms) if (r.joinable()) { pick = &r; break; }
+            if (pick) joinCode(pick->code);
+            else      startRelayCreate();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
 }
 
 // ─── refreshDeckFiles ─────────────────────────────────────────────────────────
