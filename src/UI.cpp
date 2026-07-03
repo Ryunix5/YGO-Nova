@@ -16480,6 +16480,26 @@ static std::string arcadeArchLabel(const CardDB& db,
     return s_cache[setcode] = label;
 }
 
+// Winner's prize wheel — 8 equal segments. type: 0 master packs, 1 secret
+// packs, 2 random SR, 3 random UR, 4 free key (any archetype).
+struct ArcadeWheelSeg {
+    const char* label;      // short text on the wheel
+    const char* prize;      // full text on the result panel
+    int type, amount;
+    ImU32 color;
+};
+static const ArcadeWheelSeg kArcadeWheel[8] = {
+    {"+1 PACK",   "1 Master Pack",    0, 1, IM_COL32( 38,  48,  78, 255)},
+    {"SR CARD",   "a random SR card", 2, 1, IM_COL32(120,  94,  30, 255)},
+    {"+2 PACKS",  "2 Master Packs",   0, 2, IM_COL32( 52,  64, 100, 255)},
+    {"+1 SECRET", "1 Secret Pack",    1, 1, IM_COL32( 30,  84,  96, 255)},
+    {"+3 PACKS",  "3 Master Packs",   0, 3, IM_COL32( 38,  48,  78, 255)},
+    {"UR CARD",   "a random UR card", 3, 1, IM_COL32(122,  40,  58, 255)},
+    {"+2 SECRET", "2 Secret Packs",   1, 2, IM_COL32( 30,  84,  96, 255)},
+    {"FREE KEY",  "a free key — pick any archetype", 4, 1,
+                                            IM_COL32( 96,  62, 130, 255)},
+};
+
 void UI::drawArcade(int w, int h) {
     UIStyle::DrawAppBackdrop(ImGui::GetBackgroundDrawList(),
                              {0.f, 0.f}, {(float)w, (float)h});
@@ -16705,15 +16725,16 @@ void UI::drawArcade(int w, int h) {
             ImGuiWindowFlags_NoSavedSettings);
 
         ImDrawList* sdl = ImGui::GetWindowDrawList();
-        // Slim progress bar with an "n / max" caption on the right.
-        auto packMeter = [&](int opened, int max) {
+        // Slim meter with an "n left" caption. Reward packs stack on top of
+        // the starting 10, so the bar just shows how stocked you are (capped).
+        auto packMeter = [&](int left) {
             ImVec2 pp = ImGui::GetCursorScreenPos();
             float  pw = ImGui::GetContentRegionAvail().x - 64.f;
+            float  frac = std::clamp((float)left / 10.f, 0.f, 1.f);
             UIStyle::ProgressBar(sdl, pp, {pp.x + pw, pp.y + 8.f},
-                                 max ? (float)opened / (float)max : 0.f,
-                                 C.accent);
+                                 frac, C.accent);
             char cap[24];
-            snprintf(cap, sizeof(cap), "%d / %d", opened, max);
+            snprintf(cap, sizeof(cap), "%d left", left);
             sdl->AddText({pp.x + pw + 10.f, pp.y - 3.f}, C.textLo, cap);
             ImGui::Dummy({1.f, 16.f});
         };
@@ -16733,30 +16754,40 @@ void UI::drawArcade(int w, int h) {
             ImGui::SameLine(0.f, 6.f);
             snprintf(chip, sizeof(chip), "%d CARDS", m_arcade.poolTotal());
             UIStyle::StatusChip(chip, C.accent);
+            if (m_arcade.tokens > 0) {
+                ImGui::SameLine(0.f, 6.f);
+                snprintf(chip, sizeof(chip), "%d TOKENS", m_arcade.tokens);
+                UIStyle::StatusChip(chip, C.warning);
+            }
         }
         UIStyle::DrawDivider(10.f, 10.f);
 
         // ── Master packs ────────────────────────────────────────────────
         UIStyle::SectionHeader("MASTER PACKS");
-        packMeter(10 - m_arcade.masterLeft, 10);
+        packMeter(m_arcade.masterLeft);
         {
-            bool dis = m_arcade.masterLeft <= 0;
+            bool useToken = m_arcade.masterLeft <= 0 && m_arcade.tokens > 0;
+            bool dis = m_arcade.masterLeft <= 0 && m_arcade.tokens <= 0;
             if (dis) ImGui::BeginDisabled();
             char lbl[64];
-            snprintf(lbl, sizeof(lbl), "OPEN MASTER PACK  (%d left)",
-                     m_arcade.masterLeft);
+            if (useToken)
+                snprintf(lbl, sizeof(lbl), "OPEN MASTER PACK  (1 token)");
+            else
+                snprintf(lbl, sizeof(lbl), "OPEN MASTER PACK  (%d left)",
+                         m_arcade.masterLeft);
             if (UIStyle::PrimaryButton(lbl, {-1.f, 48.f})) {
-                m_arcade.masterLeft--;
+                if (useToken) m_arcade.tokens--;
+                else          m_arcade.masterLeft--;
                 applyPack(rollMasterPack(), "Master Pack");
             }
             if (dis) ImGui::EndDisabled();
-            if (dis) ImGui::TextDisabled("All master packs opened.");
+            if (dis) ImGui::TextDisabled("Out of packs — duel to earn more.");
         }
         ImGui::Dummy({1.f, 12.f});
 
         // ── Secret packs ────────────────────────────────────────────────
         UIStyle::SectionHeader("SECRET PACKS");
-        packMeter(10 - m_arcade.secretLeft, 10);
+        packMeter(m_arcade.secretLeft);
         {
             float keysH = std::min(
                 236.f, std::max(72.f, (float)m_arcade.keys.size() * 40.f + 8.f));
@@ -16810,7 +16841,9 @@ void UI::drawArcade(int w, int h) {
                 ImGui::Dummy({1.f, 4.f});
             }
             ImGui::EndChild();
-            bool dis = m_arcade.secretLeft <= 0 || m_arcadeSecretPick == 0 ||
+            bool useToken = m_arcade.secretLeft <= 0 && m_arcade.tokens > 0;
+            bool noPacks  = m_arcade.secretLeft <= 0 && m_arcade.tokens <= 0;
+            bool dis = noPacks || m_arcadeSecretPick == 0 ||
                        mdArchetypeBucket(m_arcadeSecretPick).empty();
             if (dis) ImGui::BeginDisabled();
             std::string lbl = "OPEN SECRET PACK";
@@ -16818,17 +16851,19 @@ void UI::drawArcade(int w, int h) {
                 lbl += ": " + arcadeArchLabel(
                     m_db, mdArchetypeBucket(m_arcadeSecretPick),
                     m_arcadeSecretPick);
+            if (useToken) lbl += "  (1 token)";
             if (UIStyle::SecondaryButton(lbl.c_str(), {-1.f, 42.f})) {
                 std::string packNm = arcadeArchLabel(
                     m_db, mdArchetypeBucket(m_arcadeSecretPick),
                     m_arcadeSecretPick) + " Secret Pack";
-                m_arcade.secretLeft--;
+                if (useToken) m_arcade.tokens--;
+                else          m_arcade.secretLeft--;
                 applyPack(rollSecretPack(m_arcadeSecretPick),
                           std::move(packNm));
             }
             if (dis) ImGui::EndDisabled();
-            if (m_arcade.secretLeft <= 0)
-                ImGui::TextDisabled("All secret packs opened — pool is final.");
+            if (noPacks)
+                ImGui::TextDisabled("Out of secret packs — duel to earn more.");
             else if (m_arcadeSecretPick == 0 && !m_arcade.keys.empty())
                 ImGui::TextDisabled("Pick a key above, then open.");
         }
@@ -16848,19 +16883,47 @@ void UI::drawArcade(int w, int h) {
             m_screen = Screen::Multiplayer;
         }
         ImGui::Dummy({1.f, 4.f});
+        // Post-duel rewards: winning banks a wheel spin (prize wheel opens
+        // right away), losing banks 5 wild pack tokens on the spot.
         {
             float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
-            if (UIStyle::GhostButton("+ Win", {half, 30.f})) {
-                m_arcade.wins++;  m_arcade.save();
+            if (UIStyle::GhostButton("I Won", {half, 34.f})) {
+                m_arcade.wins++;
+                m_arcade.spins++;
+                m_arcade.save();
+                m_arcadeWheelState = 0;   // wheel button below lights up
+                gAudio().play("confirm");
             }
             ImGui::SameLine(0.f, 8.f);
-            if (UIStyle::GhostButton("+ Loss", {half, 30.f})) {
-                m_arcade.losses++; m_arcade.save();
+            if (UIStyle::GhostButton("I Lost", {half, 34.f})) {
+                m_arcade.losses++;
+                m_arcade.tokens += 5;
+                m_arcade.save();
+                gAudio().play("confirm");
+            }
+        }
+        if (m_arcade.spins > 0 && m_arcadeWheelState == 0) {
+            char lbl[48];
+            snprintf(lbl, sizeof(lbl), "SPIN THE WHEEL  (%d)",
+                     m_arcade.spins);
+            if (UIStyle::PrimaryButton(lbl, {-1.f, 44.f})) {
+                m_arcadeWheelState  = 1;
+                m_arcadeWheelT0     = ImGui::GetTime();
+                m_arcadeWheelResult = arcadeRand(8);
+                const ArcadeWheelSeg& rs = kArcadeWheel[m_arcadeWheelResult];
+                m_arcadeWheelCard = 0;
+                if (rs.type == 2 || rs.type == 3) {
+                    auto& v = m_mdByRarity[rs.type == 2 ? 2 : 3];
+                    if (!v.empty())
+                        m_arcadeWheelCard = v[arcadeRand((int)v.size())];
+                }
+                gAudio().play("draw");
             }
         }
         UIStyle::PushFont(UIStyle::fSmall);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
-            "Honor system — build only from your pool,\nlog results here.");
+            "Winner spins the wheel, loser gets 5 pack tokens\n"
+            "(spend on master OR secret packs). Honor system.");
         UIStyle::PopFont();
 
         // Close Save pinned to the panel bottom.
@@ -17085,6 +17148,203 @@ void UI::drawArcade(int w, int h) {
                 }
             }
             ImGui::EndChild();
+        }
+        ImGui::End();
+        ImGui::PopStyleColor();
+    }
+
+    // ── Prize wheel overlay (winner reward) ─────────────────────────────
+    // One fullscreen focused window: it swallows clicks meant for the panels
+    // underneath, and the CLAIM button lives inside it (no z-order fights).
+    if (m_arcadeWheelState != 0) {
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({(float)w, (float)h});
+        ImGui::SetNextWindowFocus();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.f, 0.f});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::Begin("##arc_wheel", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
+        ImDrawList* fdl = ImGui::GetWindowDrawList();
+        UIStyle::DrawModalBackdrop(fdl, {0.f, 0.f}, {(float)w, (float)h});
+
+        const float R  = std::min(240.f, (float)h * 0.28f);
+        ImVec2 c = {(float)w * 0.5f, (float)h * 0.5f - 60.f};
+        const float seg = 6.2831853f / 8.f;
+        const double dur = 3.8;
+        double t = ImGui::GetTime() - m_arcadeWheelT0;
+        float  k = (float)std::clamp(t / dur, 0.0, 1.0);
+        k = 1.f - (1.f - k) * (1.f - k) * (1.f - k);       // ease-out cubic
+        // Land the result segment's centre under the top pointer after five
+        // full clockwise turns.
+        float rotFinal = -1.5707963f - ((float)m_arcadeWheelResult + 0.5f) * seg
+                       + 10.f * 3.1415926f;
+        float rot = rotFinal * k;
+        if (m_arcadeWheelState == 1 && t >= dur) {
+            m_arcadeWheelState = 2;
+            gAudio().play("confirm");
+        }
+
+        // Wedges + labels.
+        for (int i = 0; i < 8; ++i) {
+            float a0 = rot + i * seg, a1 = a0 + seg;
+            fdl->PathLineTo(c);
+            fdl->PathArcTo(c, R, a0, a1, 24);
+            fdl->PathFillConvex(kArcadeWheel[i].color);
+            float am = a0 + seg * 0.5f;
+            ImVec2 lp = {c.x + std::cos(am) * R * 0.63f,
+                         c.y + std::sin(am) * R * 0.63f};
+            ImVec2 ts = ImGui::CalcTextSize(kArcadeWheel[i].label);
+            fdl->AddText({lp.x - ts.x * 0.5f, lp.y - ts.y * 0.5f},
+                         IM_COL32(235, 238, 248, 255), kArcadeWheel[i].label);
+            fdl->AddLine(c, {c.x + std::cos(a0) * R, c.y + std::sin(a0) * R},
+                         IM_COL32(10, 13, 24, 255), 2.f);
+        }
+        fdl->AddCircle(c, R, C.accent, 64, 3.f);
+        // Hub.
+        fdl->AddCircleFilled(c, R * 0.2f, IM_COL32(12, 15, 28, 255), 32);
+        fdl->AddCircle(c, R * 0.2f, C.accent, 32, 2.f);
+        {
+            const char* hub = m_arcadeWheelState == 1 ? "..." : "WIN!";
+            ImVec2 hs = ImGui::CalcTextSize(hub);
+            fdl->AddText({c.x - hs.x * 0.5f, c.y - hs.y * 0.5f},
+                         C.accentHi, hub);
+        }
+        // Top pointer.
+        fdl->AddTriangleFilled({c.x - 13.f, c.y - R - 20.f},
+                               {c.x + 13.f, c.y - R - 20.f},
+                               {c.x, c.y - R + 8.f}, C.accentHi);
+
+        // Result panel + Claim.
+        if (m_arcadeWheelState == 2 && m_arcadeWheelResult >= 0) {
+            const ArcadeWheelSeg& rs = kArcadeWheel[m_arcadeWheelResult];
+            char msg[96];
+            snprintf(msg, sizeof(msg), "You won %s!", rs.prize);
+            ImVec2 ms = ImGui::CalcTextSize(msg);
+            float  py = c.y + R + 26.f;
+            fdl->AddText({c.x - ms.x * 0.5f, py}, C.textHi, msg);
+            // SR/UR prize: show the exact card.
+            if (m_arcadeWheelCard) {
+                void* tex = m_rend.getCardTexture(m_arcadeWheelCard);
+                ImVec2 ca = {c.x - 44.f, py + 26.f};
+                ImVec2 cb = {ca.x + 88.f, ca.y + 126.f};
+                if (tex) fdl->AddImageRounded((ImTextureID)tex, ca, cb,
+                                              {0, 0}, {1, 1},
+                                              IM_COL32_WHITE, 4.f);
+                int rr = rs.type == 2 ? 2 : 3;
+                fdl->AddRect(ca, cb, kRarityCol[rr], 4.f, 0, 2.2f);
+                std::string nm = m_db.getCard(m_arcadeWheelCard).name;
+                ImVec2 ns = ImGui::CalcTextSize(nm.c_str());
+                fdl->AddText({c.x - ns.x * 0.5f, cb.y + 6.f}, C.textMd,
+                             nm.c_str());
+                py = cb.y + 24.f;
+            }
+            ImGui::SetCursorScreenPos({c.x - 110.f, py + 30.f});
+            if (UIStyle::PrimaryButton("CLAIM", {220.f, 44.f})) {
+                switch (rs.type) {
+                    case 0: m_arcade.masterLeft += rs.amount; break;
+                    case 1: m_arcade.secretLeft += rs.amount; break;
+                    case 2: case 3:
+                        if (m_arcadeWheelCard) {
+                            m_arcade.pool[m_arcadeWheelCard]++;
+                            // SR/UR prizes unlock keys, same as pack pulls.
+                            auto it = m_mdSetcodes.find(m_arcadeWheelCard);
+                            if (it != m_mdSetcodes.end())
+                                for (int s = 0; s < 4; ++s) {
+                                    uint16_t sc = (uint16_t)
+                                        ((it->second >> (s * 16)) & 0xFFFF);
+                                    if (sc &&
+                                        mdArchetypeBucket(sc).size() >= 8)
+                                        m_arcade.keys.insert(sc);
+                                }
+                        }
+                        break;
+                    case 4: m_arcadeKeyPick = true; break;
+                }
+                m_arcade.spins = std::max(0, m_arcade.spins - 1);
+                m_arcade.save();
+                m_arcadeWheelState  = 0;
+                m_arcadeWheelResult = -1;
+                m_arcadeWheelCard   = 0;
+                gAudio().play("confirm");
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
+
+    // ── Free-key chooser (wheel prize) ──────────────────────────────────
+    if (m_arcadeKeyPick) {
+        const float KW = 460.f, KH = std::min(560.f, (float)h - 120.f);
+        ImGui::SetNextWindowPos({(float)w * 0.5f - KW * 0.5f,
+                                 ((float)h - KH) * 0.5f});
+        ImGui::SetNextWindowSize({KW, KH});
+        ImGui::SetNextWindowFocus();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+            ImGui::ColorConvertU32ToFloat4(C.bgPopup));
+        ImGui::Begin("##arc_keypick", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings);
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                           "FREE KEY — pick an archetype");
+        UIStyle::PopFont();
+        ImGui::TextDisabled("Unlocks that secret pack permanently.");
+        UIStyle::SearchInput("##arc_keysearch", m_arcadeKeySearch,
+                             sizeof(m_arcadeKeySearch),
+                             "Filter archetypes...", -1.f);
+        ImGui::Dummy({1.f, 4.f});
+        ImGui::BeginChild("##arc_keylist",
+                          {-1.f, ImGui::GetContentRegionAvail().y - 46.f},
+                          false);
+        // Candidates: every real secret pack (bucket big enough) not yet
+        // owned, filtered by the search box, alphabetical.
+        {
+            std::string q = m_arcadeKeySearch;
+            for (char& ch : q) ch = (char)std::tolower((unsigned char)ch);
+            std::vector<std::pair<std::string, uint16_t>> opts;
+            for (auto& kv : m_mdArchBuckets) {
+                if (kv.second.size() < 8) continue;
+                if (m_arcade.keys.count(kv.first)) continue;
+                std::string lbl =
+                    arcadeArchLabel(m_db, kv.second, kv.first);
+                if (!q.empty()) {
+                    std::string low = lbl;
+                    for (char& ch : low)
+                        ch = (char)std::tolower((unsigned char)ch);
+                    if (low.find(q) == std::string::npos) continue;
+                }
+                opts.push_back({std::move(lbl), kv.first});
+            }
+            std::sort(opts.begin(), opts.end());
+            for (auto& o : opts) {
+                char oid[96];
+                snprintf(oid, sizeof(oid), "%s##fk_%u",
+                         o.first.c_str(), (unsigned)o.second);
+                if (ImGui::Selectable(oid)) {
+                    m_arcade.keys.insert(o.second);
+                    m_arcadeSecretPick = o.second;
+                    m_arcade.save();
+                    m_arcadeKeyPick = false;
+                    m_arcadeKeySearch[0] = '\0';
+                    gAudio().play("confirm");
+                }
+            }
+            if (opts.empty())
+                ImGui::TextDisabled("No matching archetypes.");
+        }
+        ImGui::EndChild();
+        if (UIStyle::GhostButton("Cancel", {120.f, 32.f})) {
+            // The prize stays claimable: hand the spin back rather than
+            // eating the free key.
+            m_arcade.spins++;
+            m_arcade.save();
+            m_arcadeKeyPick = false;
+            m_arcadeKeySearch[0] = '\0';
         }
         ImGui::End();
         ImGui::PopStyleColor();

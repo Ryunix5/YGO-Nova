@@ -31,6 +31,10 @@ struct ArcadeSave {
     int masterLeft = 10;                    // master packs still unopened
     int secretLeft = 10;                    // secret packs still unopened
     int wins = 0, losses = 0;               // campaign record
+    int tokens = 0;                         // wild pack tokens (loser reward:
+                                            // +5 per loss, spend on either
+                                            // master or secret packs)
+    int spins = 0;                          // unspent wheel spins (win reward)
     std::set<uint16_t> keys;                // unlocked secret packs (setcodes)
     std::unordered_map<uint32_t, int> pool; // owned cards: code -> copies
 
@@ -79,6 +83,8 @@ struct ArcadeSave {
                 else if (k == "secretLeft") secretLeft = std::stoi(v);
                 else if (k == "wins")       wins       = std::stoi(v);
                 else if (k == "losses")     losses     = std::stoi(v);
+                else if (k == "tokens")     tokens     = std::stoi(v);
+                else if (k == "spins")      spins      = std::stoi(v);
                 else if (k == "key")        keys.insert((uint16_t)std::stoul(v));
                 else if (k == "card") {     // "code xN"
                     std::istringstream ss(v);
@@ -101,6 +107,8 @@ struct ArcadeSave {
         f << "secretLeft=" << secretLeft << "\n";
         f << "wins="       << wins       << "\n";
         f << "losses="     << losses     << "\n";
+        f << "tokens="     << tokens     << "\n";
+        f << "spins="      << spins      << "\n";
         for (uint16_t k : keys)  f << "key=" << k << "\n";
         for (auto& kv : pool)    f << "card=" << kv.first << " "
                                    << kv.second << "\n";

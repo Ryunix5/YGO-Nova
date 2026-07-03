@@ -103,6 +103,14 @@ private:
     int         m_arcadeView = 0;                // 0 = pack view, 1 = collection
     uint16_t    m_arcadeSecretPick = 0;          // selected key (setcode)
     bool        m_poolMode = false;              // deck builder pool restriction
+    // Post-duel rewards: winner spins a prize wheel, loser banks 5 wild pack
+    // tokens. Wheel overlay state machine: 0 hidden, 1 spinning, 2 result up.
+    int         m_arcadeWheelState = 0;
+    double      m_arcadeWheelT0 = 0.0;           // spin start time
+    int         m_arcadeWheelResult = -1;        // landed segment index
+    uint32_t    m_arcadeWheelCard = 0;           // pre-rolled SR/UR prize card
+    bool        m_arcadeKeyPick = false;         // "free key" chooser open
+    char        m_arcadeKeySearch[48] = {};
     // Master Duel rarity table (assets/arcade/md_rarity.txt) + derived data.
     std::unordered_map<uint32_t, uint8_t>  m_mdRarity;      // code -> 0..3
     std::unordered_map<uint32_t, uint64_t> m_mdSetcodes;    // code -> packed
