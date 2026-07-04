@@ -15,9 +15,11 @@
 //     (packs restock to 10/10, keys reset).
 //   * A key = a 16-bit archetype setcode, granted by pulling an SR/UR that
 //     belongs to that archetype (Master Duel's unlock rule). Keys reset
-//     each cycle; last cycle's keys become the CRAFT pool.
+//     each cycle.
 //   * The wheel pays out craft credits (crSR / crNR) or bonus secret
-//     packs. Credits buy exact cards from last cycle's unlocked packs.
+//     packs. Credits buy exact cards from secret packs you unlock AND
+//     open in the CURRENT cycle (i.e. after the win/loss that paid the
+//     credits) — tracked in openedKeys, cleared each cycle.
 //   * The leaderboard (member → points) lives in every member's copy of
 //     the save and merges via ArcadeSync whenever two members connect —
 //     points only grow, so per-name MAX is a safe merge.
@@ -43,7 +45,7 @@ struct ArcadeSave {
     int crSR = 0;                           // SR craft credits (wheel reward)
     int crNR = 0;                           // N/R craft credits (wheel reward)
     std::set<uint16_t> keys;                // unlocked secret packs (setcodes)
-    std::set<uint16_t> craftKeys;           // LAST cycle's packs = craft pool
+    std::set<uint16_t> openedKeys;          // packs OPENED this cycle = craftable
     std::map<std::string, int> board;       // leaderboard: member -> points
     std::unordered_map<uint32_t, int> pool; // owned cards: code -> copies
 
@@ -105,7 +107,7 @@ struct ArcadeSave {
                 else if (k == "crSR")       crSR       = std::stoi(v);
                 else if (k == "crNR")       crNR       = std::stoi(v);
                 else if (k == "key")        keys.insert((uint16_t)std::stoul(v));
-                else if (k == "ckey")  craftKeys.insert((uint16_t)std::stoul(v));
+                else if (k == "okey") openedKeys.insert((uint16_t)std::stoul(v));
                 else if (k == "member") {   // "points name" (name has spaces)
                     std::istringstream ss(v);
                     int pts = 0; ss >> pts;
@@ -139,8 +141,8 @@ struct ArcadeSave {
         f << "spins="      << spins      << "\n";
         f << "crSR="       << crSR       << "\n";
         f << "crNR="       << crNR       << "\n";
-        for (uint16_t k : keys)      f << "key="  << k << "\n";
-        for (uint16_t k : craftKeys) f << "ckey=" << k << "\n";
+        for (uint16_t k : keys)       f << "key="  << k << "\n";
+        for (uint16_t k : openedKeys) f << "okey=" << k << "\n";
         for (auto& kv : board)   f << "member=" << kv.second << " "
                                    << kv.first << "\n";
         for (auto& kv : pool)    f << "card=" << kv.first << " "

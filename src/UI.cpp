@@ -13994,17 +13994,20 @@ void UI::drawDeckBuilder(int w, int h) {
                 //    reserved area using SetCursorScreenPos. Both submit
                 //    items inside the reserved rect → no boundary extension.
                 // 4) Restore cursor to row-bottom, then Dummy for the gap.
+                // Compact row: thumbnail, type chip, name, one stat line.
+                // No card code, no description — hover the row and the full
+                // text shows in the Card Preview panel on the left.
                 ImVec2 rp = ImGui::GetCursorScreenPos();
                 float  rw = ImGui::GetContentRegionAvail().x;
-                float  rh = 72.f;
+                float  rh = 56.f;
                 ImGui::Dummy({rw, rh});                // step 1
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 UIStyle::DrawRaisedPanel(dl, rp, {rp.x + rw, rp.y + rh});
 
                 // Thumbnail.
                 void* tex = m_rend.getCardTexture(card.id);
-                ImVec2 thumb = {rp.x + 8.f, rp.y + 8.f};
-                ImVec2 thumbEnd = {thumb.x + 42.f, thumb.y + 56.f};
+                ImVec2 thumb = {rp.x + 7.f, rp.y + 6.f};
+                ImVec2 thumbEnd = {thumb.x + 32.f, thumb.y + 44.f};
                 if (tex)
                     dl->AddImage((ImTextureID)tex, thumb, thumbEnd);
                 else
@@ -14025,41 +14028,34 @@ void UI::drawDeckBuilder(int w, int h) {
                     : isSpell   ? "SPELL"
                     : isTrap    ? "TRAP" : "CARD";
                 ImVec2 ts = ImGui::CalcTextSize(chipText);
-                float chipX = thumb.x + 52.f;
-                float chipY = rp.y + 8.f;
+                float chipX = thumb.x + 40.f;
+                float chipY = rp.y + 7.f;
                 dl->AddRectFilled({chipX, chipY},
-                                  {chipX + ts.x + 12.f, chipY + ts.y + 6.f},
+                                  {chipX + ts.x + 12.f, chipY + ts.y + 5.f},
                                   chipBg, 4.f);
-                dl->AddText({chipX + 6.f, chipY + 3.f}, C.textHi, chipText);
+                dl->AddText({chipX + 6.f, chipY + 2.f}, C.textHi, chipText);
 
-                // Name (right of chip).
-                float nameX = chipX + ts.x + 22.f;
-                dl->AddText({nameX, rp.y + 8.f}, C.textHi, card.name.c_str());
+                // Name (right of chip), clipped clear of the Add button.
+                float nameX = chipX + ts.x + 20.f;
+                dl->PushClipRect({nameX, rp.y}, {rp.x + rw - 92.f, rp.y + rh},
+                                 true);
+                dl->AddText({nameX, rp.y + 7.f}, C.textHi, card.name.c_str());
+                dl->PopClipRect();
 
-                // Metadata line.
-                char meta[160];
+                // Stat line (monsters only; spells/traps stay clean).
+                char meta[96] = "";
                 if (isMonster)
-                    snprintf(meta, sizeof(meta),
-                             "ATK %d / DEF %d  •  Lv%d  •  #%u",
-                             card.atk, card.def, card.level,
-                             (unsigned)card.id);
-                else
-                    snprintf(meta, sizeof(meta), "#%u", (unsigned)card.id);
+                    snprintf(meta, sizeof(meta), "ATK %d / DEF %d  •  Lv%d",
+                             card.atk, card.def, card.level);
                 if (m_poolMode && m_arcadeLoaded) {
                     char own[48];
-                    snprintf(own, sizeof(own), "  •  own %d, in deck %d",
+                    snprintf(own, sizeof(own), "%sown %d, in deck %d",
+                             meta[0] ? "  •  " : "",
                              m_arcade.owned(card.id), deckCopies(card.id));
                     strncat(meta, own, sizeof(meta) - strlen(meta) - 1);
                 }
-                dl->AddText({thumb.x + 52.f, rp.y + 32.f}, C.textLo, meta);
-
-                // Desc snippet — single line, ellipsis.
-                if (!card.desc.empty()) {
-                    std::string s = card.desc;
-                    for (auto& ch : s) if (ch == '\n' || ch == '\r') ch = ' ';
-                    if (s.size() > 70) s = s.substr(0, 68) + "...";
-                    dl->AddText({thumb.x + 52.f, rp.y + 50.f}, C.textMuted, s.c_str());
-                }
+                if (meta[0])
+                    dl->AddText({chipX, rp.y + 30.f}, C.textLo, meta);
 
                 // Step 3a — row hit-test (left side, leaves the Add button
                 // free on the right). This stays inside the reserved rect.
@@ -14097,15 +14093,22 @@ void UI::drawDeckBuilder(int w, int h) {
                     ImGui::EndDragDropSource();
                 }
 
-                // Step 3b — Add button placed inside the reserved rect. Now
-                // opens a small menu so the player picks the destination
-                // section (Main/Extra + Side) instead of auto-routing.
-                ImGui::SetCursorScreenPos({rp.x + rw - 88.f, rp.y + 20.f});
+                // Step 3b — Add button placed inside the reserved rect.
+                // ONE CLICK adds to the natural section (Extra for extra-deck
+                // cards, otherwise Main); the right-click menu (row or
+                // button) covers Side / explicit choices.
+                ImGui::SetCursorScreenPos({rp.x + rw - 88.f, rp.y + 13.f});
                 char addLbl[40];
                 snprintf(addLbl, sizeof(addLbl), "+ Add##s%u",
                          (unsigned)card.id);
-                if (UIStyle::SecondaryButton(addLbl, {80.f, 32.f}))
+                if (UIStyle::SecondaryButton(addLbl, {80.f, 30.f}))
+                    addCardTo(isExtra ? 'e' : 'm', card.id);
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
                     ImGui::OpenPopup(addPop);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Click: add to %s  •  Right-click: "
+                                      "choose section",
+                                      isExtra ? "Extra" : "Main");
                 if (ImGui::BeginPopup(addPop)) {
                     ImGui::TextDisabled("Add to");
                     ImGui::Separator();
@@ -14354,27 +14357,40 @@ void UI::drawDeckBuilder(int w, int h) {
 
         ImGui::Dummy({1.f, 6.f});
 
-        // ── Inner scroll region for the three deck sections. The grid auto-
-        //    wraps to fit the panel width. Tile size keeps rows readable on
-        //    small windows; we compute tilesPerRow per section.
-        ImGui::BeginChild("##db_deck_scroll", {-1.f, -1.f}, false,
-            ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        // ── Inner region for the three deck sections. Sized so Main +
+        //    Extra + Side are ALL visible at once — no scrolling.
+        ImGui::BeginChild("##db_deck_scroll", {-1.f, -1.f}, false);
 
-        // ── 10-column deck grid ─────────────────────────────────────────
+        // ── 10-column deck grid, height-fitted ──────────────────────────
         // A standard 40-card Main Deck reads as exactly 4 rows × 10
-        // columns (the classic deck-editor layout); bigger decks continue
-        // into further rows with the SAME column count. Tile size is
-        // derived from the centre column's width so the ten columns
-        // always fit, clamped so cards stay recognizable, and the tile
-        // keeps the true 421:614 card aspect.
+        // columns; bigger decks continue with the SAME column count. Tile
+        // size starts from the column width (true 421:614 card aspect),
+        // then shrinks until every section's rows fit the panel height —
+        // the whole deck is always on screen.
         const float TILE_PAD_X = 6.f;
         const float TILE_PAD_Y = 6.f;
         const int   kDeckCols  = 10;
-        float TILE_W = (ImGui::GetContentRegionAvail().x - 16.f /*scrollbar*/
+        float TILE_W = (ImGui::GetContentRegionAvail().x - 4.f
                         - (kDeckCols - 1) * TILE_PAD_X) / (float)kDeckCols;
         if (TILE_W < 44.f)  TILE_W = 44.f;
-        if (TILE_W > 116.f) TILE_W = 116.f;
+        if (TILE_W > 132.f) TILE_W = 132.f;
         float TILE_H = TILE_W * (614.f / 421.f);
+        {
+            auto rowsOf = [&](int n) {
+                return std::max(1, (n + kDeckCols - 1) / kDeckCols);
+            };
+            int rows = rowsOf((int)m_editDeck.main.size())
+                     + rowsOf((int)m_editDeck.extra.size())
+                     + rowsOf((int)m_editDeck.side.size());
+            // Header + gap overhead per section (~34px) + inter-section gaps.
+            const float overhead = 3.f * 34.f + 16.f;
+            float fitH = (ImGui::GetContentRegionAvail().y - overhead
+                          - rows * TILE_PAD_Y) / (float)rows;
+            if (fitH < TILE_H) {
+                TILE_H = std::max(50.f, fitH);
+                TILE_W = TILE_H * (421.f / 614.f);
+            }
+        }
 
         // ── Drag-and-drop payload ────────────────────────────────────────
         // Identifies the source tile by section ('m'/'e'/'s'), index in
@@ -17291,6 +17307,9 @@ void UI::drawArcade(int w, int h) {
                     m_db, mdArchetypeBucket(m_arcadeSecretPick),
                     m_arcadeSecretPick) + " Secret Pack";
                 m_arcade.secretLeft--;
+                // Opening a pack makes it CRAFTABLE for this cycle's
+                // wheel credits (applyPack saves right after).
+                m_arcade.openedKeys.insert(m_arcadeSecretPick);
                 applyPack(rollSecretPack(m_arcadeSecretPick),
                           std::move(packNm));
             }
@@ -17355,8 +17374,10 @@ void UI::drawArcade(int w, int h) {
                 }
                 m_arcade.masterLeft = 10;
                 m_arcade.secretLeft = 10;
-                m_arcade.craftKeys  = m_arcade.keys; // last cycle = craft pool
+                // Fresh cycle: keys AND the craftable-pack list reset. Wheel
+                // credits are spent on packs you unlock & open FROM NOW ON.
                 m_arcade.keys.clear();
+                m_arcade.openedKeys.clear();
                 m_arcadeSecretPick  = 0;
                 m_arcadeCraftPick   = 0;
                 m_arcade.spins++;                    // winner AND loser spin
@@ -17600,10 +17621,10 @@ void UI::drawArcade(int w, int h) {
         } else if (m_arcadeView == 2) {
             // ── Craft: spend wheel credits on exact cards from LAST
             // cycle's unlocked secret packs ──────────────────────────────
-            if (m_arcade.craftKeys.empty()) {
+            if (m_arcade.openedKeys.empty()) {
                 UIStyle::EmptyState(availH - 8.f, "Nothing to craft from",
-                    "Finish a cycle: the secret packs you unlock before a "
-                    "duel become your craft pool afterwards.");
+                    "Open a secret pack this cycle — every pack you unlock "
+                    "and open becomes craftable here.");
             } else {
                 // Credits banner.
                 char cb2[40];
@@ -17617,14 +17638,14 @@ void UI::drawArcade(int w, int h) {
                     "1 credit = 1 exact card from a pack below");
                 ImGui::Dummy({1.f, 6.f});
                 // Pack picker + card filter on one row.
-                if (!m_arcade.craftKeys.count(m_arcadeCraftPick))
-                    m_arcadeCraftPick = *m_arcade.craftKeys.begin();
+                if (!m_arcade.openedKeys.count(m_arcadeCraftPick))
+                    m_arcadeCraftPick = *m_arcade.openedKeys.begin();
                 std::string curPk = arcadeArchLabel(
                     m_db, mdArchetypeBucket(m_arcadeCraftPick),
                     m_arcadeCraftPick);
                 ImGui::SetNextItemWidth(260.f);
                 if (ImGui::BeginCombo("##craftpack", curPk.c_str())) {
-                    for (uint16_t sc : m_arcade.craftKeys) {
+                    for (uint16_t sc : m_arcade.openedKeys) {
                         std::string lbl = arcadeArchLabel(
                             m_db, mdArchetypeBucket(sc), sc);
                         char pid2[96];
@@ -17929,11 +17950,9 @@ void UI::drawArcade(int w, int h) {
             float  py = c.y + R + 26.f;
             fdl->AddText({c.x - ms.x * 0.5f, py}, C.textHi, msg);
             if (rs.type == 0) {
-                const char* hint = m_arcade.craftKeys.empty()
-                    ? "(no secret packs were unlocked last cycle —\n"
-                      " credits bank for a future cycle)"
-                    : "Spend them in the CRAFT tab on cards from the\n"
-                      "secret packs you unlocked this cycle.";
+                const char* hint =
+                    "Open your new secret packs — every pack you unlock\n"
+                    "and open this cycle is craftable in the CRAFT tab.";
                 ImVec2 hsz = ImGui::CalcTextSize(hint);
                 fdl->AddText({c.x - hsz.x * 0.5f, py + 24.f}, C.textMuted,
                              hint);
