@@ -82,6 +82,9 @@ enum class NetMsgType : uint32_t {
     SyncError       = 16, // either direction: hard-fault notice, pause the duel
     GameOver        = 17, // host → client: duel ended {winner, reason}
     Surrender       = 18, // client → host: concede {seat}; host forfeits it
+    ArcadeSync      = 19, // host → client: Master Saga campaign { name } —
+                          // the guest auto-creates/loads that campaign save
+                          // so an invited friend is instantly part of it
 
     // ── Relay / room control (online play, types 101+) ───────────────────
     // These travel between a peer and the RELAY SERVER only — they are NOT

@@ -103,6 +103,14 @@ private:
     int         m_arcadeView = 0;                // 0 = pack view, 1 = collection
     uint16_t    m_arcadeSecretPick = 0;          // selected key (setcode)
     bool        m_poolMode = false;              // deck builder pool restriction
+    // Group-duel invites: the campaign is SHARED — you invite a friend with
+    // an invite code (room code + PIN), the host syncs the campaign over the
+    // wire (ArcadeSync) and the friend's save is created automatically.
+    bool        m_arcadeGroupDuel = false;       // current MP session is one
+    std::string m_arcadeInvitePin;               // PIN of the room we host
+    char        m_arcadeInviteBuf[24] = {};      // invite-code join input
+    void arcadeHostInvite();                     // locked room + fresh PIN
+    void arcadeJoinInvite();                     // join via m_arcadeInviteBuf
     // Post-duel rewards: winner spins a prize wheel, loser banks 5 wild pack
     // tokens. Wheel overlay state machine: 0 hidden, 1 spinning, 2 result up.
     int         m_arcadeWheelState = 0;

@@ -242,6 +242,57 @@ void UI::startRelayJoin() {
     }
 }
 
+// ─── Arcade group-duel invites ──────────────────────────────────────────────
+// A Master Saga campaign is SHARED between friends: the host creates a locked
+// relay room with a random PIN and shares ONE invite code ("ROOMC-PIN"). The
+// friend types it into the Arcade screen — no campaign needed on their side;
+// once the room forms the host syncs the campaign over (ArcadeSync) and the
+// friend's save file is created on the spot. Then they just duel.
+void UI::arcadeHostInvite() {
+    static const char kPinAlpha[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    std::random_device rd;
+    m_arcadeInvitePin.clear();
+    for (int i = 0; i < 4; ++i)
+        m_arcadeInvitePin += kPinAlpha[rd() % 32];
+    strncpy(m_mpRoomPwBuf, m_arcadeInvitePin.c_str(),
+            sizeof(m_mpRoomPwBuf) - 1);
+    m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
+    m_arcade.save();
+    m_arcadeGroupDuel = true;
+    m_mpTransport     = 1;
+    m_screen          = Screen::Multiplayer;
+    startRelayCreate();
+}
+
+void UI::arcadeJoinInvite() {
+    // Invite code = "<ROOMCODE>-<PIN>". A plain room code (no dash) still
+    // works for rooms without a PIN.
+    std::string raw;
+    for (char* p = m_arcadeInviteBuf; *p; ++p)
+        if (*p != ' ') raw += (char)toupper((unsigned char)*p);
+    std::string code = raw, pin;
+    auto dash = raw.find('-');
+    if (dash != std::string::npos) {
+        code = raw.substr(0, dash);
+        pin  = raw.substr(dash + 1);
+    }
+    if (code.empty()) {
+        pushToast("Enter the invite code your friend shared",
+                  IM_COL32(232, 182, 72, 255), 2.6);
+        return;
+    }
+    strncpy(m_mpRoomPwBuf, pin.c_str(), sizeof(m_mpRoomPwBuf) - 1);
+    m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
+    strncpy(m_mpRoomCodeBuf, code.c_str(), sizeof(m_mpRoomCodeBuf) - 1);
+    m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
+    if (m_arcadeLoaded) m_arcade.save();
+    m_arcadeGroupDuel = true;
+    m_arcadeInvitePin.clear();
+    m_mpTransport     = 1;
+    m_screen          = Screen::Multiplayer;
+    startRelayJoin();
+}
+
 // Kick off the existing Hello/deck/ready handshake once the room is formed.
 // Sending our Hello makes the peer's Hello handler reply with their deck +
 // ready state; we reply in kind, reaching the same pre-duel state as LAN.
@@ -250,6 +301,13 @@ void UI::mpKickoffHandshake() {
     if (m_mpHandshakeSent) return;
     m_mpHandshakeSent = true;
     sendMpHello();
+    // Group duel: the host pushes its campaign name to the guest so an
+    // invited friend gets the save on their machine without creating one.
+    if (m_arcadeGroupDuel && m_net.isHost() && m_arcadeLoaded) {
+        edo::NetMessage m; m.type = edo::NetMsgType::ArcadeSync;
+        edo::putStr(m.payload, m_arcade.name);
+        m_net.send(m);
+    }
     if (m_mpDeckIdx >= 0) sendMpDeckInfo();
     if (m_mpReady)        sendMpReady(true);
 }
@@ -2104,6 +2162,33 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
     case edo::NetMsgType::SyncError:       handleSyncError(m); break;
     case edo::NetMsgType::GameOver:        handleGameOver(m); break;
     case edo::NetMsgType::Surrender:       handleSurrender(m); break;
+    case edo::NetMsgType::ArcadeSync: {
+        // The host shared its Master Saga campaign. If we don't have it,
+        // create the save locally (fresh progress — you open your OWN
+        // packs); either way load it so Arcade is ready after the duel.
+        std::string camp = r.str();
+        if (!camp.empty() && !m_net.isHost()) {
+            m_arcadeFiles = edo::ArcadeSave::list();
+            bool have = std::find(m_arcadeFiles.begin(), m_arcadeFiles.end(),
+                                  camp) != m_arcadeFiles.end();
+            if (!have) {
+                m_arcade = edo::ArcadeSave{};
+                m_arcade.name = camp;
+                m_arcade.save();
+                m_arcadeFiles = edo::ArcadeSave::list();
+                pushToast("Campaign '" + camp + "' added — open your packs "
+                          "in Arcade!", IM_COL32(110, 220, 140, 255), 4.5);
+            } else if (!m_arcadeLoaded || m_arcade.name != camp) {
+                m_arcade.load(camp);
+            }
+            m_arcadeLoaded     = true;
+            m_arcadeGroupDuel  = true;
+            m_arcadeView       = m_arcade.pool.empty() ? 0 : 1;
+            m_arcadeSecretPick = 0;
+            m_dm.logEvent("[ARCADE] campaign synced from host: " + camp);
+        }
+        break;
+    }
     case edo::NetMsgType::Error: {
         std::string txt = r.str();
         m_dm.logEvent("[MULTI ERROR] " + txt);
@@ -2119,8 +2204,13 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
         m_mpRelayConnecting = false;
         m_mpRoomError.clear();
         m_dm.logEvent("[ONLINE] room created, code=" + m_mpRoomCode);
-        pushToast("Room created: " + m_mpRoomCode,
-                  IM_COL32(110, 220, 140, 255), 3.0);
+        if (m_arcadeGroupDuel && !m_arcadeInvitePin.empty())
+            pushToast("Invite code: " + m_mpRoomCode + "-" + m_arcadeInvitePin
+                      + " — send it to your friend",
+                      IM_COL32(110, 220, 140, 255), 5.0);
+        else
+            pushToast("Room created: " + m_mpRoomCode,
+                      IM_COL32(110, 220, 140, 255), 3.0);
         break;
     }
     case edo::NetMsgType::RoomJoined: {
@@ -4568,6 +4658,8 @@ void UI::drawLobby(int w, int h) {
             m_mpRelayAddrBuf[sizeof(m_mpRelayAddrBuf) - 1] = '\0';
             m_mpTransport        = 1;     // Online (relay) tab
             m_lobbyNextRefreshAt = 0.0;   // refresh the lobby immediately
+            m_arcadeGroupDuel    = false; // plain online play, not a campaign
+            m_arcadeInvitePin.clear();
             m_screen             = Screen::Multiplayer;
         }
         if (tile("SOLO", "Practice vs the AI", 1, false))
@@ -15566,20 +15658,31 @@ void UI::drawMultiplayer(int w, int h) {
                     ImGui::EndChild();
                 }
             } else if (m_mpRoomActive && !m_mpRoomCode.empty()) {
-                // Show the active room code prominently + a copy button.
-                UIStyle::SectionHeader("Room");
+                // Show the shareable code prominently + a copy button. For
+                // an arcade group duel the room is PIN-locked, so the code
+                // to share is the full INVITE code (room-PIN).
+                bool grp = m_arcadeGroupDuel && !m_arcadeInvitePin.empty() &&
+                           m_net.isHost();
+                std::string share = grp
+                    ? m_mpRoomCode + "-" + m_arcadeInvitePin : m_mpRoomCode;
+                UIStyle::SectionHeader(grp ? "Group duel" : "Room");
                 if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
                 ImGui::PushStyleColor(ImGuiCol_Text,
                     ImGui::ColorConvertU32ToFloat4(C.accentHi));
-                ImGui::Text("Code:  %s", m_mpRoomCode.c_str());
+                ImGui::Text("%s  %s", grp ? "Invite:" : "Code:", share.c_str());
                 ImGui::PopStyleColor();
                 if (UIStyle::fHeader) ImGui::PopFont();
-                if (UIStyle::SecondaryButton("Copy room code", {-1.f, 30.f})) {
-                    ImGui::SetClipboardText(m_mpRoomCode.c_str());
-                    pushToast("Room code copied",
+                if (UIStyle::SecondaryButton(
+                        grp ? "Copy invite code" : "Copy room code",
+                        {-1.f, 30.f})) {
+                    ImGui::SetClipboardText(share.c_str());
+                    pushToast(grp ? "Invite code copied" : "Room code copied",
                               IM_COL32(180, 220, 255, 255), 1.8);
                 }
-                ImGui::TextDisabled("Share this code with your opponent.");
+                ImGui::TextDisabled(grp
+                    ? "Send this to your friend — the campaign syncs to\n"
+                      "their machine when they join."
+                    : "Share this code with your opponent.");
             } else if (m_mpRelayConnecting) {
                 ImGui::TextDisabled("Connecting to relay...");
             }
@@ -16140,21 +16243,30 @@ void UI::drawRoomScreen(int w, int h, float topY) {
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
     ImGui::AlignTextToFramePadding();
     if (m_mpTransport == 1 && !m_mpRoomCode.empty()) {
+        // Arcade group duel: the shareable code is the full invite code
+        // (room-PIN), because the room is locked to the campaign invite.
+        bool grp = m_arcadeGroupDuel && !m_arcadeInvitePin.empty() &&
+                   m_net.isHost();
+        std::string share = grp
+            ? m_mpRoomCode + "-" + m_arcadeInvitePin : m_mpRoomCode;
         UIStyle::PushFont(UIStyle::fHeader);
-        ImGui::TextUnformatted("ROOM");
+        ImGui::TextUnformatted(grp ? "INVITE" : "ROOM");
         ImGui::SameLine(0.f, 10.f);
         ImGui::PushStyleColor(ImGuiCol_Text,
             ImGui::ColorConvertU32ToFloat4(C.accentHi));
-        ImGui::TextUnformatted(m_mpRoomCode.c_str());
+        ImGui::TextUnformatted(share.c_str());
         ImGui::PopStyleColor();
         UIStyle::PopFont();
         ImGui::SameLine(0.f, 12.f);
         if (UIStyle::GhostButton("Copy##rc", {64.f, 28.f})) {
-            ImGui::SetClipboardText(m_mpRoomCode.c_str());
-            pushToast("Room code copied", IM_COL32(180, 220, 255, 255), 1.8);
+            ImGui::SetClipboardText(share.c_str());
+            pushToast(grp ? "Invite code copied" : "Room code copied",
+                      IM_COL32(180, 220, 255, 255), 1.8);
         }
         ImGui::SameLine(0.f, 12.f);
-        ImGui::TextDisabled("share this code with your opponent");
+        ImGui::TextDisabled(grp
+            ? "send this to your friend — the campaign syncs when they join"
+            : "share this code with your opponent");
     } else {
         UIStyle::PushFont(UIStyle::fHeader);
         ImGui::TextUnformatted(m_mpTransport == 0 ? "LAN MATCH"
@@ -16851,6 +16963,32 @@ void UI::drawArcade(int w, int h) {
                 gAudio().play("error");
             }
         }
+
+        // Joining an EXISTING campaign a friend hosts: paste their invite
+        // code here — no save needed on this side, the host syncs the
+        // campaign over and the save file is created automatically.
+        ImGui::Dummy({1.f, 10.f});
+        UIStyle::SectionHeader("Join a friend's campaign");
+        UIStyle::PushFont(UIStyle::fSmall);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
+            "Got an invite code? The friend's campaign is added to your\n"
+            "machine automatically and you go straight to the duel.");
+        UIStyle::PopFont();
+        ImGui::SetNextItemWidth(PW - 44.f - 130.f);
+        bool jsubmit = ImGui::InputTextWithHint("##arc_invite", "INVITE CODE",
+            m_arcadeInviteBuf, sizeof(m_arcadeInviteBuf),
+            ImGuiInputTextFlags_CharsUppercase |
+            ImGuiInputTextFlags_CharsNoBlank |
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine(0.f, 8.f);
+        {
+            bool can = m_arcadeInviteBuf[0] != '\0';
+            if (!can) ImGui::BeginDisabled();
+            if (UIStyle::PrimaryButton("Join", {110.f, 0.f}) ||
+                (jsubmit && can))
+                arcadeJoinInvite();
+            if (!can) ImGui::EndDisabled();
+        }
         ImGui::Unindent(22.f);
         ImGui::End();
         ImGui::PopStyleColor();
@@ -17051,57 +17189,33 @@ void UI::drawArcade(int w, int h) {
             m_screen = Screen::DeckBuilder;
         }
         ImGui::Dummy({1.f, 6.f});
-        // Group duels — Master Saga is played WITHIN the friend group that
-        // shares this campaign. Rooms are locked with a password derived
-        // from the campaign name, so only friends who created the same
-        // save can get in. No dueling randoms.
+        // Group duels — this campaign is SHARED with your friends. Invite
+        // one: they type your invite code and the campaign appears on their
+        // machine automatically (ArcadeSync). Rooms are PIN-locked, so no
+        // dueling randoms.
         {
-            // "ms:" + campaign name, lowercased with spaces stripped —
-            // every member of the group derives the identical secret.
-            std::string groupPw = "ms:";
-            for (char ch : m_arcade.name)
-                if (ch != ' ')
-                    groupPw += (char)std::tolower((unsigned char)ch);
             UIStyle::PushFont(UIStyle::fSmall);
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
-                "Group duels are private to this campaign.");
+                "Invite a friend — they get this campaign automatically.");
             UIStyle::PopFont();
-            if (UIStyle::SecondaryButton("Host Group Duel", {-1.f, 40.f})) {
-                m_arcade.save();
-                m_mpTransport = 1;
-                strncpy(m_mpRoomPwBuf, groupPw.c_str(),
-                        sizeof(m_mpRoomPwBuf) - 1);
-                m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
-                m_screen = Screen::Multiplayer;
-                startRelayCreate();
-            }
+            if (UIStyle::SecondaryButton("Invite Friend & Duel", {-1.f, 40.f}))
+                arcadeHostInvite();
             ImGui::Dummy({1.f, 2.f});
-            static char s_grpCode[16] = {};
-            float joinW = 130.f;
+            float joinW = 110.f;
             ImGui::SetNextItemWidth(
                 ImGui::GetContentRegionAvail().x - joinW - 8.f);
             bool codeEnter = ImGui::InputTextWithHint(
-                "##arc_grpcode", "FRIEND'S ROOM CODE",
-                s_grpCode, sizeof(s_grpCode),
+                "##arc_grpcode", "INVITE CODE",
+                m_arcadeInviteBuf, sizeof(m_arcadeInviteBuf),
                 ImGuiInputTextFlags_CharsUppercase |
                 ImGuiInputTextFlags_CharsNoBlank |
                 ImGuiInputTextFlags_EnterReturnsTrue);
             ImGui::SameLine(0.f, 8.f);
-            bool canJoin = s_grpCode[0] != '\0';
+            bool canJoin = m_arcadeInviteBuf[0] != '\0';
             if (!canJoin) ImGui::BeginDisabled();
             if (UIStyle::SecondaryButton("Join##grp", {joinW, 0.f}) ||
-                (codeEnter && canJoin)) {
-                m_arcade.save();
-                m_mpTransport = 1;
-                strncpy(m_mpRoomPwBuf, groupPw.c_str(),
-                        sizeof(m_mpRoomPwBuf) - 1);
-                m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
-                strncpy(m_mpRoomCodeBuf, s_grpCode,
-                        sizeof(m_mpRoomCodeBuf) - 1);
-                m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
-                m_screen = Screen::Multiplayer;
-                startRelayJoin();
-            }
+                (codeEnter && canJoin))
+                arcadeJoinInvite();
             if (!canJoin) ImGui::EndDisabled();
         }
         ImGui::Dummy({1.f, 4.f});
@@ -17110,10 +17224,15 @@ void UI::drawArcade(int w, int h) {
         // banks a wheel spin and the loser banks 5 wild pack tokens.
         {
             float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
+            // Secret packs FULLY reset each duel: the counters restock AND
+            // every unlocked key is lost — you re-earn access by pulling
+            // SR/URs from the fresh master packs.
             if (UIStyle::GhostButton("I Won", {half, 34.f})) {
                 m_arcade.wins++;
                 m_arcade.masterLeft += 10;
-                m_arcade.secretLeft  = 10;   // secret packs RESET, not stack
+                m_arcade.secretLeft  = 10;
+                m_arcade.keys.clear();
+                m_arcadeSecretPick = 0;
                 m_arcade.spins++;
                 m_arcade.save();
                 m_arcadeWheelState = 0;   // wheel button below lights up
@@ -17123,7 +17242,9 @@ void UI::drawArcade(int w, int h) {
             if (UIStyle::GhostButton("I Lost", {half, 34.f})) {
                 m_arcade.losses++;
                 m_arcade.masterLeft += 10;
-                m_arcade.secretLeft  = 10;   // secret packs RESET, not stack
+                m_arcade.secretLeft  = 10;
+                m_arcade.keys.clear();
+                m_arcadeSecretPick = 0;
                 m_arcade.tokens += 5;
                 m_arcade.save();
                 gAudio().play("confirm");
