@@ -14368,20 +14368,19 @@ void UI::drawDeckBuilder(int w, int h) {
             overhead = 3.f * (ImGui::GetTextLineHeight() + 26.f) + 30.f;
             UIStyle::PopFont();
         }
-        float grid0 = mainRows * (mainW * kAspect + TILE_PAD_Y)
-                    + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y;
-        // Deadbanded scale + whole-pixel tiles: the applied scale only
-        // moves when the target moves by >2%, and tile widths are floored
-        // to integers — sub-pixel measurement noise can no longer nudge
-        // the layout every frame (the visible "shaking").
-        static float s_scale = 1.f;
-        float target = 1.f;
-        if (grid0 + overhead > availH2)
-            target = std::max(0.30f, (availH2 - overhead) / grid0);
-        if (std::fabs(target - s_scale) > 0.02f) s_scale = target;
-        mainW  = std::floor(mainW  * s_scale);
-        extraW = std::floor(extraW * s_scale);
-        sideW  = std::floor(sideW  * s_scale);
+        // Height budget: Extra and Side are compact one-row strips capped
+        // at ~14% of the free height each; the MAIN deck gets everything
+        // that's left — that's what makes the main cards genuinely big
+        // (Master Duel proportions). Widths quantised to 2px steps so
+        // measurement noise can't nudge the layout frame-to-frame.
+        auto quant = [](float v) { return std::floor(v * 0.5f) * 2.f; };
+        float freeH = std::max(200.f, availH2 - overhead);
+        extraW = quant(std::min(extraW, freeH * 0.14f / kAspect));
+        sideW  = quant(std::min(sideW,  freeH * 0.14f / kAspect));
+        float mainRowH = (freeH - (extraW + sideW) * kAspect
+                          - 2.f * TILE_PAD_Y) / (float)mainRows
+                       - TILE_PAD_Y;
+        mainW = quant(std::max(40.f, std::min(mainW, mainRowH / kAspect)));
 
         // Centre the whole block in the panel: when the fit shrank the
         // tiles below full width, split the leftover space evenly instead
