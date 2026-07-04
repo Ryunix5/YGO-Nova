@@ -14329,34 +14329,42 @@ void UI::drawDeckBuilder(int w, int h) {
         //    Extra + Side are ALL visible at once — no scrolling.
         ImGui::BeginChild("##db_deck_scroll", {-1.f, -1.f}, false);
 
-        // ── 10-column deck grid, height-fitted ──────────────────────────
-        // A standard 40-card Main Deck reads as exactly 4 rows × 10
-        // columns; bigger decks continue with the SAME column count. Tile
-        // size starts from the column width (true 421:614 card aspect),
-        // then shrinks until every section's rows fit the panel height —
-        // the whole deck is always on screen.
+        // ── Adaptive deck grid: full width AND fully on screen ──────────
+        // Start at the classic 10-wide layout; when that's too tall for
+        // the panel, ADD COLUMNS (up to 16) instead of leaving dead space
+        // on the right — tiles always span the panel's full width, and
+        // Main + Extra + Side stay visible without scrolling. True
+        // 421:614 card aspect throughout.
         const float TILE_PAD_X = 4.f;
         const float TILE_PAD_Y = 4.f;
-        const int   kDeckCols  = 10;
-        float TILE_W = (ImGui::GetContentRegionAvail().x - 4.f
-                        - (kDeckCols - 1) * TILE_PAD_X) / (float)kDeckCols;
-        if (TILE_W < 44.f)  TILE_W = 44.f;
-        if (TILE_W > 132.f) TILE_W = 132.f;
-        float TILE_H = TILE_W * (614.f / 421.f);
-        {
+        const float availW2 = ImGui::GetContentRegionAvail().x - 4.f;
+        const float availH2 = ImGui::GetContentRegionAvail().y;
+        // Header + gap overhead per section + inter-section gaps.
+        const float kSectionOverhead = 3.f * 34.f + 16.f;
+        int   kDeckCols = 10;
+        float TILE_W = 0.f, TILE_H = 0.f;
+        for (;; ++kDeckCols) {
+            TILE_W = (availW2 - (kDeckCols - 1) * TILE_PAD_X)
+                   / (float)kDeckCols;
+            if (TILE_W > 132.f) TILE_W = 132.f;
+            TILE_H = TILE_W * (614.f / 421.f);
             auto rowsOf = [&](int n) {
                 return std::max(1, (n + kDeckCols - 1) / kDeckCols);
             };
             int rows = rowsOf((int)m_editDeck.main.size())
                      + rowsOf((int)m_editDeck.extra.size())
                      + rowsOf((int)m_editDeck.side.size());
-            // Header + gap overhead per section (~34px) + inter-section gaps.
-            const float overhead = 3.f * 34.f + 16.f;
-            float fitH = (ImGui::GetContentRegionAvail().y - overhead
-                          - rows * TILE_PAD_Y) / (float)rows;
-            if (fitH < TILE_H) {
-                TILE_H = std::max(50.f, fitH);
-                TILE_W = TILE_H * (421.f / 614.f);
+            float need = rows * (TILE_H + TILE_PAD_Y) + kSectionOverhead;
+            if (need <= availH2 || kDeckCols >= 16) {
+                if (need > availH2) {
+                    // 16 columns still too tall (tiny window) — shrink the
+                    // tiles as the last resort, keeping the aspect.
+                    float fitH = (availH2 - kSectionOverhead)
+                               / (float)rows - TILE_PAD_Y;
+                    TILE_H = std::max(50.f, fitH);
+                    TILE_W = TILE_H * (421.f / 614.f);
+                }
+                break;
             }
         }
 
