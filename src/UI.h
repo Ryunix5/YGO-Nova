@@ -109,6 +109,7 @@ private:
     bool        m_arcadeGroupDuel = false;       // current MP session is one
     std::string m_arcadeInvitePin;               // PIN of the room we host
     char        m_arcadeInviteBuf[24] = {};      // invite-code join input
+    void arcadePrimeRelayBufs();                 // fill name/relay from settings
     void arcadeHostInvite();                     // locked room + fresh PIN
     void arcadeJoinInvite();                     // join via m_arcadeInviteBuf
     // Post-duel rewards: winner spins a prize wheel, loser banks 5 wild pack

@@ -248,8 +248,22 @@ void UI::startRelayJoin() {
 // friend types it into the Arcade screen — no campaign needed on their side;
 // once the room forms the host syncs the campaign over (ArcadeSync) and the
 // friend's save file is created on the spot. Then they just duel.
+// The Arcade path skips the Multiplayer screen's setup, so the name/relay
+// buffers startRelayCreate/Join read from may still be EMPTY — which used to
+// silently fall back to 127.0.0.1 (err 10061). Prime them from settings the
+// same way the main-menu DUEL tile does.
+void UI::arcadePrimeRelayBufs() {
+    strncpy(m_mpNameBuf, m_settings.mpDisplayName.c_str(),
+            sizeof(m_mpNameBuf) - 1);
+    m_mpNameBuf[sizeof(m_mpNameBuf) - 1] = '\0';
+    strncpy(m_mpRelayAddrBuf, m_settings.mpHostIP.c_str(),
+            sizeof(m_mpRelayAddrBuf) - 1);
+    m_mpRelayAddrBuf[sizeof(m_mpRelayAddrBuf) - 1] = '\0';
+}
+
 void UI::arcadeHostInvite() {
     static const char kPinAlpha[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    arcadePrimeRelayBufs();
     std::random_device rd;
     m_arcadeInvitePin.clear();
     for (int i = 0; i < 4; ++i)
@@ -281,6 +295,7 @@ void UI::arcadeJoinInvite() {
                   IM_COL32(232, 182, 72, 255), 2.6);
         return;
     }
+    arcadePrimeRelayBufs();
     strncpy(m_mpRoomPwBuf, pin.c_str(), sizeof(m_mpRoomPwBuf) - 1);
     m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
     strncpy(m_mpRoomCodeBuf, code.c_str(), sizeof(m_mpRoomCodeBuf) - 1);
@@ -16471,11 +16486,14 @@ void UI::drawRoomScreen(int w, int h, float topY) {
             ImGui::SameLine(0.f, 6.f);
             UIStyle::StatusChip(m_mpRemoteDeckRcvd ? "Deck OK" : "No deck",
                 m_mpRemoteDeckRcvd ? C.success : C.warning);
-            // Ready state pinned at the bottom, mirroring your card.
+            // Ready state pinned at the bottom, mirroring your card. The
+            // Dummy() submits a real item at the moved cursor — required
+            // after SetCursorPosY() extends the window (ImGui assert).
             ImGui::SetCursorPosY(cardH - 58.f);
             ImVec2 p = ImGui::GetCursorScreenPos();
             ImDrawList* dl = ImGui::GetWindowDrawList();
             float bw2 = ImGui::GetContentRegionAvail().x;
+            ImGui::Dummy({bw2, 42.f});
             ImU32 rc = m_mpRemoteReady ? C.success : C.bgRaised;
             dl->AddRectFilled(p, {p.x + bw2, p.y + 42.f},
                 (rc & 0x00FFFFFF) | 0x44000000, 8.f);
