@@ -101,12 +101,14 @@ enum class NetMsgType : uint32_t {
 };
 
 // One entry in the relay's open-room list (room browser). `state`: 0 waiting
-// (joinable), 1 ready, 2 in duel.
+// (joinable), 1 ready, 2 in duel. `hasPassword` comes from an optional flags
+// block the newer relay appends after the entries (older relays → false).
 struct RoomInfo {
     std::string code;
     std::string hostName;
     int         players = 0;
     int         state   = 0;
+    bool        hasPassword = false;
     bool joinable() const { return state == 0; }
 };
 
@@ -151,9 +153,13 @@ public:
     // Unlike the LAN workers, the relay worker does NOT auto-send Hello; the
     // UI drives the Hello/deck handshake once the room is formed (on
     // RoomPeerJoined for the host, RoomJoined for the guest).
+    // `password` is optional room protection: the creator sets it, joiners
+    // must match it (the relay enforces; empty = open room). Appended as a
+    // trailing string the older relay simply ignores.
     bool joinRelay(const std::string& serverAddr, int port,
                    const std::string& displayName,
-                   bool createRoom, const std::string& roomCode);
+                   bool createRoom, const std::string& roomCode,
+                   const std::string& password = std::string());
     void disconnect(const std::string& reason = "user requested");
 
     // ── Online room browser ────────────────────────────────────────────
@@ -222,7 +228,7 @@ private:
     // then enters the shared recv loop. `createRoom` decides which control
     // message is sent; `roomCode` is only used when joining.
     void runRelayWorker(std::string addr, int port, bool createRoom,
-                        std::string roomCode);
+                        std::string roomCode, std::string password);
     // Room-browser query worker — connects, sends ListRooms, parses one
     // RoomList reply, stores it, then closes. Independent of the main socket.
     void runRoomListQuery(std::string addr, int port, std::string displayName);

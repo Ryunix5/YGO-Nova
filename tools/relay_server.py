@@ -29,7 +29,11 @@
 # Usage:
 #   python tools/relay_server.py [--host 0.0.0.0] [--port 7879] [--verbose]
 #
-# No accounts, no passwords, no matchmaking — guest names only, by design.
+# No accounts, no matchmaking — guest names only, by design. Rooms MAY carry
+# an optional password: CreateRoom/JoinRoom append it as a trailing string
+# (older clients simply don't send one → open room), and the room list
+# appends one has-password byte per room after the entries (older clients
+# ignore the trailing bytes).
 #
 import argparse
 import os
@@ -151,8 +155,9 @@ class Conn:
 
 
 class Room:
-    def __init__(self, code):
+    def __init__(self, code, password=""):
         self.code = code
+        self.password = password  # "" = open room
         self.host = None          # Conn
         self.guest = None         # Conn
         self.created = time.time()
@@ -215,21 +220,24 @@ class RelayServer:
 
     # ── Control handlers ─────────────────────────────────────────────────
     def handle_create(self, conn, payload):
-        name, _ = read_str(payload, 0)
+        name, off = read_str(payload, 0)
+        password, _ = read_str(payload, off)   # optional trailing string
         with self.lock:
             code = self._new_code()
-            room = Room(code)
+            room = Room(code, password.strip()[:64])
             conn.name = self._unique_name(room, name)
             room.host = conn
             conn.room = room
             conn.role = "host"
             self.rooms[code] = room
         conn.send(T_ROOM_CREATED, put_str(code))
-        self.log(f"room {code} created by host '{conn.name}' {conn.addr}")
+        self.log(f"room {code} created by host '{conn.name}' {conn.addr}"
+                 f"{' [locked]' if room.password else ''}")
 
     def handle_join(self, conn, payload):
         name, off = read_str(payload, 0)
         code, off = read_str(payload, off)
+        password, _ = read_str(payload, off)   # optional trailing string
         code = code.strip().upper()
         with self.lock:
             room = self.rooms.get(code)
@@ -240,6 +248,10 @@ class RelayServer:
             if room.guest is not None:
                 conn.send(T_ROOM_ERROR, put_str("Room is full"))
                 self.log(f"join failed: room {code} full")
+                return
+            if room.password and password.strip() != room.password:
+                conn.send(T_ROOM_ERROR, put_str("Wrong room password"))
+                self.log(f"join failed: room {code} wrong password")
                 return
             conn.name = self._unique_name(room, name)
             room.guest = conn
@@ -267,6 +279,10 @@ class RelayServer:
             host_name = r.host.name if r.host else "?"
             body += put_str(r.code) + put_str(host_name)
             body += put_u8(r.players()) + put_u8(r.state_code())
+        # Trailing has-password flags (one byte per room, same order). Old
+        # clients stop after the entries and never see these bytes.
+        for r in rooms:
+            body += put_u8(1 if r.password else 0)
         conn.send(T_ROOM_LIST, body)
         self.vlog(f"room list -> {conn.addr}: {len(rooms)} room(s)")
 

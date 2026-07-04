@@ -205,7 +205,8 @@ void UI::startRelayCreate() {
     m_mpHandshakeSent   = false;
     m_mpRelayConnecting = true;
     if (!m_net.joinRelay(m_settings.mpHostIP, m_mpRelayPortBuf,
-                         m_settings.mpDisplayName, /*createRoom*/true, "")) {
+                         m_settings.mpDisplayName, /*createRoom*/true, "",
+                         m_mpRoomPwBuf)) {
         m_mpRelayConnecting = false;
         pushToast("Could not start relay connection",
                   IM_COL32(232, 110, 100, 255), 3.0);
@@ -233,7 +234,8 @@ void UI::startRelayJoin() {
     m_mpHandshakeSent   = false;
     m_mpRelayConnecting = true;
     if (!m_net.joinRelay(m_settings.mpHostIP, m_mpRelayPortBuf,
-                         m_settings.mpDisplayName, /*createRoom*/false, code)) {
+                         m_settings.mpDisplayName, /*createRoom*/false, code,
+                         m_mpRoomPwBuf)) {
         m_mpRelayConnecting = false;
         pushToast("Could not start relay connection",
                   IM_COL32(232, 110, 100, 255), 3.0);
@@ -5488,10 +5490,12 @@ void UI::drawLobby(int w, int h) {
         ImGui::OpenPopup("Duel Setup");
         m_duelSetupOpen = false;
     }
-    // Modal sizing: AlwaysAutoResize fits to the actual content, so the
-    // setup dialog can't render a "blank big modal" — its height matches
-    // the form. The constraint clamps width to a comfortable readable range.
-    ImGui::SetNextWindowSizeConstraints({480.f, 0.f}, {480.f, FLT_MAX});
+    // Modal sizing: AlwaysAutoResize fits to the actual content. Two fixed
+    // columns (decks | rules & modes) keep the form organised instead of one
+    // long scroll of mixed widgets.
+    const float kSetupColW = 350.f;
+    ImGui::SetNextWindowSizeConstraints({kSetupColW * 2.f + 66.f, 0.f},
+                                        {kSetupColW * 2.f + 66.f, FLT_MAX});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.f, 20.f});
     if (ImGui::BeginPopupModal("Duel Setup", nullptr,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
@@ -5500,11 +5504,12 @@ void UI::drawLobby(int w, int h) {
         UIStyle::PushFont(UIStyle::fHeader);
         ImGui::PushStyleColor(ImGuiCol_Text,
             ImGui::ColorConvertU32ToFloat4(UIStyle::C().accentHi));
-        ImGui::TextUnformatted("Duel Setup");
+        ImGui::TextUnformatted("Solo Duel");
         ImGui::PopStyleColor();
         UIStyle::PopFont();
-        ImGui::TextDisabled("Pick a deck for each side, then start the duel.");
-        UIStyle::DrawDivider(6.f, 6.f);
+        ImGui::TextDisabled("Practice against the AI — decks on the left, "
+                            "rules and modes on the right.");
+        UIStyle::DrawDivider(6.f, 10.f);
 
         auto deckPicker = [&](const char* title, const char* badge,
                               int& idx, char* pathBuf, size_t pathSz) {
@@ -5543,18 +5548,21 @@ void UI::drawLobby(int w, int h) {
             }
         };
 
-        deckPicker("Player 1 deck",  "P1", m_deck0Idx,
+        // ── Left column: decks ───────────────────────────────────────────
+        ImGui::BeginChild("##setup_decks", {kSetupColW, 330.f}, false,
+                          ImGuiWindowFlags_NoScrollbar);
+        UIStyle::SectionHeader("DECKS");
+        deckPicker("Your deck",  "P1", m_deck0Idx,
                    m_deck0Path, sizeof(m_deck0Path));
-        ImGui::Dummy({1.f, 8.f});
-        deckPicker("Player 2 deck",  "P2", m_deck1Idx,
+        ImGui::Dummy({1.f, 10.f});
+        deckPicker("Opponent deck",  "P2", m_deck1Idx,
                    m_deck1Path, sizeof(m_deck1Path));
 
         // Preset opponent — override P2 with a bundled AI archetype deck.
         if (!m_presetFiles.empty()) {
-            ImGui::Dummy({1.f, 6.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.85f, 0.88f, 0.95f, 1.f});
-            ImGui::Text("AI  Preset opponent  (overrides P2)");
-            ImGui::PopStyleColor();
+            ImGui::Dummy({1.f, 10.f});
+            UIStyle::SectionHeader("AI OPPONENT");
+            ImGui::TextDisabled("A preset archetype deck overrides P2.");
             std::string curOpp =
                 m_opponentPreset == -1 ? std::string("Off - use P2 deck above")
               : m_opponentPreset == 0  ? std::string("Random preset")
@@ -5572,13 +5580,13 @@ void UI::drawLobby(int w, int h) {
                 ImGui::EndCombo();
             }
         }
+        ImGui::EndChild();
 
-        ImGui::Dummy({1.f, 10.f});
-        ImGui::Separator();
-        ImGui::Dummy({1.f, 4.f});
-
-        // ── Custom duel options ──────────────────────────────────────────────
-        UIStyle::SectionHeader("Options");
+        // ── Right column: rules + practice modes ─────────────────────────
+        ImGui::SameLine(0.f, 22.f);
+        ImGui::BeginChild("##setup_opts", {kSetupColW, 330.f}, false,
+                          ImGuiWindowFlags_NoScrollbar);
+        UIStyle::SectionHeader("RULES");
         ImGui::TextDisabled("Starting LP");
         struct { const char* l; int v; } kLP[] = {
             {"8000", 8000}, {"4000", 4000}, {"16000", 16000} };
@@ -5588,29 +5596,44 @@ void UI::drawLobby(int w, int h) {
                 m_setupLP = kLP[i].v;
             if (i < 2) ImGui::SameLine(0.f, 4.f);
         }
-        ImGui::SetNextItemWidth(220.f);
-        ImGui::SliderInt("Starting hand", &m_setupHand, 1, 7);
+        ImGui::Dummy({1.f, 2.f});
+        ImGui::TextDisabled("Starting hand");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::SliderInt("##sethand", &m_setupHand, 1, 7);
         ImGui::Checkbox("No shuffle (deck plays in order)", &m_setupNoShuffle);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Draw your deck top-down — for testing exact draws");
-        ImGui::Checkbox("Goldfish — passive opponent (does nothing)",
-                        &m_setupPassiveAI);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The opponent just passes, so you can practise combos");
-        ImGui::Checkbox("Hand-Trap Gauntlet — combo through disruption",
-                        &m_setupGauntlet);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("You go first; the opponent opens with a hand full of\n"
-                              "hand traps (Ash, Imperm, Droll...) and fires them at\n"
-                              "your plays. Can you still end on a board?");
-        ImGui::Checkbox("Best of 3 match (with side decking)", &m_setupMatchMode);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Play a 3-game match; adjust your deck from your Side "
-                              "Deck between games");
 
-        ImGui::Dummy({1.f, 8.f});
+        ImGui::Dummy({1.f, 10.f});
+        UIStyle::SectionHeader("PRACTICE MODES");
+        // Checkbox + one muted explainer line right underneath — the modes
+        // read as a tidy list instead of tooltip-only mystery toggles.
+        auto modeToggle = [&](const char* label, bool* v, const char* blurb) {
+            ImGui::Checkbox(label, v);
+            UIStyle::PushFont(UIStyle::fSmall);
+            ImGui::Indent(26.f);
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(UIStyle::C().textMuted),
+                "%s", blurb);
+            ImGui::Unindent(26.f);
+            UIStyle::PopFont();
+            ImGui::Dummy({1.f, 2.f});
+        };
+        modeToggle("Goldfish", &m_setupPassiveAI,
+                   "Opponent just passes — practise your combos.");
+        modeToggle("Hand-Trap Gauntlet", &m_setupGauntlet,
+                   "You go first; the AI opens on hand traps and\n"
+                   "fires them at your plays. End on a board anyway.");
+        modeToggle("Best of 3 match", &m_setupMatchMode,
+                   "Three games with side decking in between.");
+        ImGui::EndChild();
+
+        UIStyle::DrawDivider(4.f, 8.f);
         bool canStart = (m_deck0Path[0] != '\0') &&
                         (m_deck1Path[0] != '\0' || m_opponentPreset != -1);
+        // Centre the action row.
+        ImGui::SetCursorPosX(
+            (ImGui::GetWindowContentRegionMax().x - 280.f - 150.f) * 0.5f);
         // Primary "Start Duel" — gold gradient button via UIStyle.
         if (!canStart) ImGui::BeginDisabled();
         if (UIStyle::PrimaryButton("Start Duel", {280.f, 42.f})) {
@@ -12705,25 +12728,32 @@ void UI::startPuzzleByIndex(int idx) {
 
 void UI::drawPuzzleBrowser() {
     if (m_puzzleBrowserOpen) { ImGui::OpenPopup("Puzzles"); m_puzzleBrowserOpen = false; }
-    ImGui::SetNextWindowSize({560.f, 0.f}, ImGuiCond_Always);
+    const UIStyle::Colors& C = UIStyle::C();
+    ImGui::SetNextWindowSize({640.f, 0.f}, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{20.f, 18.f});
     if (!ImGui::BeginPopupModal("Puzzles", nullptr,
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::PopStyleVar();
         return;
+    }
 
-    if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-    ImGui::TextUnformatted("Puzzles & Challenges");
-    if (UIStyle::fHeader) ImGui::PopFont();
-    ImGui::TextDisabled("Board-break: pick your deck, go second, draw 6, and "
-                        "break the boss board.");
-    ImGui::Separator();
+    UIStyle::PushFont(UIStyle::fHeader);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                       "Puzzles & Challenges");
+    UIStyle::PopFont();
+    ImGui::TextDisabled("Solve-this-turn puzzles, or board breaks: go second "
+                        "with your own deck and out the boss board.");
+    UIStyle::DrawDivider(6.f, 8.f);
 
     // Deck picker — the deck you'll bring into board-break challenges.
     bool anyBreak = false;
     for (auto& p : m_puzzles) if (p.setup.boardBreak) { anyBreak = true; break; }
     if (anyBreak) {
         if (m_deckFiles.empty()) refreshDeckFiles();
-        ImGui::TextUnformatted("Your deck:");
-        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Board-break deck");
+        ImGui::SameLine(0.f, 10.f);
         ImGui::SetNextItemWidth(-1.f);
         if (m_deckFiles.empty()) {
             ImGui::TextDisabled("(no decks — build one in the Deck Builder)");
@@ -12741,58 +12771,95 @@ void UI::drawPuzzleBrowser() {
                 ImGui::EndCombo();
             }
         }
-        ImGui::Separator();
+        ImGui::Dummy({1.f, 6.f});
     }
 
     if (m_puzzles.empty()) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("No puzzles found in assets/puzzles/.");
-        ImGui::Spacing();
+        UIStyle::EmptyState(140.f, "No puzzles found",
+                            "Puzzle files live in assets/puzzles/");
         if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
+        ImGui::PopStyleVar();
         return;
     }
 
-    ImGui::BeginChild("##puzzlelist", {-1.f, 360.f}, true);
+    // Card-style rows in the reserved-rect pattern: reserve the full row,
+    // paint via the draw list, then place the hit-test + Play button INSIDE
+    // the reserved rect — no cursor gymnastics, no overlap.
+    ImGui::BeginChild("##puzzlelist", {-1.f, 380.f}, false);
     for (int i = 0; i < (int)m_puzzles.size(); ++i) {
         const PuzzleEntry& pe = m_puzzles[i];
         ImGui::PushID(i);
         ImU32 dcol = pe.difficulty == "Hard"   ? IM_COL32(235, 110, 95, 255)
                    : pe.difficulty == "Medium" ? IM_COL32(235, 185, 60, 255)
                                                : IM_COL32(110, 210, 130, 255);
-        UIStyle::DrawGlassPanel(ImGui::GetWindowDrawList(),
-            ImGui::GetCursorScreenPos(),
-            {ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x,
-             ImGui::GetCursorScreenPos().y + 78.f});
-        ImGui::BeginGroup();
-        ImGui::Dummy({4.f, 4.f});
-        if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-        ImGui::TextUnformatted(pe.setup.name.c_str());
-        if (UIStyle::fHeader) ImGui::PopFont();
-        ImGui::SameLine(0.f, 8.f);
-        UIStyle::StatusChip(pe.difficulty.empty() ? "Easy" : pe.difficulty.c_str(),
-                            dcol);
+        ImVec2 rp = ImGui::GetCursorScreenPos();
+        float  rw = ImGui::GetContentRegionAvail().x;
+        float  rh = 76.f;
+        ImGui::Dummy({rw, rh});
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        UIStyle::DrawGlassPanel(dl, rp, {rp.x + rw, rp.y + rh}, 8.f);
+        // Difficulty accent stripe down the left edge.
+        dl->AddRectFilled({rp.x, rp.y + 6.f}, {rp.x + 4.f, rp.y + rh - 6.f},
+                          dcol, 2.f);
+
+        // Title + chips row.
+        UIStyle::PushFont(UIStyle::fHeader);
+        dl->AddText(UIStyle::fHeader, 0.f, {rp.x + 16.f, rp.y + 10.f},
+                    C.textHi, pe.setup.name.c_str());
+        float titleW = ImGui::CalcTextSize(pe.setup.name.c_str()).x;
+        UIStyle::PopFont();
+        float chipX = rp.x + 16.f + titleW + 12.f;
+        auto miniChip = [&](const char* txt, ImU32 col) {
+            ImVec2 ts = ImGui::CalcTextSize(txt);
+            dl->AddRectFilled({chipX, rp.y + 12.f},
+                              {chipX + ts.x + 12.f, rp.y + 12.f + ts.y + 5.f},
+                              (col & 0x00FFFFFF) | 0x33000000, 4.f);
+            dl->AddRect({chipX, rp.y + 12.f},
+                        {chipX + ts.x + 12.f, rp.y + 12.f + ts.y + 5.f},
+                        col, 4.f, 0, 1.f);
+            dl->AddText({chipX + 6.f, rp.y + 14.f}, col, txt);
+            chipX += ts.x + 20.f;
+        };
+        miniChip(pe.difficulty.empty() ? "Easy" : pe.difficulty.c_str(), dcol);
+        miniChip(pe.setup.boardBreak ? "BOARD BREAK" : "SOLVE IT", C.accent);
+
+        // Description — single clipped muted line under the title.
         if (!pe.desc.empty()) {
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.f);
-            ImGui::TextDisabled("%s", pe.desc.c_str());
-            ImGui::PopTextWrapPos();
+            std::string d = pe.desc;
+            for (auto& ch : d) if (ch == '\n' || ch == '\r') ch = ' ';
+            dl->PushClipRect({rp.x + 16.f, rp.y + 42.f},
+                             {rp.x + rw - 110.f, rp.y + rh - 6.f}, true);
+            dl->AddText({rp.x + 16.f, rp.y + 46.f}, C.textMuted, d.c_str());
+            dl->PopClipRect();
         }
-        ImGui::EndGroup();
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - 84.f);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
-        if (UIStyle::PrimaryButton("Play", {78.f, 32.f})) {
+
+        // Row hit-test (hover ring + double-click to play), then the button.
+        ImGui::SetCursorScreenPos(rp);
+        ImGui::InvisibleButton("##prow", {rw - 104.f, rh});
+        if (ImGui::IsItemHovered()) {
+            dl->AddRect(rp, {rp.x + rw, rp.y + rh}, C.accent, 8.f, 0, 1.4f);
+            ImGui::SetTooltip("Double-click to play");
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                ImGui::CloseCurrentPopup();
+                startPuzzleByIndex(i);
+            }
+        }
+        ImGui::SetCursorScreenPos({rp.x + rw - 94.f, rp.y + (rh - 34.f) * 0.5f});
+        if (UIStyle::PrimaryButton("Play", {84.f, 34.f})) {
             ImGui::CloseCurrentPopup();
             startPuzzleByIndex(i);
         }
+        ImGui::SetCursorScreenPos({rp.x, rp.y + rh});
         ImGui::Dummy({1.f, 8.f});
         ImGui::PopID();
     }
     ImGui::EndChild();
 
-    ImGui::Spacing();
+    ImGui::Dummy({1.f, 4.f});
     if (UIStyle::GhostButton("Close", {-1.f, 30.f})) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
+    ImGui::PopStyleVar();
 }
 
 // In-progress goal bar — a slim top-centre window showing the objective with
@@ -15722,6 +15789,25 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
         m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
         startRelayJoin();
     };
+    // Locked rooms route through a password prompt first; the popup itself
+    // lives in the room-table window below.
+    static std::string s_pwJoinCode;   // room awaiting a password
+    auto joinRoomEntry = [&](const edo::RoomInfo& rm) {
+        if (rm.hasPassword) {
+            s_pwJoinCode = rm.code;
+            m_mpRoomPwBuf[0] = '\0';
+        } else {
+            m_mpRoomPwBuf[0] = '\0';
+            joinCode(rm.code);
+        }
+    };
+    // Small padlock glyph (body + shackle) drawn at text height.
+    auto drawLock = [&](ImDrawList* dl, ImVec2 p, ImU32 col) {
+        dl->AddRectFilled({p.x, p.y + 6.f}, {p.x + 9.f, p.y + 13.f},
+                          col, 1.5f);
+        dl->PathArcTo({p.x + 4.5f, p.y + 6.f}, 3.2f, 3.1415926f, 0.f, 10);
+        dl->PathStroke(col, 0, 1.4f);
+    };
     int openCount = 0;
     for (const auto& r : rooms) if (r.joinable()) ++openCount;
     const bool official = EDOPRO_DEFAULT_RELAY[0] &&
@@ -15799,13 +15885,49 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
             bool canJoin = m_mpRoomCodeBuf[0] != '\0';
             if (!canJoin) ImGui::BeginDisabled();
             if (UIStyle::SecondaryButton("Join##bycode", {wJoin, 30.f}) ||
-                (codeEnter && canJoin))
-                startRelayJoin();
+                (codeEnter && canJoin)) {
+                // If the typed code matches a listed locked room, ask for
+                // the password; otherwise join directly (open room, or a
+                // room not in the list — the relay rejects a bad password).
+                std::string typed;
+                for (char* p = m_mpRoomCodeBuf; *p; ++p)
+                    if (*p != ' ') typed += (char)toupper((unsigned char)*p);
+                const edo::RoomInfo* hit = nullptr;
+                for (const auto& r : rooms)
+                    if (r.code == typed) { hit = &r; break; }
+                if (hit && hit->hasPassword) {
+                    s_pwJoinCode = typed;
+                    m_mpRoomPwBuf[0] = '\0';
+                } else {
+                    m_mpRoomPwBuf[0] = '\0';
+                    startRelayJoin();
+                }
+            }
             if (!canJoin) ImGui::EndDisabled();
         }
         ImGui::SameLine(0.f, gap);
-        if (UIStyle::PrimaryButton("Host Game", {wHost, 32.f}))
-            startRelayCreate();
+        if (UIStyle::PrimaryButton("Host Game", {wHost, 32.f})) {
+            m_mpRoomPwBuf[0] = '\0';
+            ImGui::OpenPopup("##lobby_hostpop");
+        }
+        if (ImGui::BeginPopup("##lobby_hostpop")) {
+            ImGui::TextDisabled("Host a room");
+            ImGui::SetNextItemWidth(220.f);
+            bool pwEnter = ImGui::InputTextWithHint(
+                "##hostpw", "Password (optional)",
+                m_mpRoomPwBuf, sizeof(m_mpRoomPwBuf),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            UIStyle::PushFont(UIStyle::fSmall);
+            ImGui::TextDisabled("Leave empty for a public room.");
+            UIStyle::PopFont();
+            ImGui::Dummy({1.f, 4.f});
+            if (UIStyle::PrimaryButton("Create Room", {220.f, 32.f}) ||
+                pwEnter) {
+                startRelayCreate();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
     ImGui::End();
     ImGui::PopStyleColor();
@@ -15878,12 +16000,21 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
                     ImGuiSelectableFlags_AllowOverlap, {0.f, 26.f});
                 if (joinable && ImGui::IsItemHovered() &&
                     ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                    joinCode(rm.code);
+                    joinRoomEntry(rm);
                 if (joinable && ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Double-click to join");
+                    ImGui::SetTooltip(rm.hasPassword
+                        ? "Password protected — double-click to join"
+                        : "Double-click to join");
             }
 
             ImGui::TableSetColumnIndex(2);
+            if (rm.hasPassword) {
+                ImVec2 lp = ImGui::GetCursorScreenPos();
+                drawLock(ImGui::GetWindowDrawList(),
+                         {lp.x, lp.y + 2.f}, C.warning);
+                ImGui::Dummy({13.f, 1.f});
+                ImGui::SameLine(0.f, 3.f);
+            }
             ImGui::TextUnformatted(rm.code.c_str());
             ImGui::TableSetColumnIndex(3);
             ImGui::Text("%d / 2", rm.players);
@@ -15891,7 +16022,7 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
             if (!joinable) ImGui::BeginDisabled();
             if (UIStyle::SecondaryButton(joinable ? "Join##rj" : "Full##rj",
                                          {80.f, 24.f}))
-                joinCode(rm.code);
+                joinRoomEntry(rm);
             if (!joinable) ImGui::EndDisabled();
             ImGui::PopID();
         }
@@ -15938,14 +16069,54 @@ void UI::drawOnlineLobby(int w, int h, float topY) {
             ImGui::GetCursorPosX() + 8.f,
             ImGui::GetWindowContentRegionMax().x - 124.f));
         if (UIStyle::SecondaryButton("Quick Match", {124.f, 28.f})) {
+            // Quick Match only considers OPEN rooms (no password).
             const edo::RoomInfo* pick = nullptr;
-            for (const auto& r : rooms) if (r.joinable()) { pick = &r; break; }
+            for (const auto& r : rooms)
+                if (r.joinable() && !r.hasPassword) { pick = &r; break; }
+            m_mpRoomPwBuf[0] = '\0';
             if (pick) joinCode(pick->code);
             else      startRelayCreate();
         }
     }
     ImGui::End();
     ImGui::PopStyleColor();
+
+    // ── Password prompt for a locked room ───────────────────────────────
+    if (!s_pwJoinCode.empty()) {
+        const float PW_W = 340.f, PW_H = 170.f;
+        ImGui::SetNextWindowPos({(float)w * 0.5f - PW_W * 0.5f,
+                                 (float)h * 0.5f - PW_H * 0.5f});
+        ImGui::SetNextWindowSize({PW_W, PW_H});
+        ImGui::SetNextWindowFocus();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+            ImGui::ColorConvertU32ToFloat4(C.bgPopup));
+        ImGui::Begin("##lobby_pwjoin", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings);
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                           "Room %s is locked", s_pwJoinCode.c_str());
+        UIStyle::PopFont();
+        ImGui::TextDisabled("Ask the host for the password.");
+        ImGui::Dummy({1.f, 4.f});
+        ImGui::SetNextItemWidth(-1.f);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        bool pwEnter = ImGui::InputTextWithHint(
+            "##joinpw", "Password", m_mpRoomPwBuf, sizeof(m_mpRoomPwBuf),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Dummy({1.f, 6.f});
+        float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
+        if (UIStyle::PrimaryButton("Join##pwj", {half, 32.f}) || pwEnter) {
+            joinCode(s_pwJoinCode);
+            s_pwJoinCode.clear();
+        }
+        ImGui::SameLine(0.f, 8.f);
+        if (UIStyle::GhostButton("Cancel##pwj", {half, 32.f}))
+            s_pwJoinCode.clear();
+        ImGui::End();
+        ImGui::PopStyleColor();
+    }
 }
 
 // ─── Room screen ─────────────────────────────────────────────────────────────
@@ -16879,11 +17050,59 @@ void UI::drawArcade(int w, int h) {
             refreshDeckFiles();
             m_screen = Screen::DeckBuilder;
         }
-        ImGui::Dummy({1.f, 2.f});
-        if (UIStyle::SecondaryButton("Duel Online", {-1.f, 40.f})) {
-            m_arcade.save();
-            m_mpTransport = 1;
-            m_screen = Screen::Multiplayer;
+        ImGui::Dummy({1.f, 6.f});
+        // Group duels — Master Saga is played WITHIN the friend group that
+        // shares this campaign. Rooms are locked with a password derived
+        // from the campaign name, so only friends who created the same
+        // save can get in. No dueling randoms.
+        {
+            // "ms:" + campaign name, lowercased with spaces stripped —
+            // every member of the group derives the identical secret.
+            std::string groupPw = "ms:";
+            for (char ch : m_arcade.name)
+                if (ch != ' ')
+                    groupPw += (char)std::tolower((unsigned char)ch);
+            UIStyle::PushFont(UIStyle::fSmall);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMuted),
+                "Group duels are private to this campaign.");
+            UIStyle::PopFont();
+            if (UIStyle::SecondaryButton("Host Group Duel", {-1.f, 40.f})) {
+                m_arcade.save();
+                m_mpTransport = 1;
+                strncpy(m_mpRoomPwBuf, groupPw.c_str(),
+                        sizeof(m_mpRoomPwBuf) - 1);
+                m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
+                m_screen = Screen::Multiplayer;
+                startRelayCreate();
+            }
+            ImGui::Dummy({1.f, 2.f});
+            static char s_grpCode[16] = {};
+            float joinW = 130.f;
+            ImGui::SetNextItemWidth(
+                ImGui::GetContentRegionAvail().x - joinW - 8.f);
+            bool codeEnter = ImGui::InputTextWithHint(
+                "##arc_grpcode", "FRIEND'S ROOM CODE",
+                s_grpCode, sizeof(s_grpCode),
+                ImGuiInputTextFlags_CharsUppercase |
+                ImGuiInputTextFlags_CharsNoBlank |
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SameLine(0.f, 8.f);
+            bool canJoin = s_grpCode[0] != '\0';
+            if (!canJoin) ImGui::BeginDisabled();
+            if (UIStyle::SecondaryButton("Join##grp", {joinW, 0.f}) ||
+                (codeEnter && canJoin)) {
+                m_arcade.save();
+                m_mpTransport = 1;
+                strncpy(m_mpRoomPwBuf, groupPw.c_str(),
+                        sizeof(m_mpRoomPwBuf) - 1);
+                m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
+                strncpy(m_mpRoomCodeBuf, s_grpCode,
+                        sizeof(m_mpRoomCodeBuf) - 1);
+                m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
+                m_screen = Screen::Multiplayer;
+                startRelayJoin();
+            }
+            if (!canJoin) ImGui::EndDisabled();
         }
         ImGui::Dummy({1.f, 4.f});
         // Post-duel rewards: EVERY duel restocks both players with the

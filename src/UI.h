@@ -704,6 +704,8 @@ private:
     char        m_mpRelayAddrBuf[64] = {};   // relay server IP/host
     int         m_mpRelayPortBuf     = 7879;
     char        m_mpRoomCodeBuf[16]  = {};   // code typed when joining
+    char        m_mpRoomPwBuf[33]    = {};   // optional room password
+                                             // (host sets, joiners must match)
     // Room state once connected to the relay.
     std::string m_mpRoomCode;                // our active room code
     bool        m_mpRoomActive       = false; // room formed (created/joined)

@@ -162,7 +162,8 @@ bool NetSession::joinHost(const std::string& addr, int port,
 
 bool NetSession::joinRelay(const std::string& serverAddr, int port,
                            const std::string& displayName,
-                           bool createRoom, const std::string& roomCode) {
+                           bool createRoom, const std::string& roomCode,
+                           const std::string& password) {
     if (mode() != NetMode::Offline) return false;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
@@ -182,7 +183,7 @@ bool NetSession::joinRelay(const std::string& serverAddr, int port,
     m_state = NetState::Connecting;
     m_stop  = false;
     m_worker = std::thread(&NetSession::runRelayWorker, this,
-                           serverAddr, port, createRoom, roomCode);
+                           serverAddr, port, createRoom, roomCode, password);
     return true;
 }
 
@@ -559,7 +560,7 @@ void NetSession::runClientWorker(std::string addr, int port) {
 // by the UI, which then drives the existing Hello/deck/ready handshake over
 // the relayed channel.
 void NetSession::runRelayWorker(std::string addr, int port, bool createRoom,
-                                std::string roomCode) {
+                                std::string roomCode, std::string password) {
     socket_t s = ::socket(AF_INET, SOCK_STREAM, 0);
     if (s == kInvalidSocket) {
         setError("socket() failed");
@@ -599,6 +600,9 @@ void NetSession::runRelayWorker(std::string addr, int port, bool createRoom,
         putStr(ctl.payload, nm);
         putStr(ctl.payload, roomCode);
     }
+    // Optional room password, appended last. An older relay just never
+    // reads the extra string, so this stays wire-compatible both ways.
+    putStr(ctl.payload, password);
     writeMessage(ctl);
     // "Connected" = the relay socket is up. Room formation + the gameplay
     // handshake proceed through the inbox; the UI tracks room state.
@@ -708,6 +712,13 @@ void NetSession::runRoomListQuery(std::string addr, int port,
                 ri.players  = r.u8();
                 ri.state    = r.u8();
                 if (r.ok) out.push_back(std::move(ri));
+            }
+            // Newer relays append one has-password byte per room AFTER the
+            // entries; an older relay's payload just ends here.
+            for (auto& ri : out) {
+                uint8_t f = r.u8();
+                if (!r.ok) break;
+                ri.hasPassword = f != 0;
             }
             {
                 std::lock_guard<std::mutex> lk(m_lobbyMtx);
