@@ -13484,9 +13484,11 @@ void UI::drawDeckBuilder(int w, int h) {
     }
 
     // ── geometry ────────────────────────────────────────────────────────────
+    // The deck column gets the lion's share (~58%) — the deck grid is the
+    // main workspace; search and preview are reference panels.
     const float BAR_H     = 56.f;
-    const float SEARCH_W  = std::max(320.f, (float)w * 0.27f);
-    const float PREVIEW_W = std::max(300.f, (float)w * 0.26f);
+    const float SEARCH_W  = std::max(300.f, (float)w * 0.22f);
+    const float PREVIEW_W = std::max(280.f, (float)w * 0.20f);
     const float DECK_W    = (float)w - SEARCH_W - PREVIEW_W;
     const float COL_Y     = BAR_H;
     const float COL_H     = (float)h - BAR_H;
@@ -14330,7 +14332,8 @@ void UI::drawDeckBuilder(int w, int h) {
         //    resizes the tiles, which removes the scrollbar — an
         //    oscillation that made the whole grid shake every frame.
         ImGui::BeginChild("##db_deck_scroll", {-1.f, -1.f}, false,
-                          ImGuiWindowFlags_NoScrollbar);
+                          ImGuiWindowFlags_NoScrollbar |
+                          ImGuiWindowFlags_NoScrollWithMouse);
 
         // ── Per-section deck grid, Master Duel style ─────────────────────
         // Main Deck: classic 10-wide rows, big tiles spanning the full
@@ -14343,8 +14346,15 @@ void UI::drawDeckBuilder(int w, int h) {
         const float kAspect  = 614.f / 421.f;
         const float availW2  = ImGui::GetContentRegionAvail().x - 4.f;
         const float availH2  = ImGui::GetContentRegionAvail().y;
-        // Header + gap overhead per section + inter-section gaps.
-        const float kSectionOverhead = 3.f * 34.f + 16.f;
+        // Header + gap overhead per section, MEASURED from the actual
+        // header font (a fixed guess under-counted at some UI scales and
+        // pushed the Side Deck below the fold). Per section: header line
+        // + Dummy(4) + trailing Dummy(6) + inter-section Dummy(8); plus a
+        // small safety margin so rounding never overflows into a scroll.
+        UIStyle::PushFont(UIStyle::fHeader);
+        const float headerH = ImGui::GetTextLineHeight();
+        UIStyle::PopFont();
+        const float kSectionOverhead = 3.f * (headerH + 18.f) + 24.f;
         const int mainCols  = 10;
         const int extraCols = std::max(10, (int)m_editDeck.extra.size());
         const int sideCols  = std::max(10, (int)m_editDeck.side.size());
@@ -14358,7 +14368,7 @@ void UI::drawDeckBuilder(int w, int h) {
                    + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y
                    + kSectionOverhead;
         if (need > availH2) {
-            float s = std::max(0.45f, (availH2 - kSectionOverhead)
+            float s = std::max(0.30f, (availH2 - kSectionOverhead)
                                     / (need - kSectionOverhead));
             mainW *= s; extraW *= s; sideW *= s;
         }
