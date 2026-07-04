@@ -112,14 +112,14 @@ private:
     void arcadePrimeRelayBufs();                 // fill name/relay from settings
     void arcadeHostInvite();                     // locked room + fresh PIN
     void arcadeJoinInvite();                     // join via m_arcadeInviteBuf
+    void sendArcadeSync();                       // campaign name + leaderboard
     // Post-duel rewards: winner spins a prize wheel, loser banks 5 wild pack
     // tokens. Wheel overlay state machine: 0 hidden, 1 spinning, 2 result up.
     int         m_arcadeWheelState = 0;
     double      m_arcadeWheelT0 = 0.0;           // spin start time
     int         m_arcadeWheelResult = -1;        // landed segment index
-    uint32_t    m_arcadeWheelCard = 0;           // pre-rolled SR/UR prize card
-    bool        m_arcadeKeyPick = false;         // "free key" chooser open
-    char        m_arcadeKeySearch[48] = {};
+    uint16_t    m_arcadeCraftPick = 0;           // craft view: selected pack
+    char        m_arcadeKeySearch[48] = {};      // craft view: card filter
     // Master Duel rarity table (assets/arcade/md_rarity.txt) + derived data.
     std::unordered_map<uint32_t, uint8_t>  m_mdRarity;      // code -> 0..3
     std::unordered_map<uint32_t, uint64_t> m_mdSetcodes;    // code -> packed

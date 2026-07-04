@@ -10,14 +10,22 @@
 // series between friends).
 //
 // Rules baked here (per the mode's design):
-//   * 10 Master Packs, then up to 10 Secret Packs total, then the pool is
-//     FIXED — no growth, no crafting (v1).
+//   * The CYCLE: open 10 Master Packs + 10 Secret Packs → duel → BOTH
+//     players spin the wheel → winner +5 leaderboard points → repeat
+//     (packs restock to 10/10, keys reset).
 //   * A key = a 16-bit archetype setcode, granted by pulling an SR/UR that
-//     belongs to that archetype (Master Duel's unlock rule).
+//     belongs to that archetype (Master Duel's unlock rule). Keys reset
+//     each cycle; last cycle's keys become the CRAFT pool.
+//   * The wheel pays out craft credits (crSR / crNR) or bonus secret
+//     packs. Credits buy exact cards from last cycle's unlocked packs.
+//   * The leaderboard (member → points) lives in every member's copy of
+//     the save and merges via ArcadeSync whenever two members connect —
+//     points only grow, so per-name MAX is a safe merge.
 //
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -31,12 +39,22 @@ struct ArcadeSave {
     int masterLeft = 10;                    // master packs still unopened
     int secretLeft = 10;                    // secret packs still unopened
     int wins = 0, losses = 0;               // campaign record
-    int tokens = 0;                         // wild pack tokens (loser reward:
-                                            // +5 per loss, spend on either
-                                            // master or secret packs)
-    int spins = 0;                          // unspent wheel spins (win reward)
+    int spins = 0;                          // unspent wheel spins (1/duel, ALL)
+    int crSR = 0;                           // SR craft credits (wheel reward)
+    int crNR = 0;                           // N/R craft credits (wheel reward)
     std::set<uint16_t> keys;                // unlocked secret packs (setcodes)
+    std::set<uint16_t> craftKeys;           // LAST cycle's packs = craft pool
+    std::map<std::string, int> board;       // leaderboard: member -> points
     std::unordered_map<uint32_t, int> pool; // owned cards: code -> copies
+
+    // Merge another member's leaderboard: union of names, per-name MAX
+    // points (points only ever increase, so max never loses progress).
+    void mergeBoard(const std::map<std::string, int>& other) {
+        for (auto& kv : other) {
+            int& p = board[kv.first];
+            if (kv.second > p) p = kv.second;
+        }
+    }
 
     int poolTotal() const {
         int n = 0;
@@ -83,9 +101,20 @@ struct ArcadeSave {
                 else if (k == "secretLeft") secretLeft = std::stoi(v);
                 else if (k == "wins")       wins       = std::stoi(v);
                 else if (k == "losses")     losses     = std::stoi(v);
-                else if (k == "tokens")     tokens     = std::stoi(v);
                 else if (k == "spins")      spins      = std::stoi(v);
+                else if (k == "crSR")       crSR       = std::stoi(v);
+                else if (k == "crNR")       crNR       = std::stoi(v);
                 else if (k == "key")        keys.insert((uint16_t)std::stoul(v));
+                else if (k == "ckey")  craftKeys.insert((uint16_t)std::stoul(v));
+                else if (k == "member") {   // "points name" (name has spaces)
+                    std::istringstream ss(v);
+                    int pts = 0; ss >> pts;
+                    std::string nm2;
+                    std::getline(ss, nm2);
+                    while (!nm2.empty() && nm2.front() == ' ')
+                        nm2.erase(nm2.begin());
+                    if (!nm2.empty()) board[nm2] = pts;
+                }
                 else if (k == "card") {     // "code xN"
                     std::istringstream ss(v);
                     uint32_t code; int cnt = 1;
@@ -107,9 +136,13 @@ struct ArcadeSave {
         f << "secretLeft=" << secretLeft << "\n";
         f << "wins="       << wins       << "\n";
         f << "losses="     << losses     << "\n";
-        f << "tokens="     << tokens     << "\n";
         f << "spins="      << spins      << "\n";
-        for (uint16_t k : keys)  f << "key=" << k << "\n";
+        f << "crSR="       << crSR       << "\n";
+        f << "crNR="       << crNR       << "\n";
+        for (uint16_t k : keys)      f << "key="  << k << "\n";
+        for (uint16_t k : craftKeys) f << "ckey=" << k << "\n";
+        for (auto& kv : board)   f << "member=" << kv.second << " "
+                                   << kv.first << "\n";
         for (auto& kv : pool)    f << "card=" << kv.first << " "
                                    << kv.second << "\n";
         return f.good();
