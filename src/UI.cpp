@@ -14325,47 +14325,42 @@ void UI::drawDeckBuilder(int w, int h) {
 
         ImGui::Dummy({1.f, 6.f});
 
-        // ── Inner region for the three deck sections. Sized so Main +
-        //    Extra + Side are ALL visible at once — no scrolling.
-        ImGui::BeginChild("##db_deck_scroll", {-1.f, -1.f}, false);
+        // ── Inner region for the three deck sections. NoScrollbar is
+        //    load-bearing: an auto scrollbar shrinks the width, which
+        //    resizes the tiles, which removes the scrollbar — an
+        //    oscillation that made the whole grid shake every frame.
+        ImGui::BeginChild("##db_deck_scroll", {-1.f, -1.f}, false,
+                          ImGuiWindowFlags_NoScrollbar);
 
-        // ── Adaptive deck grid: full width AND fully on screen ──────────
-        // Start at the classic 10-wide layout; when that's too tall for
-        // the panel, ADD COLUMNS (up to 16) instead of leaving dead space
-        // on the right — tiles always span the panel's full width, and
-        // Main + Extra + Side stay visible without scrolling. True
-        // 421:614 card aspect throughout.
+        // ── Per-section deck grid, Master Duel style ─────────────────────
+        // Main Deck: classic 10-wide rows, big tiles spanning the full
+        // width. Extra/Side: exactly ONE row each (they cap at 15), with
+        // their own smaller tile size so they never wrap. If the whole
+        // thing is taller than the panel, everything scales down uniformly
+        // — no scrolling, no stray rows. True 421:614 card aspect.
         const float TILE_PAD_X = 4.f;
         const float TILE_PAD_Y = 4.f;
-        const float availW2 = ImGui::GetContentRegionAvail().x - 4.f;
-        const float availH2 = ImGui::GetContentRegionAvail().y;
+        const float kAspect  = 614.f / 421.f;
+        const float availW2  = ImGui::GetContentRegionAvail().x - 4.f;
+        const float availH2  = ImGui::GetContentRegionAvail().y;
         // Header + gap overhead per section + inter-section gaps.
         const float kSectionOverhead = 3.f * 34.f + 16.f;
-        int   kDeckCols = 10;
-        float TILE_W = 0.f, TILE_H = 0.f;
-        for (;; ++kDeckCols) {
-            TILE_W = (availW2 - (kDeckCols - 1) * TILE_PAD_X)
-                   / (float)kDeckCols;
-            if (TILE_W > 132.f) TILE_W = 132.f;
-            TILE_H = TILE_W * (614.f / 421.f);
-            auto rowsOf = [&](int n) {
-                return std::max(1, (n + kDeckCols - 1) / kDeckCols);
-            };
-            int rows = rowsOf((int)m_editDeck.main.size())
-                     + rowsOf((int)m_editDeck.extra.size())
-                     + rowsOf((int)m_editDeck.side.size());
-            float need = rows * (TILE_H + TILE_PAD_Y) + kSectionOverhead;
-            if (need <= availH2 || kDeckCols >= 16) {
-                if (need > availH2) {
-                    // 16 columns still too tall (tiny window) — shrink the
-                    // tiles as the last resort, keeping the aspect.
-                    float fitH = (availH2 - kSectionOverhead)
-                               / (float)rows - TILE_PAD_Y;
-                    TILE_H = std::max(50.f, fitH);
-                    TILE_W = TILE_H * (421.f / 614.f);
-                }
-                break;
-            }
+        const int mainCols  = 10;
+        const int extraCols = std::max(10, (int)m_editDeck.extra.size());
+        const int sideCols  = std::max(10, (int)m_editDeck.side.size());
+        float mainW  = (availW2 - (mainCols  - 1) * TILE_PAD_X) / mainCols;
+        if (mainW > 132.f) mainW = 132.f;
+        float extraW = (availW2 - (extraCols - 1) * TILE_PAD_X) / extraCols;
+        float sideW  = (availW2 - (sideCols  - 1) * TILE_PAD_X) / sideCols;
+        int mainRows = std::max(1,
+            ((int)m_editDeck.main.size() + mainCols - 1) / mainCols);
+        float need = mainRows * (mainW * kAspect + TILE_PAD_Y)
+                   + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y
+                   + kSectionOverhead;
+        if (need > availH2) {
+            float s = std::max(0.45f, (availH2 - kSectionOverhead)
+                                    / (need - kSectionOverhead));
+            mainW *= s; extraW *= s; sideW *= s;
         }
 
         // ── Drag-and-drop payload ────────────────────────────────────────
@@ -14419,7 +14414,8 @@ void UI::drawDeckBuilder(int w, int h) {
         // Each section is also a drop target on its empty area (append).
         auto drawSection = [&](const char* label, char sec,
                                std::vector<uint32_t>& zone,
-                               const char* idPrefix) {
+                               const char* idPrefix,
+                               int kDeckCols, float TILE_W, float TILE_H) {
             // ── Section header — also a drop target so users can drag
             //    onto the title bar to append to this section.
             if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
@@ -14695,11 +14691,14 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::Dummy({1.f, 6.f});
         };
 
-        drawSection("Main Deck",  'm', m_editDeck.main,  "mtile");
+        drawSection("Main Deck",  'm', m_editDeck.main,  "mtile",
+                    mainCols,  mainW,  mainW  * kAspect);
         ImGui::Dummy({1.f, 8.f});
-        drawSection("Extra Deck", 'e', m_editDeck.extra, "etile");
+        drawSection("Extra Deck", 'e', m_editDeck.extra, "etile",
+                    extraCols, extraW, extraW * kAspect);
         ImGui::Dummy({1.f, 8.f});
-        drawSection("Side Deck",  's', m_editDeck.side,  "stile");
+        drawSection("Side Deck",  's', m_editDeck.side,  "stile",
+                    sideCols,  sideW,  sideW  * kAspect);
 
         // ── Apply the pending drag-drop move now that all sections have
         //    rendered. Doing it post-iteration keeps vector iterators
