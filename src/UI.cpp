@@ -14370,10 +14370,30 @@ void UI::drawDeckBuilder(int w, int h) {
         }
         float grid0 = mainRows * (mainW * kAspect + TILE_PAD_Y)
                     + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y;
-        if (grid0 + overhead > availH2) {
-            float s = std::max(0.30f, (availH2 - overhead) / grid0);
-            mainW *= s; extraW *= s; sideW *= s;
-        }
+        // Deadbanded scale + whole-pixel tiles: the applied scale only
+        // moves when the target moves by >2%, and tile widths are floored
+        // to integers — sub-pixel measurement noise can no longer nudge
+        // the layout every frame (the visible "shaking").
+        static float s_scale = 1.f;
+        float target = 1.f;
+        if (grid0 + overhead > availH2)
+            target = std::max(0.30f, (availH2 - overhead) / grid0);
+        if (std::fabs(target - s_scale) > 0.02f) s_scale = target;
+        mainW  = std::floor(mainW  * s_scale);
+        extraW = std::floor(extraW * s_scale);
+        sideW  = std::floor(sideW  * s_scale);
+
+        // Centre the whole block in the panel: when the fit shrank the
+        // tiles below full width, split the leftover space evenly instead
+        // of piling it all on the right.
+        float gwMax = std::max(mainCols  * mainW
+                               + (mainCols  - 1) * TILE_PAD_X,
+                      std::max(extraCols * extraW
+                               + (extraCols - 1) * TILE_PAD_X,
+                               sideCols  * sideW
+                               + (sideCols  - 1) * TILE_PAD_X));
+        float inset = std::floor(std::max(0.f, (availW2 - gwMax) * 0.5f));
+        if (inset > 0.f) ImGui::Indent(inset);
 
         // ── Drag-and-drop payload ────────────────────────────────────────
         // Identifies the source tile by section ('m'/'e'/'s'), index in
@@ -14720,6 +14740,7 @@ void UI::drawDeckBuilder(int w, int h) {
             s_deckOverhead =
                 std::max(0.f, ImGui::GetCursorPosY() - gridS) + 4.f;
         }
+        if (inset > 0.f) ImGui::Unindent(inset);
 
         // ── Apply the pending drag-drop move now that all sections have
         //    rendered. Doing it post-iteration keeps vector iterators
