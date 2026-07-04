@@ -14346,15 +14346,6 @@ void UI::drawDeckBuilder(int w, int h) {
         const float kAspect  = 614.f / 421.f;
         const float availW2  = ImGui::GetContentRegionAvail().x - 4.f;
         const float availH2  = ImGui::GetContentRegionAvail().y;
-        // Header + gap overhead per section, MEASURED from the actual
-        // header font (a fixed guess under-counted at some UI scales and
-        // pushed the Side Deck below the fold). Per section: header line
-        // + Dummy(4) + trailing Dummy(6) + inter-section Dummy(8); plus a
-        // small safety margin so rounding never overflows into a scroll.
-        UIStyle::PushFont(UIStyle::fHeader);
-        const float headerH = ImGui::GetTextLineHeight();
-        UIStyle::PopFont();
-        const float kSectionOverhead = 3.f * (headerH + 18.f) + 24.f;
         const int mainCols  = 10;
         const int extraCols = std::max(10, (int)m_editDeck.extra.size());
         const int sideCols  = std::max(10, (int)m_editDeck.side.size());
@@ -14364,12 +14355,23 @@ void UI::drawDeckBuilder(int w, int h) {
         float sideW  = (availW2 - (sideCols  - 1) * TILE_PAD_X) / sideCols;
         int mainRows = std::max(1,
             ((int)m_editDeck.main.size() + mainCols - 1) / mainCols);
-        float need = mainRows * (mainW * kAspect + TILE_PAD_Y)
-                   + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y
-                   + kSectionOverhead;
-        if (need > availH2) {
-            float s = std::max(0.30f, (availH2 - kSectionOverhead)
-                                    / (need - kSectionOverhead));
+        // Non-grid overhead (headers, ImGui item spacing, gaps) is
+        // MEASURED from the previous frame's real layout — estimates kept
+        // under-counting and clipping the Side Deck. First frame uses a
+        // generous guess; from then on the fit is exact and stable (the
+        // measurement doesn't depend on the tile scale, so no feedback
+        // oscillation).
+        static float s_deckOverhead = -1.f;
+        float overhead = s_deckOverhead;
+        if (overhead < 0.f) {
+            UIStyle::PushFont(UIStyle::fHeader);
+            overhead = 3.f * (ImGui::GetTextLineHeight() + 26.f) + 30.f;
+            UIStyle::PopFont();
+        }
+        float grid0 = mainRows * (mainW * kAspect + TILE_PAD_Y)
+                    + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y;
+        if (grid0 + overhead > availH2) {
+            float s = std::max(0.30f, (availH2 - overhead) / grid0);
             mainW *= s; extraW *= s; sideW *= s;
         }
 
@@ -14709,6 +14711,15 @@ void UI::drawDeckBuilder(int w, int h) {
         ImGui::Dummy({1.f, 8.f});
         drawSection("Side Deck",  's', m_editDeck.side,  "stile",
                     sideCols,  sideW,  sideW  * kAspect);
+
+        // Record the REAL non-grid overhead for next frame's fit: total
+        // content height consumed minus the (known) scaled grid height.
+        {
+            float gridS = mainRows * (mainW * kAspect + TILE_PAD_Y)
+                        + (extraW + sideW) * kAspect + 2.f * TILE_PAD_Y;
+            s_deckOverhead =
+                std::max(0.f, ImGui::GetCursorPosY() - gridS) + 4.f;
+        }
 
         // ── Apply the pending drag-drop move now that all sections have
         //    rendered. Doing it post-iteration keeps vector iterators
