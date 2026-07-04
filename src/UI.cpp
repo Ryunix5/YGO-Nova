@@ -13964,6 +13964,14 @@ void UI::drawDeckBuilder(int w, int h) {
             // CardDB::search already limits to 80, this caps post-filter too.
             // Pool browsing shows the whole (bounded ~160-card) collection.
             const int kMaxRows = poolBrowse ? 500 : 80;
+            // Master Duel-style grid: results flow left-to-right as card
+            // art tiles (no text rows) — hover shows everything in the
+            // Card Preview panel.
+            float gAvail = ImGui::GetContentRegionAvail().x - 14.f;
+            int   gCols  = std::max(3, (int)((gAvail + 6.f) / 92.f));
+            float gTw    = (gAvail - (gCols - 1) * 6.f) / (float)gCols;
+            float gTh    = gTw * (614.f / 421.f);
+            int   gCol   = 0;
             for (auto& card : rowsSrc) {
                 if (rendered >= kMaxRows) break;
                 // Arcade pool mode: only cards you actually own can appear.
@@ -13994,91 +14002,70 @@ void UI::drawDeckBuilder(int w, int h) {
                 //    reserved area using SetCursorScreenPos. Both submit
                 //    items inside the reserved rect → no boundary extension.
                 // 4) Restore cursor to row-bottom, then Dummy for the gap.
-                // Compact row: thumbnail, type chip, name, one stat line.
-                // No card code, no description — hover the row and the full
-                // text shows in the Card Preview panel on the left.
-                ImVec2 rp = ImGui::GetCursorScreenPos();
-                float  rw = ImGui::GetContentRegionAvail().x;
-                float  rh = 56.f;
-                ImGui::Dummy({rw, rh});                // step 1
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                UIStyle::DrawRaisedPanel(dl, rp, {rp.x + rw, rp.y + rh});
-
-                // Thumbnail.
-                void* tex = m_rend.getCardTexture(card.id);
-                ImVec2 thumb = {rp.x + 7.f, rp.y + 6.f};
-                ImVec2 thumbEnd = {thumb.x + 32.f, thumb.y + 44.f};
-                if (tex)
-                    dl->AddImage((ImTextureID)tex, thumb, thumbEnd);
-                else
-                    dl->AddRectFilled(thumb, thumbEnd, IM_COL32(28, 32, 50, 255), 3.f);
-
-                // Type chip beside the name.
-                ImU32 chipBg = isMonster ? IM_COL32(46, 62, 110, 255)
-                              : isSpell  ? IM_COL32(28, 96, 60, 255)
-                              : isTrap   ? IM_COL32(120, 36, 92, 255)
-                                         : IM_COL32(54, 60, 80, 255);
-                const char* chipText =
-                    isExtra   ? (card.type & TYPE_FUSION)  ? "FUSION"
-                              : (card.type & TYPE_SYNCHRO) ? "SYNCHRO"
-                              : (card.type & TYPE_XYZ)     ? "XYZ"
-                              : (card.type & TYPE_LINK)    ? "LINK"
-                              : "EXTRA"
-                    : isMonster ? "MONSTER"
-                    : isSpell   ? "SPELL"
-                    : isTrap    ? "TRAP" : "CARD";
-                ImVec2 ts = ImGui::CalcTextSize(chipText);
-                float chipX = thumb.x + 40.f;
-                float chipY = rp.y + 7.f;
-                dl->AddRectFilled({chipX, chipY},
-                                  {chipX + ts.x + 12.f, chipY + ts.y + 5.f},
-                                  chipBg, 4.f);
-                dl->AddText({chipX + 6.f, chipY + 2.f}, C.textHi, chipText);
-
-                // Name (right of chip), clipped clear of the Add button.
-                float nameX = chipX + ts.x + 20.f;
-                dl->PushClipRect({nameX, rp.y}, {rp.x + rw - 92.f, rp.y + rh},
-                                 true);
-                dl->AddText({nameX, rp.y + 7.f}, C.textHi, card.name.c_str());
-                dl->PopClipRect();
-
-                // Stat line (monsters only; spells/traps stay clean).
-                char meta[96] = "";
-                if (isMonster)
-                    snprintf(meta, sizeof(meta), "ATK %d / DEF %d  •  Lv%d",
-                             card.atk, card.def, card.level);
-                if (m_poolMode && m_arcadeLoaded) {
-                    char own[48];
-                    snprintf(own, sizeof(own), "%sown %d, in deck %d",
-                             meta[0] ? "  •  " : "",
-                             m_arcade.owned(card.id), deckCopies(card.id));
-                    strncat(meta, own, sizeof(meta) - strlen(meta) - 1);
-                }
-                if (meta[0])
-                    dl->AddText({chipX, rp.y + 30.f}, C.textLo, meta);
-
-                // Step 3a — row hit-test (left side, leaves the Add button
-                // free on the right). This stays inside the reserved rect.
+                // ── Master Duel-style tile: the card art IS the result ──
+                // Double-click adds to the natural section, drag places it
+                // anywhere, right-click picks Main/Extra/Side. Hover fills
+                // the Card Preview panel with the full text.
+                if (gCol) ImGui::SameLine(0.f, 6.f);
+                ImVec2 tp = ImGui::GetCursorScreenPos();
+                ImVec2 te = {tp.x + gTw, tp.y + gTh};
                 char sid[40];
                 snprintf(sid, sizeof(sid), "##srow_%u", (unsigned)card.id);
                 char addPop[40];
                 snprintf(addPop, sizeof(addPop), "##addpop_%u",
                          (unsigned)card.id);
-                ImGui::SetCursorScreenPos(rp);
-                ImGui::InvisibleButton(sid, {rw - 92.f, rh});
+                ImGui::InvisibleButton(sid, {gTw, gTh});
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                void* tex = m_rend.getCardTexture(card.id);
+                if (tex) {
+                    dl->AddImageRounded((ImTextureID)tex, tp, te,
+                                        {0, 0}, {1, 1}, IM_COL32_WHITE, 3.f);
+                } else {
+                    ImU32 fb = isSpell ? IM_COL32(28, 96, 60, 255)
+                             : isTrap  ? IM_COL32(120, 36, 92, 255)
+                                       : IM_COL32(46, 62, 110, 255);
+                    dl->AddRectFilled(tp, te, fb, 3.f);
+                    dl->PushClipRect(tp, te, true);
+                    dl->AddText({tp.x + 4.f, tp.y + 4.f}, C.textHi,
+                                card.name.c_str());
+                    dl->PopClipRect();
+                }
+                dl->AddRect(tp, te, IM_COL32(0, 0, 0, 150), 3.f, 0, 1.f);
+
+                // In-deck copies pip (bottom-left); owned count in pool mode.
+                int inDeck = deckCopies(card.id);
+                if (inDeck > 0) {
+                    char b[8];
+                    snprintf(b, sizeof(b), "%d", inDeck);
+                    ImVec2 bs = ImGui::CalcTextSize(b);
+                    ImVec2 b1{tp.x + 3.f, te.y - bs.y - 8.f};
+                    ImVec2 b2{b1.x + bs.x + 10.f, te.y - 3.f};
+                    dl->AddRectFilled(b1, b2, IM_COL32(14, 16, 26, 235), 3.f);
+                    dl->AddRect(b1, b2, C.accent, 3.f, 0, 1.f);
+                    dl->AddText({b1.x + 5.f, b1.y + 2.f}, C.accentHi, b);
+                }
+                if (m_poolMode && m_arcadeLoaded) {
+                    char b[16];
+                    snprintf(b, sizeof(b), "x%d", m_arcade.owned(card.id));
+                    ImVec2 bs = ImGui::CalcTextSize(b);
+                    ImVec2 b1{te.x - bs.x - 13.f, te.y - bs.y - 8.f};
+                    ImVec2 b2{te.x - 3.f, te.y - 3.f};
+                    dl->AddRectFilled(b1, b2, IM_COL32(14, 16, 26, 235), 3.f);
+                    dl->AddText({b1.x + 5.f, b1.y + 2.f}, C.textMd, b);
+                }
+
                 bool rowHov = ImGui::IsItemHovered();
                 if (rowHov) {
-                    dl->AddRect(rp, {rp.x + rw, rp.y + rh},
-                                C.accent, 4.f, 0, 1.4f);
+                    dl->AddRect(tp, te, C.accent, 3.f, 0, 2.f);
                     m_hoveredCard = card.id;
                     m_hoveredInfo = card;
                     m_deckHoverCode = card.id;
-                    // Double-click quick-adds to the natural section (Extra for
-                    // extra-deck cards, otherwise Main) — the common case.
+                    ImGui::SetTooltip(
+                        "%s\nDouble-click: add  •  Right-click: choose "
+                        "section  •  Drag: place", card.name.c_str());
                     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                         addCardTo(isExtra ? 'e' : 'm', card.id);
                 }
-                // Right-click opens the same destination menu as the Add button.
                 if (rowHov && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                     ImGui::OpenPopup(addPop);
                 // Drag a search result straight into a deck section. Carries
@@ -14092,23 +14079,6 @@ void UI::drawDeckBuilder(int w, int h) {
                     ImGui::TextUnformatted(card.name.c_str());
                     ImGui::EndDragDropSource();
                 }
-
-                // Step 3b — Add button placed inside the reserved rect.
-                // ONE CLICK adds to the natural section (Extra for extra-deck
-                // cards, otherwise Main); the right-click menu (row or
-                // button) covers Side / explicit choices.
-                ImGui::SetCursorScreenPos({rp.x + rw - 88.f, rp.y + 13.f});
-                char addLbl[40];
-                snprintf(addLbl, sizeof(addLbl), "+ Add##s%u",
-                         (unsigned)card.id);
-                if (UIStyle::SecondaryButton(addLbl, {80.f, 30.f}))
-                    addCardTo(isExtra ? 'e' : 'm', card.id);
-                if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
-                    ImGui::OpenPopup(addPop);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Click: add to %s  •  Right-click: "
-                                      "choose section",
-                                      isExtra ? "Extra" : "Main");
                 if (ImGui::BeginPopup(addPop)) {
                     ImGui::TextDisabled("Add to");
                     ImGui::Separator();
@@ -14135,10 +14105,8 @@ void UI::drawDeckBuilder(int w, int h) {
                     ImGui::EndPopup();
                 }
 
-                // Step 4 — cursor back to row-bottom, plus a small gap that
-                // grows the parent properly (no SetCursor-beyond-bounds).
-                ImGui::SetCursorScreenPos({rp.x, rp.y + rh});
-                ImGui::Dummy({1.f, 6.f});
+                // Grid flow: wrap to the next row after gCols tiles.
+                if (++gCol >= gCols) gCol = 0;
             }
             if (rendered == 0)
                 ImGui::TextDisabled("No matches after filtering.");
@@ -14367,8 +14335,8 @@ void UI::drawDeckBuilder(int w, int h) {
         // size starts from the column width (true 421:614 card aspect),
         // then shrinks until every section's rows fit the panel height —
         // the whole deck is always on screen.
-        const float TILE_PAD_X = 6.f;
-        const float TILE_PAD_Y = 6.f;
+        const float TILE_PAD_X = 4.f;
+        const float TILE_PAD_Y = 4.f;
         const int   kDeckCols  = 10;
         float TILE_W = (ImGui::GetContentRegionAvail().x - 4.f
                         - (kDeckCols - 1) * TILE_PAD_X) / (float)kDeckCols;
@@ -14560,30 +14528,26 @@ void UI::drawDeckBuilder(int w, int h) {
                 };
                 ImVec2 te = {tp.x + TILE_W, tp.y + TILE_H};
 
-                // Tile background — subtle raised plate.
-                dl->AddRectFilled(tp, te, IM_COL32(26, 14, 17, 230), 4.f);
-                dl->AddRect(tp, te, IM_COL32(120, 52, 58, 200),
-                            4.f, 0, 1.f);
-
-                // Card image (or coloured placeholder by type).
+                // Clean card tile — just the art edge-to-edge with a thin
+                // dark outline, like a real deck editor. No plates.
                 CardInfo ci = m_db.getCard(code);
                 void* tex = m_rend.getCardTexture(code);
-                ImVec2 ip = {tp.x + 3.f, tp.y + 3.f};
-                ImVec2 ie = {te.x - 3.f, te.y - 3.f};
                 if (tex) {
-                    dl->AddImage((ImTextureID)tex, ip, ie);
+                    dl->AddImageRounded((ImTextureID)tex, tp, te,
+                                        {0, 0}, {1, 1}, IM_COL32_WHITE, 3.f);
                 } else {
                     ImU32 fb = (ci.type & TYPE_SPELL) ? IM_COL32(28, 96, 60, 255)
                              : (ci.type & TYPE_TRAP)  ? IM_COL32(120, 36, 92, 255)
                                                      : IM_COL32(60, 72, 120, 255);
-                    dl->AddRectFilled(ip, ie, fb, 3.f);
+                    dl->AddRectFilled(tp, te, fb, 3.f);
                     if (!ci.name.empty()) {
                         std::string nm = ci.name;
                         if (nm.size() > 8) nm = nm.substr(0, 7) + ".";
-                        dl->AddText({ip.x + 4.f, ip.y + 4.f},
+                        dl->AddText({tp.x + 4.f, tp.y + 4.f},
                                     C.textHi, nm.c_str());
                     }
                 }
+                dl->AddRect(tp, te, IM_COL32(0, 0, 0, 150), 3.f, 0, 1.f);
 
                 // Banlist status badge (top-left corner): Forbidden / Limited /
                 // Semi-Limited, per the selected format. 3-of cards show nothing.
@@ -14628,25 +14592,8 @@ void UI::drawDeckBuilder(int w, int h) {
                     }
                 }
 
-                // Copy-count badge (bottom-right): "xN" when more than one
-                // copy of this card sits in this section — see at a glance how
-                // many you're running without counting tiles.
-                {
-                    int n = (int)std::count(zone.begin(), zone.end(), code);
-                    if (n > 1) {
-                        char cb[8];
-                        snprintf(cb, sizeof(cb), "x%d", n);
-                        ImVec2 cs = ImGui::CalcTextSize(cb);
-                        ImVec2 pad{5.f, 2.f};
-                        ImVec2 b1{te.x - cs.x - pad.x * 2.f - 3.f,
-                                  te.y - cs.y - pad.y * 2.f - 3.f};
-                        ImVec2 b2{te.x - 3.f, te.y - 3.f};
-                        dl->AddRectFilled(b1, b2, IM_COL32(12, 8, 9, 235), 3.f);
-                        dl->AddRect(b1, b2, IM_COL32(198, 120, 64, 220), 3.f, 0, 1.f);
-                        dl->AddText({b1.x + pad.x, b1.y + pad.y},
-                                    IM_COL32(240, 196, 120, 255), cb);
-                    }
-                }
+                // (No per-copy "xN" badge — every copy is its own tile, so
+                // badges on all duplicates just read as clutter.)
 
                 // Hit-test / drag-and-drop / right-click remove.
                 ImGui::SetCursorScreenPos(tp);
