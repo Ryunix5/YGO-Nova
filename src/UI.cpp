@@ -14237,14 +14237,7 @@ void UI::drawDeckBuilder(int w, int h) {
             }
         }
 
-        // Status / validation chips row.
-        int mainCount  = (int)m_editDeck.main.size();
-        int extraCount = (int)m_editDeck.extra.size();
-        int sideCount  = (int)m_editDeck.side.size();
-        // Validation predicates.
-        bool warnLowMain  = (mainCount < 40);
-        bool errHighMain  = (mainCount > 60);
-        bool errHighExtra = (extraCount > 15);
+        // Validation (the section bars below carry the counts).
         bool errCopyLimit = false;
         std::vector<std::string> banViol;     // over-limit cards (current list)
         {
@@ -14265,40 +14258,28 @@ void UI::drawDeckBuilder(int w, int h) {
             std::sort(banViol.begin(), banViol.end());
         }
 
-        char chip[64];
-        snprintf(chip, sizeof(chip), "Main %d/60", mainCount);
-        UIStyle::StatusChip(chip,
-            errHighMain ? C.danger : warnLowMain ? C.warning : C.success);
-        ImGui::SameLine(0.f, 6.f);
-        snprintf(chip, sizeof(chip), "Extra %d/15", extraCount);
-        UIStyle::StatusChip(chip, errHighExtra ? C.danger : C.success);
-        ImGui::SameLine(0.f, 6.f);
-        snprintf(chip, sizeof(chip), "Side %d/15", sideCount);
-        UIStyle::StatusChip(chip, C.textMuted);
-        ImGui::SameLine(0.f, 12.f);
-        if (dirty)
-            UIStyle::StatusChip("Unsaved changes", C.warning);
-        else
-            UIStyle::StatusChip("Saved", C.textMuted);
-        if (errCopyLimit) {
-            ImGui::SameLine(0.f, 6.f);
-            UIStyle::StatusChip(m_selectedBanlist >= 0 ? "Banlist violation"
-                                                       : "Copy limit exceeded",
-                                C.danger);
-            if (ImGui::IsItemHovered() && !banViol.empty()) {
-                ImGui::BeginTooltip();
-                ImGui::TextDisabled("Over the limit:");
-                for (auto& v : banViol) ImGui::TextUnformatted(v.c_str());
-                ImGui::EndTooltip();
-            }
-        }
-        if (!m_db.isOpen()) {
-            ImGui::SameLine(0.f, 6.f);
-            UIStyle::StatusChip("No card DB", C.danger);
-        }
-        // Detected archetype(s) — most-mentioned first, real setcodes only.
-        // Cached by a cheap deck signature so we only hit the DB on changes.
+        // Compact status line — only signals that AREN'T in the section
+        // bars: unsaved state, violations, missing DB, archetype readout.
         {
+            UIStyle::PushFont(UIStyle::fSmall);
+            bool any = false;
+            auto sep = [&]() { if (any) ImGui::SameLine(0.f, 8.f); any = true; };
+            if (dirty) { sep(); UIStyle::StatusChip("Unsaved", C.warning); }
+            if (errCopyLimit) {
+                sep();
+                UIStyle::StatusChip(m_selectedBanlist >= 0
+                                        ? "Banlist violation"
+                                        : "Copy limit exceeded", C.danger);
+                if (ImGui::IsItemHovered() && !banViol.empty()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextDisabled("Over the limit:");
+                    for (auto& v : banViol) ImGui::TextUnformatted(v.c_str());
+                    ImGui::EndTooltip();
+                }
+            }
+            if (!m_db.isOpen()) { sep(); UIStyle::StatusChip("No card DB",
+                                                             C.danger); }
+            // Detected archetype(s) — cached by a cheap deck signature.
             static uint64_t s_sig = ~0ull;
             static std::vector<std::pair<std::string,int>> s_arch;
             uint64_t sig = m_editDeck.main.size() * 1000003ull +
@@ -14308,24 +14289,24 @@ void UI::drawDeckBuilder(int w, int h) {
             for (uint32_t c : m_editDeck.extra) sig = sig * 2654435761ull + c;
             for (uint32_t c : m_editDeck.side)  sig = sig * 40503ull + c;
             if (sig != s_sig) { s_sig = sig; s_arch = deckArchetypes(m_editDeck); }
-            const auto& arch = s_arch;
-            if (!arch.empty()) {
+            if (!s_arch.empty()) {
                 std::string s = "Archetype: ";
-                for (size_t i = 0; i < arch.size() && i < 3; ++i) {
+                for (size_t i = 0; i < s_arch.size() && i < 3; ++i) {
                     if (i) s += " · ";
-                    s += arch[i].first + " (" +
-                         std::to_string(arch[i].second) + ")";
+                    s += s_arch[i].first + " (" +
+                         std::to_string(s_arch[i].second) + ")";
                 }
-                ImGui::SameLine(0.f, 12.f);
+                sep();
                 ImGui::AlignTextToFramePadding();
                 ImGui::PushStyleColor(ImGuiCol_Text,
                     ImGui::ColorConvertU32ToFloat4(C.accentHi));
                 ImGui::TextUnformatted(s.c_str());
                 ImGui::PopStyleColor();
             }
+            UIStyle::PopFont();
+            if (!any) ImGui::Dummy({1.f, 1.f});
         }
-
-        ImGui::Dummy({1.f, 6.f});
+        ImGui::Dummy({1.f, 3.f});
 
         // ── Inner region for the three deck sections. NoScrollbar is
         //    load-bearing: an auto scrollbar shrinks the width, which
@@ -14375,8 +14356,8 @@ void UI::drawDeckBuilder(int w, int h) {
         // measurement noise can't nudge the layout frame-to-frame.
         auto quant = [](float v) { return std::floor(v * 0.5f) * 2.f; };
         float freeH = std::max(200.f, availH2 - overhead);
-        extraW = quant(std::min(extraW, freeH * 0.14f / kAspect));
-        sideW  = quant(std::min(sideW,  freeH * 0.14f / kAspect));
+        extraW = quant(std::min(extraW, freeH * 0.125f / kAspect));
+        sideW  = quant(std::min(sideW,  freeH * 0.125f / kAspect));
         float mainRowH = (freeH - (extraW + sideW) * kAspect
                           - 2.f * TILE_PAD_Y) / (float)mainRows
                        - TILE_PAD_Y;
@@ -14473,23 +14454,24 @@ void UI::drawDeckBuilder(int w, int h) {
                 float  hw = ImGui::GetContentRegionAvail().x;
                 char hid[32];
                 snprintf(hid, sizeof(hid), "##bar_%s", idPrefix);
-                ImGui::InvisibleButton(hid, {hw, 26.f});
+                ImGui::InvisibleButton(hid, {hw, 24.f});
                 ImDrawList* hdl = ImGui::GetWindowDrawList();
-                hdl->AddRectFilled(hp, {hp.x + hw, hp.y + 26.f},
-                                   IM_COL32(24, 28, 58, 255), 3.f);
-                hdl->AddRect(hp, {hp.x + hw, hp.y + 26.f},
-                             IM_COL32(78, 88, 150, 255), 3.f, 0, 1.f);
+                hdl->AddRectFilledMultiColor(hp, {hp.x + hw, hp.y + 24.f},
+                    IM_COL32(30, 36, 74, 255), IM_COL32(22, 26, 54, 255),
+                    IM_COL32(22, 26, 54, 255), IM_COL32(30, 36, 74, 255));
+                hdl->AddRect(hp, {hp.x + hw, hp.y + 24.f},
+                             IM_COL32(78, 88, 150, 255), 2.f, 0, 1.f);
                 int n  = (int)zone.size();
                 int lo = (sec == 'm') ? 40 : 0;
                 int hi = (sec == 'm') ? 60 : 15;
                 char lbl2[48];
                 snprintf(lbl2, sizeof(lbl2), "%s:  %d", label, n);
-                hdl->AddText({hp.x + 10.f, hp.y + 5.f},
+                hdl->AddText({hp.x + 10.f, hp.y + 4.f},
                              (n >= lo && n <= hi)
                                  ? C.textHi : IM_COL32(242, 115, 100, 255),
                              lbl2);
                 ImVec2 rs = ImGui::CalcTextSize(rightInfo.c_str());
-                hdl->AddText({hp.x + hw - rs.x - 10.f, hp.y + 5.f},
+                hdl->AddText({hp.x + hw - rs.x - 10.f, hp.y + 4.f},
                              C.textMd, rightInfo.c_str());
             }
             if (ImGui::BeginDragDropTarget()) {
@@ -14756,11 +14738,11 @@ void UI::drawDeckBuilder(int w, int h) {
         drawSection("Deck",  'm', m_editDeck.main,  "mtile",
                     mainCols,  mainW,  mainW  * kAspect,
                     mstInfo(m_editDeck.main));
-        ImGui::Dummy({1.f, 8.f});
+        ImGui::Dummy({1.f, 4.f});
         drawSection("Extra", 'e', m_editDeck.extra, "etile",
                     extraCols, extraW, extraW * kAspect,
                     extraInfo());
-        ImGui::Dummy({1.f, 8.f});
+        ImGui::Dummy({1.f, 4.f});
         drawSection("Side",  's', m_editDeck.side,  "stile",
                     sideCols,  sideW,  sideW  * kAspect,
                     mstInfo(m_editDeck.side));
