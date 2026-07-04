@@ -14341,8 +14341,8 @@ void UI::drawDeckBuilder(int w, int h) {
         // their own smaller tile size so they never wrap. If the whole
         // thing is taller than the panel, everything scales down uniformly
         // — no scrolling, no stray rows. True 421:614 card aspect.
-        const float TILE_PAD_X = 4.f;
-        const float TILE_PAD_Y = 4.f;
+        const float TILE_PAD_X = 3.f;
+        const float TILE_PAD_Y = 3.f;
         const float kAspect  = 614.f / 421.f;
         const float availW2  = ImGui::GetContentRegionAvail().x - 4.f;
         const float availH2  = ImGui::GetContentRegionAvail().y;
@@ -14382,17 +14382,34 @@ void UI::drawDeckBuilder(int w, int h) {
                        - TILE_PAD_Y;
         mainW = quant(std::max(40.f, std::min(mainW, mainRowH / kAspect)));
 
-        // Centre the whole block in the panel: when the fit shrank the
-        // tiles below full width, split the leftover space evenly instead
-        // of piling it all on the right.
-        float gwMax = std::max(mainCols  * mainW
-                               + (mainCols  - 1) * TILE_PAD_X,
-                      std::max(extraCols * extraW
-                               + (extraCols - 1) * TILE_PAD_X,
-                               sideCols  * sideW
-                               + (sideCols  - 1) * TILE_PAD_X));
-        float inset = std::floor(std::max(0.f, (availW2 - gwMax) * 0.5f));
-        if (inset > 0.f) ImGui::Indent(inset);
+        // Section composition summaries for the EdoPro-style header bars.
+        auto mstInfo = [&](const std::vector<uint32_t>& z) {
+            int mo = 0, sp = 0, tr = 0;
+            for (uint32_t c : z) {
+                CardInfo ci = m_db.getCard(c);
+                if      (ci.type & TYPE_SPELL) sp++;
+                else if (ci.type & TYPE_TRAP)  tr++;
+                else                           mo++;
+            }
+            char b[64];
+            snprintf(b, sizeof(b), "Monster %d   Spell %d   Trap %d",
+                     mo, sp, tr);
+            return std::string(b);
+        };
+        auto extraInfo = [&]() {
+            int fu = 0, xy = 0, sy = 0, li = 0;
+            for (uint32_t c : m_editDeck.extra) {
+                CardInfo ci = m_db.getCard(c);
+                if      (ci.type & TYPE_FUSION)  fu++;
+                else if (ci.type & TYPE_XYZ)     xy++;
+                else if (ci.type & TYPE_SYNCHRO) sy++;
+                else if (ci.type & TYPE_LINK)    li++;
+            }
+            char b[80];
+            snprintf(b, sizeof(b), "Fusion %d   Xyz %d   Synchro %d   Link %d",
+                     fu, xy, sy, li);
+            return std::string(b);
+        };
 
         // ── Drag-and-drop payload ────────────────────────────────────────
         // Identifies the source tile by section ('m'/'e'/'s'), index in
@@ -14446,28 +14463,34 @@ void UI::drawDeckBuilder(int w, int h) {
         auto drawSection = [&](const char* label, char sec,
                                std::vector<uint32_t>& zone,
                                const char* idPrefix,
-                               int kDeckCols, float TILE_W, float TILE_H) {
-            // ── Section header — also a drop target so users can drag
-            //    onto the title bar to append to this section.
-            if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImGui::ColorConvertU32ToFloat4(C.textHi));
-            ImGui::TextUnformatted(label);
-            ImGui::PopStyleColor();
-            if (UIStyle::fHeader) ImGui::PopFont();
-
-            // Live count badge: n / max, red when the section is out of legal
-            // range (main 40-60, extra/side 0-15).
+                               int kDeckCols, float TILE_W, float TILE_H,
+                               const std::string& rightInfo) {
+            // ── EdoPro-style section bar: full-width navy strip with the
+            //    count on the left and the composition breakdown on the
+            //    right. Also the drop target for appending to the section.
             {
-                int n = (int)zone.size();
+                ImVec2 hp = ImGui::GetCursorScreenPos();
+                float  hw = ImGui::GetContentRegionAvail().x;
+                char hid[32];
+                snprintf(hid, sizeof(hid), "##bar_%s", idPrefix);
+                ImGui::InvisibleButton(hid, {hw, 26.f});
+                ImDrawList* hdl = ImGui::GetWindowDrawList();
+                hdl->AddRectFilled(hp, {hp.x + hw, hp.y + 26.f},
+                                   IM_COL32(24, 28, 58, 255), 3.f);
+                hdl->AddRect(hp, {hp.x + hw, hp.y + 26.f},
+                             IM_COL32(78, 88, 150, 255), 3.f, 0, 1.f);
+                int n  = (int)zone.size();
                 int lo = (sec == 'm') ? 40 : 0;
                 int hi = (sec == 'm') ? 60 : 15;
-                bool ok = n >= lo && n <= hi;
-                ImVec4 cc = ok ? ImGui::ColorConvertU32ToFloat4(C.textMuted)
-                               : ImVec4{0.95f, 0.45f, 0.40f, 1.f};
-                ImGui::SameLine(0.f, 10.f);
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextColored(cc, "%d / %d", n, hi);
+                char lbl2[48];
+                snprintf(lbl2, sizeof(lbl2), "%s:  %d", label, n);
+                hdl->AddText({hp.x + 10.f, hp.y + 5.f},
+                             (n >= lo && n <= hi)
+                                 ? C.textHi : IM_COL32(242, 115, 100, 255),
+                             lbl2);
+                ImVec2 rs = ImGui::CalcTextSize(rightInfo.c_str());
+                hdl->AddText({hp.x + hw - rs.x - 10.f, hp.y + 5.f},
+                             C.textMd, rightInfo.c_str());
             }
             if (ImGui::BeginDragDropTarget()) {
                 const ImGuiPayload* p = ImGui::AcceptDragDropPayload("DECK_CARD");
@@ -14547,6 +14570,14 @@ void UI::drawDeckBuilder(int w, int h) {
                             + (totalRows - 1) * TILE_PAD_Y;
 
             ImVec2 startScreen = ImGui::GetCursorScreenPos();
+            // Centre this section's grid in the panel (bars stay full
+            // width, like EdoPro's editor).
+            float gridW = perRow * TILE_W + (perRow - 1) * TILE_PAD_X;
+            ImVec2 gridOrigin = {
+                startScreen.x
+                    + std::floor(std::max(0.f, (availW - gridW) * 0.5f)),
+                startScreen.y
+            };
             // Reserve the entire grid up front so the parent's max-content
             // already covers every tile we'll place. Avoids ImGui's
             // "SetCursorScreenPos extending parent boundaries" warning.
@@ -14558,8 +14589,8 @@ void UI::drawDeckBuilder(int w, int h) {
                 int col_ = (int)(i % perRow);
                 int row_ = (int)(i / perRow);
                 ImVec2 tp = {
-                    startScreen.x + col_ * (TILE_W + TILE_PAD_X),
-                    startScreen.y + row_ * (TILE_H + TILE_PAD_Y)
+                    gridOrigin.x + col_ * (TILE_W + TILE_PAD_X),
+                    gridOrigin.y + row_ * (TILE_H + TILE_PAD_Y)
                 };
                 ImVec2 te = {tp.x + TILE_W, tp.y + TILE_H};
 
@@ -14722,14 +14753,17 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::Dummy({1.f, 6.f});
         };
 
-        drawSection("Main Deck",  'm', m_editDeck.main,  "mtile",
-                    mainCols,  mainW,  mainW  * kAspect);
+        drawSection("Deck",  'm', m_editDeck.main,  "mtile",
+                    mainCols,  mainW,  mainW  * kAspect,
+                    mstInfo(m_editDeck.main));
         ImGui::Dummy({1.f, 8.f});
-        drawSection("Extra Deck", 'e', m_editDeck.extra, "etile",
-                    extraCols, extraW, extraW * kAspect);
+        drawSection("Extra", 'e', m_editDeck.extra, "etile",
+                    extraCols, extraW, extraW * kAspect,
+                    extraInfo());
         ImGui::Dummy({1.f, 8.f});
-        drawSection("Side Deck",  's', m_editDeck.side,  "stile",
-                    sideCols,  sideW,  sideW  * kAspect);
+        drawSection("Side",  's', m_editDeck.side,  "stile",
+                    sideCols,  sideW,  sideW  * kAspect,
+                    mstInfo(m_editDeck.side));
 
         // Record the REAL non-grid overhead for next frame's fit: total
         // content height consumed minus the (known) scaled grid height.
@@ -14739,7 +14773,6 @@ void UI::drawDeckBuilder(int w, int h) {
             s_deckOverhead =
                 std::max(0.f, ImGui::GetCursorPosY() - gridS) + 4.f;
         }
-        if (inset > 0.f) ImGui::Unindent(inset);
 
         // ── Apply the pending drag-drop move now that all sections have
         //    rendered. Doing it post-iteration keeps vector iterators
