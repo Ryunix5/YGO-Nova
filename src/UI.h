@@ -113,6 +113,10 @@ private:
     void arcadeHostInvite();                     // locked room + fresh PIN
     void arcadeJoinInvite();                     // join via m_arcadeInviteBuf
     void sendArcadeSync();                       // campaign name + leaderboard
+    // End-of-cycle bookkeeping (win/loss/draw → points, restock, spin).
+    void arcadeRecordResult(bool won, bool draw);
+    void arcadeAutoRecord(bool won, bool draw);  // group duel ended: record+sync
+    bool m_arcadeAutoRecorded = false;           // hide manual result buttons
     // Post-duel rewards: winner spins a prize wheel, loser banks 5 wild pack
     // tokens. Wheel overlay state machine: 0 hidden, 1 spinning, 2 result up.
     int         m_arcadeWheelState = 0;

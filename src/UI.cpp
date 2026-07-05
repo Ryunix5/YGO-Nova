@@ -272,9 +272,10 @@ void UI::arcadeHostInvite() {
             sizeof(m_mpRoomPwBuf) - 1);
     m_mpRoomPwBuf[sizeof(m_mpRoomPwBuf) - 1] = '\0';
     m_arcade.save();
-    m_arcadeGroupDuel = true;
-    m_mpTransport     = 1;
-    m_screen          = Screen::Multiplayer;
+    m_arcadeGroupDuel     = true;
+    m_arcadeAutoRecorded  = false;   // fresh duel → fresh result
+    m_mpTransport         = 1;
+    m_screen              = Screen::Multiplayer;
     startRelayCreate();
 }
 
@@ -301,10 +302,11 @@ void UI::arcadeJoinInvite() {
     strncpy(m_mpRoomCodeBuf, code.c_str(), sizeof(m_mpRoomCodeBuf) - 1);
     m_mpRoomCodeBuf[sizeof(m_mpRoomCodeBuf) - 1] = '\0';
     if (m_arcadeLoaded) m_arcade.save();
-    m_arcadeGroupDuel = true;
+    m_arcadeGroupDuel    = true;
+    m_arcadeAutoRecorded = false;    // fresh duel → fresh result
     m_arcadeInvitePin.clear();
-    m_mpTransport     = 1;
-    m_screen          = Screen::Multiplayer;
+    m_mpTransport        = 1;
+    m_screen             = Screen::Multiplayer;
     startRelayJoin();
 }
 
@@ -327,6 +329,46 @@ void UI::sendArcadeSync() {
         edo::putU32(m.payload, (uint32_t)std::max(0, kv.second));
     }
     m_net.send(m);
+}
+
+// End a Master Saga cycle for the LOCAL player and persist it. Called by the
+// manual "I Won / I Lost" buttons AND automatically when a group duel ends —
+// the host-authoritative engine already knows the winner, so results don't
+// depend on both players remembering to press the right button. Draws: both
+// players bank the spin, nobody takes points.
+void UI::arcadeRecordResult(bool won, bool draw) {
+    if (!m_arcadeLoaded) return;
+    const std::string& self = m_settings.mpDisplayName;
+    m_arcade.board[self] += (won && !draw) ? 5 : 0;   // also ensures membership
+    if (!draw) (won ? m_arcade.wins : m_arcade.losses)++;
+    m_arcade.masterLeft = 10;
+    m_arcade.secretLeft = 10;
+    // Fresh cycle: keys AND the craftable-pack list reset. Wheel credits
+    // are spent on packs you unlock & open FROM NOW ON.
+    m_arcade.keys.clear();
+    m_arcade.openedKeys.clear();
+    m_arcadeSecretPick = 0;
+    m_arcadeCraftPick  = 0;
+    m_arcade.spins++;                    // winner AND loser spin
+    m_arcade.save();
+    m_arcadeWheelState = 0;              // wheel button lights up
+    gAudio().play("confirm");
+}
+
+// A GROUP duel just ended with an authoritative result: record the cycle,
+// flag the manual buttons off, and push the fresh leaderboard to the peer
+// while the room connection is still up.
+void UI::arcadeAutoRecord(bool won, bool draw) {
+    if (!m_arcadeGroupDuel || !m_arcadeLoaded) return;
+    arcadeRecordResult(won, draw);
+    m_arcadeAutoRecorded = true;
+    sendArcadeSync();
+    pushToast(draw ? "Master Saga: draw recorded — wheel spin banked"
+              : won ? "Master Saga: win recorded (+5 pts) — spin the wheel!"
+                    : "Master Saga: loss recorded — wheel spin banked",
+              IM_COL32(180, 220, 255, 255), 4.5);
+    m_dm.logEvent(std::string("[ARCADE] cycle auto-recorded: ") +
+                  (draw ? "draw" : won ? "win" : "loss"));
 }
 
 void UI::mpKickoffHandshake() {
@@ -1895,6 +1937,10 @@ void UI::handleGameOver(const edo::NetMessage& m) {
                   std::to_string(m_mpRemoteWinner) + "  reason=" +
                   std::to_string(m_mpRemoteReason) + "  localSeat=" +
                   std::to_string(me));
+    // Group duel: the result is authoritative — record the Master Saga
+    // cycle right here instead of trusting the honor-system buttons.
+    arcadeAutoRecord(won,
+                     m_mpRemoteWinner != 0 && m_mpRemoteWinner != 1);
 }
 
 // Client → host. The client has no authoritative engine, so it can't end the
@@ -2351,6 +2397,11 @@ void UI::pumpMultiplayer() {
             if (m_dm.isDone() && !m_mpGameOverSent) {
                 sendGameOver(m_dm.winner(), m_dm.winReason());
                 m_mpGameOverSent = true;
+                // Host side of the same auto-record the client does in
+                // handleGameOver (the host never receives its own GameOver).
+                int wseat = m_dm.winner();
+                arcadeAutoRecord(wseat == m_net.localPlayerIndex(),
+                                 wseat != 0 && wseat != 1);
             }
         }
         // Per-frame state log for the client — fires only once per
@@ -16962,6 +17013,7 @@ void UI::drawArcade(int w, int h) {
             if (UIStyle::PrimaryButton(lid, {96.f, 32.f})) {
                 if (m_arcade.load(nm)) {
                     m_arcadeLoaded = true;
+                    m_arcadeAutoRecorded = false;
                     m_arcadeReveal.clear();
                     m_arcadeRevealNew.clear();
                     m_arcadeView = m_arcade.pool.empty() ? 0 : 1;
@@ -17016,6 +17068,7 @@ void UI::drawArcade(int w, int h) {
                 m_arcade.board[m_settings.mpDisplayName] = 0;
                 m_arcade.save();
                 m_arcadeLoaded = true;
+                m_arcadeAutoRecorded = false;
                 m_arcadeReveal.clear();
                 m_arcadeRevealNew.clear();
                 m_arcadeView = 0;
@@ -17341,38 +17394,23 @@ void UI::drawArcade(int w, int h) {
             if (!canJoin) ImGui::EndDisabled();
         }
         ImGui::Dummy({1.f, 4.f});
-        // End of a cycle: BOTH players restock to 10/10, keys become the
-        // craft pool for the wheel rewards, and EVERYONE banks a spin.
-        // The winner additionally takes +5 leaderboard points.
-        {
-            auto endCycle = [&](bool won) {
-                const std::string& self = m_settings.mpDisplayName;
-                if (won) {
-                    m_arcade.wins++;
-                    m_arcade.board[self] += 5;
-                } else {
-                    m_arcade.losses++;
-                    m_arcade.board[self] += 0;   // ensure membership entry
-                }
-                m_arcade.masterLeft = 10;
-                m_arcade.secretLeft = 10;
-                // Fresh cycle: keys AND the craftable-pack list reset. Wheel
-                // credits are spent on packs you unlock & open FROM NOW ON.
-                m_arcade.keys.clear();
-                m_arcade.openedKeys.clear();
-                m_arcadeSecretPick  = 0;
-                m_arcadeCraftPick   = 0;
-                m_arcade.spins++;                    // winner AND loser spin
-                m_arcade.save();
-                m_arcadeWheelState = 0;   // wheel button below lights up
-                gAudio().play("confirm");
-            };
+        // End of a cycle. GROUP duels record themselves automatically when
+        // the duel ends (the engine knows the winner, both sides apply it
+        // and sync the leaderboard); the manual buttons stay for offline /
+        // in-person duels — and hide after an auto-record so nobody
+        // double-claims a cycle out of habit.
+        if (m_arcadeAutoRecorded) {
+            UIStyle::PushFont(UIStyle::fSmall);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.success),
+                "Last group duel was recorded automatically.");
+            UIStyle::PopFont();
+        } else {
             float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
             if (UIStyle::GhostButton("I Won  (+5 pts)", {half, 34.f}))
-                endCycle(true);
+                arcadeRecordResult(true, false);
             ImGui::SameLine(0.f, 8.f);
             if (UIStyle::GhostButton("I Lost", {half, 34.f}))
-                endCycle(false);
+                arcadeRecordResult(false, false);
         }
         if (m_arcade.spins > 0 && m_arcadeWheelState == 0) {
             char lbl[48];
