@@ -2,6 +2,53 @@
 
 All notable changes to YGO: Nova are documented here.
 
+## 1.0.5
+
+### Added — Arcade (Master Saga) overhaul
+- **Shared campaigns with invite codes** — "Invite Friend & Duel" creates a
+  PIN-locked room and one invite code (`ROOMC-PIN`); a friend pastes it (no
+  save needed on their side) and the campaign syncs to their machine
+  automatically. Joining makes you a permanent member.
+- **The cycle** — open 10 Master + 10 Secret Packs → duel → BOTH players
+  spin the prize wheel → winner +5 leaderboard points → repeat (packs
+  restock to 10/10; secret-pack keys reset each cycle).
+- **New wheel** — craft credits (1SR+1NR / 2SR+2NR / 1SR+3NR) or 5 bonus
+  Secret Packs. Old random-card/free-key rewards removed; token system
+  removed.
+- **Crafting** — spend wheel credits on exact cards from the secret packs
+  you unlock **and open** in the current cycle (new Craft tab).
+- **Leaderboard** — member points live in the save and merge whenever two
+  members connect; cycle-stage strip shows where the group is.
+
+### Added — Online
+- **Optional room passwords** — set one when hosting; locked rooms show a
+  padlock in the lobby and prompt joiners; Quick Match skips them.
+
+### Changed — Deck builder rework
+- EdoPro-style deck area: full-width section bars (Deck/Extra/Side counts +
+  Monster/Spell/Trap and Fusion/Xyz/Synchro/Link breakdowns), tight
+  full-art tiles (no plates/borders/copy badges), Extra/Side always one
+  row, everything fits on screen with no scrolling.
+- Master Duel-style search: results are a horizontal card-art grid;
+  double-click adds, right-click picks the section, drag places anywhere.
+- Format/banlist + per-deck sleeve moved into a top-bar "Format" popup;
+  unsaved/violation indicators moved into the Deck bar.
+- Wider deck column; deadbanded integer tile sizing (no jitter).
+
+### Changed — UI reorganisation
+- Solo setup: two-column modal (decks | rules + practice modes, each with
+  a one-line explainer).
+- Puzzles: card-style rows with difficulty stripe + BOARD BREAK / SOLVE IT
+  chips, double-click to play.
+
+### Fixed
+- **Crisp card text at small sizes** — mipmaps are now built gamma-correct
+  (linear-light) with a sharper LOD bias; downscaled card text no longer
+  looks pixelated. Anisotropic filtering raised to 8x.
+- Arcade "Invite Friend & Duel" no longer fails with relay error 10061
+  (empty relay-address buffer fell back to 127.0.0.1).
+- ImGui boundary assert in the online room's opponent panel.
+
 ## 1.0.4
 
 ### Fixed (image quality — the big one)
