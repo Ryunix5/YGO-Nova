@@ -17,32 +17,74 @@
 #  define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
 #endif
 
-// The app runs a CORE-profile 3.3 context (Game.cpp), where the legacy
-// GL_GENERATE_MIPMAP texparameter was REMOVED — setting it is ignored, so
-// textures ended up with a mipmap MIN filter but no mip levels: incomplete
-// sampling and the "blurry / low quality" card art testers reported. Core
-// mipmaps must be built with glGenerateMipmap (GL 3.0+), which the 1.1
-// Windows headers don't declare — load it once via wglGetProcAddress.
-typedef void (APIENTRY* PFNGLGENERATEMIPMAPPROC)(GLenum target);
-static PFNGLGENERATEMIPMAPPROC glGenerateMipmapPtr() {
-#if defined(_WIN32)
-    static PFNGLGENERATEMIPMAPPROC fn = []() -> PFNGLGENERATEMIPMAPPROC {
-        void* p = (void*)wglGetProcAddress("glGenerateMipmap");
-        // wglGetProcAddress returns small sentinel values on failure.
-        if (p == nullptr || p == (void*)1 || p == (void*)2 ||
-            p == (void*)3 || p == (void*)-1)
-            return nullptr;
-        return (PFNGLGENERATEMIPMAPPROC)p;
-    }();
-    return fn;
-#else
-    return nullptr;
+// (Mip levels are built on the CPU — see uploadGammaCorrectMips below — so
+// the old glGenerateMipmap loader is gone: uploading explicit levels with
+// glTexImage2D works on any GL version, core profile included.)
+#ifndef GL_TEXTURE_LOD_BIAS
+#  define GL_TEXTURE_LOD_BIAS 0x8501
 #endif
-}
 #include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <vector>
+
+// ── Gamma-correct mip chain ─────────────────────────────────────────────────
+// glGenerateMipmap box-averages RAW sRGB bytes; averaging in that non-linear
+// space systematically darkens and crunches high-frequency detail — exactly
+// the "pixelated card text" testers see on deck tiles. Building the chain
+// ourselves with a 2x2 box in LINEAR light keeps small text legible.
+static inline float srgbToLin(uint8_t v) {
+    static float lut[256];
+    static bool  init = false;
+    if (!init) {
+        for (int i = 0; i < 256; ++i) {
+            float f = i / 255.f;
+            lut[i] = (f <= 0.04045f) ? f / 12.92f
+                                     : std::pow((f + 0.055f) / 1.055f, 2.4f);
+        }
+        init = true;
+    }
+    return lut[v];
+}
+static inline uint8_t linToSrgb(float f) {
+    if (f <= 0.f) return 0;
+    if (f >= 1.f) return 255;
+    float s = (f <= 0.0031308f) ? f * 12.92f
+                                : 1.055f * std::pow(f, 1.f / 2.4f) - 0.055f;
+    return (uint8_t)(s * 255.f + 0.5f);
+}
+// Upload mip levels 1..N for the currently bound texture, halving each
+// step with a linear-light 2x2 box filter. Level 0 must already be set.
+static void uploadGammaCorrectMips(const unsigned char* level0, int w, int h) {
+    std::vector<uint8_t> prev(level0, level0 + (size_t)w * h * 4);
+    int pw = w, ph = h, level = 1;
+    while (pw > 1 || ph > 1) {
+        int nw = pw > 1 ? pw / 2 : 1;
+        int nh = ph > 1 ? ph / 2 : 1;
+        std::vector<uint8_t> next((size_t)nw * nh * 4);
+        for (int y = 0; y < nh; ++y) {
+            int y0 = 2 * y, y1 = (2 * y + 1 < ph) ? 2 * y + 1 : ph - 1;
+            for (int x = 0; x < nw; ++x) {
+                int x0 = 2 * x, x1 = (2 * x + 1 < pw) ? 2 * x + 1 : pw - 1;
+                const uint8_t* p00 = &prev[((size_t)y0 * pw + x0) * 4];
+                const uint8_t* p01 = &prev[((size_t)y0 * pw + x1) * 4];
+                const uint8_t* p10 = &prev[((size_t)y1 * pw + x0) * 4];
+                const uint8_t* p11 = &prev[((size_t)y1 * pw + x1) * 4];
+                uint8_t* dst = &next[((size_t)y * nw + x) * 4];
+                for (int c = 0; c < 3; ++c)
+                    dst[c] = linToSrgb((srgbToLin(p00[c]) + srgbToLin(p01[c]) +
+                                        srgbToLin(p10[c]) + srgbToLin(p11[c]))
+                                       * 0.25f);
+                dst[3] = (uint8_t)(((int)p00[3] + p01[3] + p10[3] + p11[3] + 2)
+                                   / 4);
+            }
+        }
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, nw, nh, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, next.data());
+        prev.swap(next);
+        pw = nw; ph = nh; ++level;
+    }
+}
 #include <filesystem>
 
 // stb_image — single header image loader
@@ -270,18 +312,15 @@ void* Renderer::loadTexture(const std::string& path, int* outW, int* outH) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-    // Build real mip levels (core-profile way) and filter trilinearly +
-    // anisotropically so card art stays crisp at every draw size. Without
-    // glGenerateMipmap we must NOT use a mipmap MIN filter — the texture
-    // would be incomplete — so fall back to plain linear.
-    if (auto genMips = glGenerateMipmapPtr()) {
-        genMips(GL_TEXTURE_2D);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                        GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8.0f);
-    } else {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    }
+    // Hand-built gamma-correct mip chain + trilinear + anisotropic, with a
+    // small negative LOD bias so sampling favours the sharper mip level —
+    // together these keep the tiny card text readable instead of the
+    // crunchy "pixelated" look glGenerateMipmap's sRGB box filter gives.
+    uploadGammaCorrectMips(data, w, h);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 8.0f);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.35f);
     stbi_image_free(data);
 
     return (void*)(uintptr_t)texID;
