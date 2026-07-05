@@ -1,7 +1,7 @@
 # 3.26 required for `cmake -E copy_directory_if_different` (incremental asset
 # copy — see the POST_BUILD step below).
 cmake_minimum_required(VERSION 3.26)
-project(EdoProPlus VERSION 1.0.4 LANGUAGES CXX C)
+project(EdoProPlus VERSION 1.0.5 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
