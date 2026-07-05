@@ -33,6 +33,13 @@ public:
     void setEnabled(bool on) { m_enabled.store(on); }
     bool enabled() const     { return m_enabled.load(); }
 
+    // Optional mirror chain: semicolon-separated "host[/path/]" entries
+    // (ASCII), tried IN ORDER before the built-in CDN. Lets users in regions
+    // where the default host is blocked point at any mirror without a
+    // rebuild. Passing a new value also re-arms previously Failed codes so
+    // they retry against the new chain. Thread-safe.
+    void setMirrors(const std::string& semicolonList);
+
     // Request a download of `code` to `destPath` (relative to the exe's cwd,
     // e.g. "assets/cards/12345.jpg"). No-op when disabled or when the code is
     // already in flight / done / failed. Thread-safe; returns immediately.
@@ -48,10 +55,13 @@ public:
 
 private:
     struct Job { uint32_t code; std::string dest; };
+    struct Endpoint { std::wstring host; std::wstring path; };
 
     void workerLoop();
-    // Platform HTTPS GET → file. Returns true on a 200 with bytes written.
-    static bool fetchToFile(uint32_t code, const std::string& dest);
+    // Try every endpoint in the chain (user mirrors, then the built-in CDN)
+    // until one returns a 200; write the body to `dest` atomically.
+    bool fetchToFile(uint32_t code, const std::string& dest);
+    std::vector<Endpoint> endpointChain();     // mirrors + built-in default
 
     std::atomic<bool> m_enabled{true};
     std::atomic<bool> m_running{false};
@@ -63,6 +73,7 @@ private:
     std::condition_variable             m_cv;
     std::deque<Job>                     m_queue;
     std::unordered_map<uint32_t, State> m_state;   // guarded by m_mx
+    std::vector<Endpoint>               m_mirrors; // guarded by m_mx
 
     std::atomic<int> m_inFlightCount{0};
     std::atomic<int> m_doneCount{0};

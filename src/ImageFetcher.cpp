@@ -31,6 +31,56 @@ static const wchar_t* kCdnPathPrefix = EDO_WIDEN(EDOPRO_IMAGE_CDN_PATH); // +<co
 
 ImageFetcher::~ImageFetcher() { stop(); }
 
+// Parse "host[/path/]" entries, ';' separated. Hostnames are ASCII, so a
+// naive widen is fine. A missing path means "same layout as the default
+// CDN" (mirrors are usually straight proxies of it).
+void ImageFetcher::setMirrors(const std::string& semicolonList) {
+    std::vector<Endpoint> parsed;
+    size_t pos = 0;
+    while (pos <= semicolonList.size()) {
+        size_t end = semicolonList.find(';', pos);
+        if (end == std::string::npos) end = semicolonList.size();
+        std::string entry = semicolonList.substr(pos, end - pos);
+        pos = end + 1;
+        // Trim spaces and a leading scheme if the user pasted a URL.
+        while (!entry.empty() && entry.front() == ' ') entry.erase(entry.begin());
+        while (!entry.empty() && entry.back()  == ' ') entry.pop_back();
+        if (entry.rfind("https://", 0) == 0) entry.erase(0, 8);
+        if (entry.rfind("http://",  0) == 0) entry.erase(0, 7);
+        if (entry.empty()) continue;
+        std::string host = entry, path = EDOPRO_IMAGE_CDN_PATH;
+        size_t slash = entry.find('/');
+        if (slash != std::string::npos) {
+            host = entry.substr(0, slash);
+            path = entry.substr(slash);
+            if (path.back() != '/') path += '/';
+        }
+        Endpoint ep;
+        ep.host.assign(host.begin(), host.end());
+        ep.path.assign(path.begin(), path.end());
+        parsed.push_back(std::move(ep));
+    }
+    std::lock_guard<std::mutex> lk(m_mx);
+    m_mirrors = std::move(parsed);
+    // A new chain deserves a fresh shot at everything that failed on the
+    // old one — re-arm Failed codes so the next view retries them.
+    for (auto& kv : m_state)
+        if (kv.second == State::Failed) kv.second = State::None;
+}
+
+// The chain a fetch walks: user mirrors first (their region may block the
+// default host — trying a dead host first would add a timeout per image),
+// then the built-in CDN.
+std::vector<ImageFetcher::Endpoint> ImageFetcher::endpointChain() {
+    std::vector<Endpoint> chain;
+    {
+        std::lock_guard<std::mutex> lk(m_mx);
+        chain = m_mirrors;
+    }
+    chain.push_back(Endpoint{ kCdnHost, kCdnPathPrefix });
+    return chain;
+}
+
 void ImageFetcher::start() {
     bool expected = false;
     if (!m_running.compare_exchange_strong(expected, true)) return;
@@ -99,17 +149,11 @@ void ImageFetcher::workerLoop() {
 }
 
 #ifdef _WIN32
-bool ImageFetcher::fetchToFile(uint32_t code, const std::string& dest) {
-    // Ensure the destination directory exists (release bundles omit
-    // assets/cards/ entirely, so it may be created here on first run).
-    try {
-        std::filesystem::path p(dest);
-        if (p.has_parent_path())
-            std::filesystem::create_directories(p.parent_path());
-    } catch (...) { /* fall through; the write below will report failure */ }
-
-    std::wstring path = std::wstring(kCdnPathPrefix) +
-                        std::to_wstring(code) + L".jpg";
+// One HTTPS GET from one host. Returns true on a 200 with a body.
+static bool fetchFromHost(const std::wstring& host,
+                          const std::wstring& pathPrefix,
+                          uint32_t code, std::vector<uint8_t>& body) {
+    std::wstring path = pathPrefix + std::to_wstring(code) + L".jpg";
 
     HINTERNET hSession = WinHttpOpen(L"EdoProPlus/1.0",
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
@@ -118,7 +162,7 @@ bool ImageFetcher::fetchToFile(uint32_t code, const std::string& dest) {
     // Reasonable timeouts so a stalled CDN can't wedge the worker.
     WinHttpSetTimeouts(hSession, 8000, 8000, 12000, 12000);
 
-    HINTERNET hConnect = WinHttpConnect(hSession, kCdnHost,
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(),
         INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
 
@@ -131,7 +175,7 @@ bool ImageFetcher::fetchToFile(uint32_t code, const std::string& dest) {
     }
 
     bool ok = false;
-    std::vector<uint8_t> body;
+    body.clear();
     if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
             WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, nullptr)) {
@@ -165,8 +209,25 @@ bool ImageFetcher::fetchToFile(uint32_t code, const std::string& dest) {
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
+    return ok && !body.empty();
+}
 
-    if (!ok || body.empty()) return false;
+bool ImageFetcher::fetchToFile(uint32_t code, const std::string& dest) {
+    // Ensure the destination directory exists (release bundles omit
+    // assets/cards/ entirely, so it may be created here on first run).
+    try {
+        std::filesystem::path p(dest);
+        if (p.has_parent_path())
+            std::filesystem::create_directories(p.parent_path());
+    } catch (...) { /* fall through; the write below will report failure */ }
+
+    // Walk the endpoint chain — user mirrors first, built-in CDN last —
+    // until any host serves the image.
+    std::vector<uint8_t> body;
+    bool ok = false;
+    for (const Endpoint& ep : endpointChain())
+        if (fetchFromHost(ep.host, ep.path, code, body)) { ok = true; break; }
+    if (!ok) return false;
 
     // Write atomically: temp file then rename, so a half-written image is
     // never observed by the renderer's loadTexture.

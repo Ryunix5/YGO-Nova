@@ -140,6 +140,9 @@ struct Settings {
     std::string mpDisplayName = "Player";
     std::string mpHostIP      = (EDOPRO_DEFAULT_RELAY[0] ? EDOPRO_DEFAULT_RELAY
                                                          : "127.0.0.1");
+    // Card-art mirror(s), "host[/path/]" ';' separated — tried BEFORE the
+    // built-in CDN. For regions where the default image host is blocked.
+    std::string imageMirror   = "";
     int         mpPort        = 7878;
     std::string mpMode        = "offline";
 
@@ -270,6 +273,7 @@ struct Settings {
         f << "cardSleeve="        << cardSleeve    << "\n";
         f << "fieldMat="          << fieldMat      << "\n";
         f << "mpHostIP="          << mpHostIP      << "\n";
+        f << "imageMirror="       << imageMirror   << "\n";
         f << "mpPort="            << mpPort        << "\n";
         f << "mpMode="            << mpMode        << "\n";
         f << "\n# Last-used decks\n";
@@ -344,6 +348,7 @@ private:
         else if (k == "cardSleeve")        cardSleeve        = v;
         else if (k == "fieldMat")          fieldMat          = v;
         else if (k == "mpHostIP")          mpHostIP          = v;
+        else if (k == "imageMirror")       imageMirror       = v;
         else if (k == "mpPort")            mpPort            = intFromStr(v, mpPort);
         else if (k == "mpMode")            mpMode            = v;
         else if (k == "lastDeckP1")        lastDeckP1        = v;

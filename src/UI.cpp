@@ -371,6 +371,39 @@ void UI::arcadeAutoRecord(bool won, bool draw) {
                   (draw ? "draw" : won ? "win" : "loss"));
 }
 
+// Whether the live duel's outcome is still open (host asks its engine,
+// the client asks the propagated GameOver latch).
+static bool arcadeDuelUndecided(bool isHost, bool dmDone, bool remoteDone) {
+    return isHost ? !dmDone : !remoteDone;
+}
+
+// The LOCAL player is abandoning a live group duel (leaving the duel screen
+// or dropping the connection). Group rule: quitting = losing. Runs BEFORE
+// the socket closes so the fresh leaderboard still reaches the peer.
+void UI::arcadeQuitGroupDuel() {
+    if (!m_arcadeGroupDuel || !m_arcadeLoaded) return;
+    if (!m_mpInDuel || m_arcadeAutoRecorded) return;
+    if (m_net.isOffline()) return;
+    if (!arcadeDuelUndecided(m_net.isHost(), m_dm.isDone(), m_mpRemoteDone))
+        return;                       // duel already ended → GameOver scored it
+    pushToast("Quitting a group duel counts as a loss",
+              IM_COL32(232, 110, 100, 255), 4.0);
+    arcadeAutoRecord(false, false);
+}
+
+// The PEER vanished mid-duel (Disconnect frame or the relay's RoomClosed).
+// Their forfeit is our win. Guarded by m_arcadeAutoRecorded so the two
+// signals arriving back-to-back only score once.
+void UI::arcadePeerQuitGroupDuel() {
+    if (!m_arcadeGroupDuel || !m_arcadeLoaded) return;
+    if (!m_mpInDuel || m_arcadeAutoRecorded) return;
+    if (!arcadeDuelUndecided(m_net.isHost(), m_dm.isDone(), m_mpRemoteDone))
+        return;
+    pushToast("Opponent quit — the duel is yours",
+              IM_COL32(110, 220, 140, 255), 4.0);
+    arcadeAutoRecord(true, false);
+}
+
 void UI::mpKickoffHandshake() {
     if (m_mpHandshakeSent) return;
     m_mpHandshakeSent = true;
@@ -593,6 +626,9 @@ void UI::resetMpResponseState() {
     m_mpRemoteDone   = false;
     m_mpRemoteWinner = -1;
     m_mpRemoteReason = -1;
+    // Every duel is a fresh Master Saga cycle — re-arm auto-recording
+    // (also brings the manual result buttons back after a rematch).
+    m_arcadeAutoRecorded = false;
 }
 
 // ── Source-of-truth helpers ───────────────────────────────────────────
@@ -2212,6 +2248,8 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
         m_dm.logEvent("[MULTI DISCONNECT] reason=" + reason);
         pushToast(std::string("Peer disconnected: ") + reason,
                   IM_COL32(232, 110, 100, 255), 3.0);
+        // Group duel: a mid-duel quit forfeits — score OUR win.
+        arcadePeerQuitGroupDuel();
         // Stay in the duel so the user can review state; the gate will
         // pause the engine because remote responses will never arrive.
         break;
@@ -2357,6 +2395,9 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
         m_dm.logEvent("[ONLINE] room closed: " + reason);
         pushToast("Opponent left: " + reason,
                   IM_COL32(232, 110, 100, 255), 4.0);
+        // Group duel: a mid-duel quit (even an app kill — the relay
+        // notices the dead socket) forfeits — score OUR win.
+        arcadePeerQuitGroupDuel();
         // If we were mid-duel this trips the same Connection Lost path as a
         // LAN disconnect; otherwise we just fall back to the lobby state.
         m_mpRemoteDeckRcvd = false;
@@ -2747,6 +2788,9 @@ void UI::loadSettings() {
     m_showLegalGlow   = m_settings.showLegalGlow;
     // Push the on-demand card-art download preference into the renderer.
     m_rend.setImageDownload(m_settings.downloadCardImages);
+    // User image mirror(s) — tried before the built-in CDN, for regions
+    // where the default host is blocked.
+    m_rend.setImageMirrors(m_settings.imageMirror);
     // Apply the saved card sleeve, if any (falls back silently to the default
     // card back when the file is missing).
     if (!m_settings.cardSleeve.empty())
@@ -5587,6 +5631,41 @@ void UI::drawLobby(int w, int h) {
             m_rend.setImageDownload(m_settings.downloadCardImages);
             saveSettings();
         }
+        if (m_settings.downloadCardImages) {
+            // Mirror override for regions where the default image host is
+            // blocked — tried BEFORE the built-in CDN. Applied on Enter /
+            // focus loss; also re-arms art that failed on the old chain.
+            ImGui::Indent(26.f);
+            ImGui::TextDisabled("Image mirror");
+            ImGui::SameLine(0.f, 8.f);
+            static char s_mirrorBuf[160];
+            static bool s_mirrorInit = false;
+            if (!s_mirrorInit) {
+                strncpy(s_mirrorBuf, m_settings.imageMirror.c_str(),
+                        sizeof(s_mirrorBuf) - 1);
+                s_mirrorBuf[sizeof(s_mirrorBuf) - 1] = '\0';
+                s_mirrorInit = true;
+            }
+            ImGui::SetNextItemWidth(340.f);
+            ImGui::InputTextWithHint("##imgmirror",
+                "(optional) host or host/path — e.g. img.example.com/cards/",
+                s_mirrorBuf, sizeof(s_mirrorBuf));
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                m_settings.imageMirror = s_mirrorBuf;
+                m_rend.setImageMirrors(m_settings.imageMirror);
+                saveSettings();
+                pushToast(m_settings.imageMirror.empty()
+                              ? "Image mirror cleared"
+                              : "Image mirror set — failed art will retry",
+                          IM_COL32(180, 220, 255, 255), 2.6);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "If card art doesn't load in your region, enter a mirror\n"
+                    "host here; it's tried before the default CDN. Several\n"
+                    "mirrors can be separated with ';'.");
+            ImGui::Unindent(26.f);
+        }
         savedToggle("Download missing card scripts at duel start",
                     &m_settings.downloadScripts);
         if (ImGui::IsItemHovered())
@@ -7217,6 +7296,7 @@ void UI::drawDuel(int w, int h) {
             finalizeReplay("returned to lobby");
             // Online: tear the MP session down so latches don't leak.
             if (!m_net.isOffline()) {
+                arcadeQuitGroupDuel();   // group rule: quitting = losing
                 m_mpInDuel = false;
                 m_dm.setSuppressAutoResolve(false);
                 resetMpResponseState();
@@ -8054,6 +8134,7 @@ void UI::drawDuel(int w, int h) {
             ImGui::SameLine(0.f, 6.f);
             if (UIStyle::DangerButton("Exit duel", {140.f, 30.f})) {
                 finalizeReplay("MP prompt sync exit");
+                arcadeQuitGroupDuel();   // group rule: quitting = losing
                 if (m_dm.isRunning()) m_dm.endDuel();
                 m_mpInDuel = false;
                 m_dm.setSuppressAutoResolve(false);
@@ -10301,6 +10382,7 @@ void UI::drawSelectionPanel(int pw, int ph) {
             // Online: tear the session down so we don't leak MP latches into
             // the next duel.
             if (isMp) {
+                arcadeQuitGroupDuel();   // group rule: quitting = losing
                 m_mpInDuel = false;
                 m_dm.setSuppressAutoResolve(false);
                 resetMpResponseState();
@@ -13189,6 +13271,7 @@ void UI::drawPauseMenu(int w, int h) {
         ImGui::Spacing();
         if (UIStyle::GhostButton("Quit to Lobby", {-1.f, 32.f})) {
             finalizeReplay("pause -> lobby");
+            if (!m_net.isOffline()) arcadeQuitGroupDuel();
             if (m_dm.isRunning()) m_dm.endDuel();
             if (!m_net.isOffline()) {
                 m_mpInDuel = false;
@@ -15422,6 +15505,7 @@ void UI::drawMultiplayer(int w, int h) {
                      C.borderSoft, 1.f);
         if (UIStyle::GhostButton("< Back", {110.f, 32.f})) {
             // Tear down any in-progress connection state on the way out.
+            arcadeQuitGroupDuel();       // group rule: quitting = losing
             if (!m_net.isOffline()) m_net.disconnect("user left screen");
             m_screen = Screen::Lobby;
             ImGui::End();
@@ -15821,6 +15905,7 @@ void UI::drawMultiplayer(int w, int h) {
         // ── Disconnect (shared) ─────────────────────────────────────────
         if (!m_net.isOffline()) {
             if (UIStyle::DangerButton("Disconnect", {-1.f, 34.f})) {
+                arcadeQuitGroupDuel();   // group rule: quitting = losing
                 m_net.disconnect("user requested");
                 m_settings.mpMode = "offline";
                 saveSettings();
@@ -16397,6 +16482,7 @@ void UI::drawRoomScreen(int w, int h, float topY) {
         ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8.f,
             ImGui::GetWindowContentRegionMax().x - wDisc));
         if (UIStyle::DangerButton("Disconnect", {wDisc, 30.f})) {
+            arcadeQuitGroupDuel();       // group rule: quitting = losing
             m_net.disconnect("user requested");
             m_settings.mpMode = "offline";
             saveSettings();

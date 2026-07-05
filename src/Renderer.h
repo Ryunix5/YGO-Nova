@@ -20,6 +20,8 @@ public:
         m_downloadImages = on;
         m_fetcher.setEnabled(on);
     }
+    // User mirror chain ("host[/path/];..."), tried before the built-in CDN.
+    void setImageMirrors(const std::string& s) { m_fetcher.setMirrors(s); }
     const edo::ImageFetcher& fetcher() const { return m_fetcher; }
 
     // Queue a card's art for background download to disk WITHOUT uploading a

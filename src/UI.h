@@ -116,6 +116,8 @@ private:
     // End-of-cycle bookkeeping (win/loss/draw → points, restock, spin).
     void arcadeRecordResult(bool won, bool draw);
     void arcadeAutoRecord(bool won, bool draw);  // group duel ended: record+sync
+    void arcadeQuitGroupDuel();                  // WE abandon a live duel: loss
+    void arcadePeerQuitGroupDuel();              // PEER vanished mid-duel: win
     bool m_arcadeAutoRecorded = false;           // hide manual result buttons
     // Post-duel rewards: winner spins a prize wheel, loser banks 5 wild pack
     // tokens. Wheel overlay state machine: 0 hidden, 1 spinning, 2 result up.
