@@ -13720,6 +13720,73 @@ void UI::drawDeckBuilder(int w, int h) {
         if (UIStyle::GhostButton("Stats", {62.f, 32.f}))
             m_consistencyOpen = true;
 
+        // Format popup — banlist + custom formats + per-deck sleeve. Lives
+        // up here so the deck panel below is pure card grid.
+        ImGui::SameLine(0.f, 6.f);
+        if (UIStyle::GhostButton("Format", {66.f, 32.f}))
+            ImGui::OpenPopup("##fmtpop");
+        if (ImGui::BeginPopup("##fmtpop")) {
+            ImGui::TextDisabled("Banlist");
+            const char* curBl = (m_selectedBanlist >= 0 &&
+                                 m_selectedBanlist < (int)m_banlists.size())
+                ? m_banlists[(size_t)m_selectedBanlist].name.c_str()
+                : "No banlist (3 each)";
+            ImGui::SetNextItemWidth(250.f);
+            if (ImGui::BeginCombo("##banlist", curBl)) {
+                if (ImGui::Selectable("No banlist (3 each)",
+                                      m_selectedBanlist < 0))
+                    m_selectedBanlist = -1;
+                for (int i = 0; i < (int)m_banlists.size(); ++i)
+                    if (ImGui::Selectable(m_banlists[(size_t)i].name.c_str(),
+                                          m_selectedBanlist == i))
+                        m_selectedBanlist = i;
+                ImGui::EndCombo();
+            }
+            if (UIStyle::GhostButton("New format##fmt", {122.f, 26.f}))
+                openBanlistEditor(false);
+            if (m_selectedBanlist >= 0) {
+                ImGui::SameLine(0.f, 6.f);
+                if (UIStyle::GhostButton("Edit##fmt", {122.f, 26.f}))
+                    openBanlistEditor(true);
+            }
+            ImGui::Dummy({1.f, 6.f});
+            ImGui::TextDisabled("Sleeve (this deck)");
+            {
+                std::string deckKey = (m_selDeckIdx >= 0 &&
+                                       m_selDeckIdx < (int)m_deckFiles.size())
+                    ? m_deckFiles[m_selDeckIdx]
+                    : (std::string(m_deckNameBuf) + ".ydk");
+                auto cur = m_deckSleeves.find(deckKey);
+                std::string curLbl = (cur != m_deckSleeves.end())
+                    ? cur->second : std::string("(global default)");
+                ImGui::SetNextItemWidth(250.f);
+                if (ImGui::BeginCombo("##decksleeve", curLbl.c_str())) {
+                    if (ImGui::Selectable("(global default)",
+                                          cur == m_deckSleeves.end())) {
+                        m_deckSleeves.erase(deckKey);
+                        saveDeckSleeves();
+                    }
+                    namespace fs = std::filesystem;
+                    std::error_code ec;
+                    if (fs::is_directory("assets/sleeves", ec))
+                        for (auto& e : fs::directory_iterator("assets/sleeves", ec)) {
+                            std::string ext = e.path().extension().string();
+                            for (char& ch : ext) ch = (char)tolower((unsigned char)ch);
+                            if (ext != ".png" && ext != ".jpg") continue;
+                            std::string s = e.path().filename().string();
+                            bool sel = (cur != m_deckSleeves.end() &&
+                                        cur->second == s);
+                            if (ImGui::Selectable(s.c_str(), sel)) {
+                                m_deckSleeves[deckKey] = s;
+                                saveDeckSleeves();
+                            }
+                        }
+                    ImGui::EndCombo();
+                }
+            }
+            ImGui::EndPopup();
+        }
+
         // Clipboard share — copy as .ydk text or a ydke:// URL, or paste either.
         ImGui::SameLine(0.f, 6.f);
         if (UIStyle::GhostButton("Copy", {52.f, 32.f}))
@@ -14161,81 +14228,8 @@ void UI::drawDeckBuilder(int w, int h) {
             ImGui::Dummy({1.f, 30.f});
         }
 
-        // Format / banlist selector — validates copies against the chosen list.
-        {
-            const char* cur = (m_selectedBanlist >= 0 &&
-                               m_selectedBanlist < (int)m_banlists.size())
-                ? m_banlists[(size_t)m_selectedBanlist].name.c_str()
-                : "No banlist (3 each)";
-            ImGui::TextDisabled("Format");
-            ImGui::SameLine(0.f, 8.f);
-            ImGui::SetNextItemWidth(220.f);
-            if (ImGui::BeginCombo("##banlist", cur)) {
-                if (ImGui::Selectable("No banlist (3 each)", m_selectedBanlist < 0))
-                    m_selectedBanlist = -1;
-                for (int i = 0; i < (int)m_banlists.size(); ++i)
-                    if (ImGui::Selectable(m_banlists[(size_t)i].name.c_str(),
-                                          m_selectedBanlist == i))
-                        m_selectedBanlist = i;
-                ImGui::EndCombo();
-            }
-            // New / Edit custom format buttons.
-            ImGui::SameLine(0.f, 6.f);
-            if (UIStyle::GhostButton("New##fmt", {56.f, 0.f}))
-                openBanlistEditor(false);
-            if (m_selectedBanlist >= 0) {
-                ImGui::SameLine(0.f, 4.f);
-                if (UIStyle::GhostButton("Edit##fmt", {56.f, 0.f}))
-                    openBanlistEditor(true);
-            }
-            // Legend for the per-card badges (only meaningful with a list).
-            if (m_selectedBanlist >= 0) {
-                ImGui::SameLine(0.f, 14.f);
-                ImGui::TextColored({0.92f, 0.30f, 0.25f, 1.f}, "(/) Forbidden");
-                ImGui::SameLine(0.f, 10.f);
-                ImGui::TextColored({0.92f, 0.40f, 0.30f, 1.f}, "1 Limited");
-                ImGui::SameLine(0.f, 10.f);
-                ImGui::TextColored({0.92f, 0.73f, 0.25f, 1.f}, "2 Semi");
-            }
-            // Per-deck sleeve — overrides the global Settings sleeve for THIS
-            // deck (applied when a duel starts with it).
-            {
-                std::string deckKey = (m_selDeckIdx >= 0 &&
-                                       m_selDeckIdx < (int)m_deckFiles.size())
-                    ? m_deckFiles[m_selDeckIdx]
-                    : (std::string(m_deckNameBuf) + ".ydk");
-                auto cur = m_deckSleeves.find(deckKey);
-                std::string curLbl = (cur != m_deckSleeves.end())
-                    ? cur->second : std::string("(global default)");
-                ImGui::SameLine(0.f, 14.f);
-                ImGui::TextDisabled("Sleeve");
-                ImGui::SameLine(0.f, 6.f);
-                ImGui::SetNextItemWidth(170.f);
-                if (ImGui::BeginCombo("##decksleeve", curLbl.c_str())) {
-                    if (ImGui::Selectable("(global default)",
-                                          cur == m_deckSleeves.end())) {
-                        m_deckSleeves.erase(deckKey);
-                        saveDeckSleeves();
-                    }
-                    namespace fs = std::filesystem;
-                    std::error_code ec;
-                    if (fs::is_directory("assets/sleeves", ec))
-                        for (auto& e : fs::directory_iterator("assets/sleeves", ec)) {
-                            std::string ext = e.path().extension().string();
-                            for (char& ch : ext) ch = (char)tolower((unsigned char)ch);
-                            if (ext != ".png" && ext != ".jpg") continue;
-                            std::string s = e.path().filename().string();
-                            bool sel = (cur != m_deckSleeves.end() &&
-                                        cur->second == s);
-                            if (ImGui::Selectable(s.c_str(), sel)) {
-                                m_deckSleeves[deckKey] = s;
-                                saveDeckSleeves();
-                            }
-                        }
-                    ImGui::EndCombo();
-                }
-            }
-        }
+        // (Format/banlist + sleeve moved to the top bar's Format popup —
+        // this panel is pure card grid so the tiles get every pixel.)
 
         // Validation (the section bars below carry the counts).
         bool errCopyLimit = false;
@@ -14258,55 +14252,8 @@ void UI::drawDeckBuilder(int w, int h) {
             std::sort(banViol.begin(), banViol.end());
         }
 
-        // Compact status line — only signals that AREN'T in the section
-        // bars: unsaved state, violations, missing DB, archetype readout.
-        {
-            UIStyle::PushFont(UIStyle::fSmall);
-            bool any = false;
-            auto sep = [&]() { if (any) ImGui::SameLine(0.f, 8.f); any = true; };
-            if (dirty) { sep(); UIStyle::StatusChip("Unsaved", C.warning); }
-            if (errCopyLimit) {
-                sep();
-                UIStyle::StatusChip(m_selectedBanlist >= 0
-                                        ? "Banlist violation"
-                                        : "Copy limit exceeded", C.danger);
-                if (ImGui::IsItemHovered() && !banViol.empty()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextDisabled("Over the limit:");
-                    for (auto& v : banViol) ImGui::TextUnformatted(v.c_str());
-                    ImGui::EndTooltip();
-                }
-            }
-            if (!m_db.isOpen()) { sep(); UIStyle::StatusChip("No card DB",
-                                                             C.danger); }
-            // Detected archetype(s) — cached by a cheap deck signature.
-            static uint64_t s_sig = ~0ull;
-            static std::vector<std::pair<std::string,int>> s_arch;
-            uint64_t sig = m_editDeck.main.size() * 1000003ull +
-                           m_editDeck.extra.size() * 1009ull +
-                           m_editDeck.side.size();
-            for (uint32_t c : m_editDeck.main)  sig = sig * 1315423911ull + c;
-            for (uint32_t c : m_editDeck.extra) sig = sig * 2654435761ull + c;
-            for (uint32_t c : m_editDeck.side)  sig = sig * 40503ull + c;
-            if (sig != s_sig) { s_sig = sig; s_arch = deckArchetypes(m_editDeck); }
-            if (!s_arch.empty()) {
-                std::string s = "Archetype: ";
-                for (size_t i = 0; i < s_arch.size() && i < 3; ++i) {
-                    if (i) s += " · ";
-                    s += s_arch[i].first + " (" +
-                         std::to_string(s_arch[i].second) + ")";
-                }
-                sep();
-                ImGui::AlignTextToFramePadding();
-                ImGui::PushStyleColor(ImGuiCol_Text,
-                    ImGui::ColorConvertU32ToFloat4(C.accentHi));
-                ImGui::TextUnformatted(s.c_str());
-                ImGui::PopStyleColor();
-            }
-            UIStyle::PopFont();
-            if (!any) ImGui::Dummy({1.f, 1.f});
-        }
-        ImGui::Dummy({1.f, 3.f});
+        // (No status rows either — unsaved/violation indicators live inside
+        // the Deck bar itself.)
 
         // ── Inner region for the three deck sections. NoScrollbar is
         //    load-bearing: an auto scrollbar shrinks the width, which
@@ -14470,6 +14417,31 @@ void UI::drawDeckBuilder(int w, int h) {
                              (n >= lo && n <= hi)
                                  ? C.textHi : IM_COL32(242, 115, 100, 255),
                              lbl2);
+                // Unsaved / violation indicators ride inside the Deck bar
+                // (their old status row above the grid is gone).
+                if (sec == 'm') {
+                    float lx2 = hp.x + 10.f
+                              + ImGui::CalcTextSize(lbl2).x + 16.f;
+                    if (dirty) {
+                        hdl->AddText({lx2, hp.y + 4.f},
+                                     IM_COL32(235, 185, 60, 255),
+                                     "• unsaved");
+                        lx2 += ImGui::CalcTextSize("• unsaved").x + 16.f;
+                    }
+                    if (errCopyLimit) {
+                        hdl->AddText({lx2, hp.y + 4.f},
+                                     IM_COL32(242, 115, 100, 255),
+                                     m_selectedBanlist >= 0
+                                         ? "banlist violation" : "copy limit");
+                        if (ImGui::IsItemHovered() && !banViol.empty()) {
+                            ImGui::BeginTooltip();
+                            ImGui::TextDisabled("Over the limit:");
+                            for (auto& v : banViol)
+                                ImGui::TextUnformatted(v.c_str());
+                            ImGui::EndTooltip();
+                        }
+                    }
+                }
                 ImVec2 rs = ImGui::CalcTextSize(rightInfo.c_str());
                 hdl->AddText({hp.x + hw - rs.x - 10.f, hp.y + 4.f},
                              C.textMd, rightInfo.c_str());
