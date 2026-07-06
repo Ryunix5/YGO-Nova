@@ -361,6 +361,13 @@ void NetSession::recvLoop() {
     struct timeval to{0, 50 * 1000};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
 #endif
+    // Heartbeat: the relay drops any socket that sends nothing for 45s, so a
+    // player thinking on their turn (or idle while the opponent plays) would
+    // be dropped mid-duel. Send a tiny Ping every 15s of silence; gameplay
+    // frames reset the timer, so active play never adds redundant pings.
+    auto lastSend = std::chrono::steady_clock::now();
+    const auto kHeartbeat = std::chrono::seconds(15);
+    auto markSent = [&]{ lastSend = std::chrono::steady_clock::now(); };
     while (!m_stop) {
         // Try to read one message; readExact / recvN may time out.
         uint8_t hdr[16];
@@ -373,7 +380,13 @@ void NetSession::recvLoop() {
             // Timeout? On most platforms recv with SO_RCVTIMEO returns
             // -1 with errno=EAGAIN/EWOULDBLOCK or WSAETIMEDOUT. We just
             // fall through, flush the outbox, and loop.
-            writeOutbox();
+            if (outboxSize() > 0) { writeOutbox(); markSent(); }
+            if (std::chrono::steady_clock::now() - lastSend >= kHeartbeat) {
+                NetMessage ping; ping.type = NetMsgType::Ping;
+                putU64(ping.payload, 0);
+                writeMessage(ping);
+                markSent();
+            }
             continue;
         }
         // We got SOME of the header — read the rest.

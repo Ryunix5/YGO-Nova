@@ -2232,7 +2232,11 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
         break;
     }
     case edo::NetMsgType::Chat: {
-        std::string txt = r.str();
+        // sendChatLine writes the message as RAW payload bytes (no length
+        // prefix), so read the whole payload — using r.str() here consumed
+        // the first 4 bytes as a bogus length and produced empty/garbled
+        // chat.
+        std::string txt(m.payload.begin(), m.payload.end());
         pushGameLog(std::string("<chat> ") + txt,
                     IM_COL32(180, 220, 255, 255));
         // Surface emotes / rematch requests as a toast so they're not missed.
@@ -7292,6 +7296,12 @@ void UI::drawDuel(int w, int h) {
         }
         ImGui::BeginDisabled();        // restore matching state for outer
     } else {
+        // These buttons must stay clickable even when the live UI is wrapped
+        // in BeginDisabled because it's the OPPONENT's turn (inputLocked) —
+        // otherwise the waiting player can neither concede nor leave. Punch
+        // through the disabled scope just for this cluster, like the replay
+        // branch does, and restore it right after.
+        if (inputLocked) ImGui::EndDisabled();
         if (UIStyle::GhostButton("Lobby##back", {kLobbyW, 28.f})) {
             finalizeReplay("returned to lobby");
             // Online: tear the MP session down so latches don't leak.
@@ -7304,6 +7314,7 @@ void UI::drawDuel(int w, int h) {
             }
             m_dm.endDuel();
             m_screen = Screen::Lobby;
+            if (inputLocked) ImGui::BeginDisabled();   // restore for outer
             ImGui::End();
             return;
         }
@@ -7314,7 +7325,9 @@ void UI::drawDuel(int w, int h) {
             if (UIStyle::GhostButton("Surrender##sr", {kSurrW, 28.f}))
                 ImGui::OpenPopup("Surrender?##srpop");
         }
-        // Confirm popup (positioned centrally; auto-sizes to content).
+        // Confirm popup (positioned centrally; auto-sizes to content). It
+        // stays inside the punched-through (enabled) scope so the confirm
+        // button works on the opponent's turn.
         ImGui::SetNextWindowPos({(float)w * 0.5f, (float)h * 0.5f},
                                 ImGuiCond_Always, {0.5f, 0.5f});
         if (ImGui::BeginPopupModal("Surrender?##srpop", nullptr,
@@ -7347,6 +7360,7 @@ void UI::drawDuel(int w, int h) {
                 ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
         }
+        if (inputLocked) ImGui::BeginDisabled();       // restore for outer
     }
 
     if (m_dm.isDone()) {
