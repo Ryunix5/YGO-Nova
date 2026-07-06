@@ -14217,7 +14217,10 @@ void UI::drawDeckBuilder(int w, int h) {
                 char addPop[40];
                 snprintf(addPop, sizeof(addPop), "##addpop_%u",
                          (unsigned)card.id);
-                ImGui::InvisibleButton(sid, {gTw, gTh});
+                // A plain click adds (Master Duel style); a press-and-drag
+                // becomes the drag source instead and InvisibleButton stays
+                // false, so the two never conflict.
+                bool clickAdd = ImGui::InvisibleButton(sid, {gTw, gTh});
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 void* tex = m_rend.getCardTexture(card.id);
                 if (tex) {
@@ -14264,11 +14267,11 @@ void UI::drawDeckBuilder(int w, int h) {
                     m_hoveredInfo = card;
                     m_deckHoverCode = card.id;
                     ImGui::SetTooltip(
-                        "%s\nDouble-click: add  •  Right-click: choose "
-                        "section  •  Drag: place", card.name.c_str());
-                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                        addCardTo(isExtra ? 'e' : 'm', card.id);
+                        "%s\nClick: add  •  Right-click: choose section  "
+                        "•  Drag: place", card.name.c_str());
                 }
+                if (clickAdd)
+                    addCardTo(isExtra ? 'e' : 'm', card.id);
                 if (rowHov && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                     ImGui::OpenPopup(addPop);
                 // Drag a search result straight into a deck section. Carries

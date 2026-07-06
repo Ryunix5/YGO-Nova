@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <mutex>
 #include <cstdint>
 #include "ocgapi_types.h"
 
@@ -94,6 +95,15 @@ private:
     std::vector<Database> m_dbs;        // [0] = primary, rest = fallbacks
     // "!system" strings from strings.conf, keyed by id.
     std::unordered_map<uint32_t, std::string> m_sysStrings;
+
+    // getCard() runs a SQLite query per call; the UI (deck builder, duel,
+    // arcade) calls it dozens of times PER FRAME for the same handful of
+    // codes, so results are memoised. The set of cards can't change while
+    // the app runs (databases are opened once), so a plain grow-only cache
+    // is safe; the mutex guards the rare off-UI-thread caller. Cleared by
+    // close().
+    mutable std::unordered_map<uint32_t, CardInfo> m_cardCache;
+    mutable std::mutex                             m_cacheMx;
 
     // Read a single card from one database handle (no fallback).
     CardInfo readOne(void* handle, uint32_t code) const;

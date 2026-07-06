@@ -44,6 +44,8 @@ void CardDB::close() {
     for (auto& db : m_dbs)
         if (db.handle) sqlite3_close((sqlite3*)db.handle);
     m_dbs.clear();
+    std::lock_guard<std::mutex> lk(m_cacheMx);
+    m_cardCache.clear();
 }
 
 bool CardDB::open(const std::string& path) {
@@ -84,6 +86,12 @@ bool CardDB::addDatabase(const std::string& path) {
         return false;
     }
     m_dbs.push_back({ (void*)h, abs });
+    // A new fallback can resolve codes that were cached as misses — drop
+    // the cache so those look-ups re-run against the fuller set.
+    {
+        std::lock_guard<std::mutex> lk(m_cacheMx);
+        m_cardCache.clear();
+    }
     return true;
 }
 
@@ -200,11 +208,21 @@ CardInfo CardDB::readOne(void* handle, uint32_t code) const {
 }
 
 CardInfo CardDB::getCard(uint32_t code) const {
+    {
+        std::lock_guard<std::mutex> lk(m_cacheMx);
+        auto it = m_cardCache.find(code);
+        if (it != m_cardCache.end()) return it->second;
+    }
+    CardInfo found;
     for (const auto& db : m_dbs) {
         CardInfo ci = readOne(db.handle, code);
-        if (ci.id != 0) { ci.source = db.path; return ci; }
+        if (ci.id != 0) { ci.source = db.path; found = std::move(ci); break; }
     }
-    return CardInfo{};
+    // Cache hits AND misses (found.id == 0) — a missing code is a stable
+    // fact too, so repeated lookups of an unknown card stay free.
+    std::lock_guard<std::mutex> lk(m_cacheMx);
+    m_cardCache[code] = found;
+    return found;
 }
 
 std::unordered_map<uint32_t, uint64_t> CardDB::allSetcodes() const {
