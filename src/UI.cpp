@@ -18073,6 +18073,10 @@ void UI::drawArcade(int w, int h) {
             struct Entry { uint32_t code; int cnt; int rar; std::string name; };
             static std::vector<Entry> s_entries;
             static size_t s_sig = 0;
+            static int    s_sortMode = 0;   // 0 rarity · 1 name · 2 copies
+            static int    s_sortedSort = -1;
+            static size_t s_sortedSig  = ~0u;
+            static char   s_collSearch[48] = {};
             size_t sig = m_arcade.pool.size() * 131071u
                        + (size_t)m_arcade.poolTotal();
             if (sig != s_sig) {
@@ -18084,12 +18088,52 @@ void UI::drawArcade(int w, int h) {
                     s_entries.push_back({kv.first, kv.second, r,
                                          m_db.getCard(kv.first).name});
                 }
+            }
+            // (Re)sort when the pool or the sort mode changes.
+            if (s_sortedSig != sig || s_sortedSort != s_sortMode) {
+                s_sortedSig = sig; s_sortedSort = s_sortMode;
                 std::sort(s_entries.begin(), s_entries.end(),
                           [](const Entry& a, const Entry& b) {
+                              if (s_sortMode == 1)          // Name A-Z
+                                  return a.name < b.name;
+                              if (s_sortMode == 2) {        // Most copies
+                                  if (a.cnt != b.cnt) return a.cnt > b.cnt;
+                                  return a.name < b.name;
+                              }
                               if (a.rar != b.rar) return a.rar > b.rar;
-                              return a.name < b.name;
+                              return a.name < b.name;       // Rarity (default)
                           });
             }
+            const bool grouped = (s_sortMode == 0);   // rarity headers only
+            // ── Search + sort row ────────────────────────────────────────
+            {
+                ImGui::SetNextItemWidth(220.f);
+                UIStyle::SearchInput("##collsearch", s_collSearch,
+                                     sizeof(s_collSearch),
+                                     "Search your collection...", 220.f);
+                ImGui::SameLine(0.f, 10.f);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Sort");
+                ImGui::SameLine(0.f, 6.f);
+                const char* kSort[] = {"Rarity", "Name A-Z", "Most copies"};
+                ImGui::SetNextItemWidth(140.f);
+                if (ImGui::BeginCombo("##collsort", kSort[s_sortMode])) {
+                    for (int i = 0; i < 3; ++i)
+                        if (ImGui::Selectable(kSort[i], s_sortMode == i))
+                            s_sortMode = i;
+                    ImGui::EndCombo();
+                }
+            }
+            // Lower-cased search query, matched against name + code.
+            std::string cq = s_collSearch;
+            for (char& ch : cq) ch = (char)std::tolower((unsigned char)ch);
+            auto matchesSearch = [&](const Entry& e) {
+                if (cq.empty()) return true;
+                std::string lc = e.name + "#" + std::to_string(e.code);
+                for (char& ch : lc) ch = (char)std::tolower((unsigned char)ch);
+                return lc.find(cq) != std::string::npos;
+            };
+            ImGui::Dummy({1.f, 4.f});
             // Filter chips (ALL + one per rarity, with owned totals).
             static int s_collFilter = -1;      // -1 = all, else rarity 0..3
             {
@@ -18128,8 +18172,10 @@ void UI::drawArcade(int w, int h) {
                 int col = 0, lastRar = -2, shown = 0;
                 for (const Entry& e : s_entries) {
                     if (s_collFilter >= 0 && e.rar != s_collFilter) continue;
-                    // Rarity group header whenever the tier changes.
-                    if (e.rar != lastRar) {
+                    if (!matchesSearch(e)) continue;
+                    // Rarity group header whenever the tier changes — only
+                    // when sorting by rarity (grouped); flat grid otherwise.
+                    if (grouped && e.rar != lastRar) {
                         lastRar = e.rar;
                         col = 0;
                         int uniq = 0;
@@ -18187,8 +18233,9 @@ void UI::drawArcade(int w, int h) {
                     ++shown;
                 }
                 if (!shown)
-                    UIStyle::EmptyState(availH - 60.f, "None of that rarity",
-                                        "Keep opening packs");
+                    UIStyle::EmptyState(availH - 60.f, "No matching cards",
+                                        cq.empty() ? "Keep opening packs"
+                                                   : "Try a different search");
             }
             ImGui::EndChild();
         }
