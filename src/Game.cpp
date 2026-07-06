@@ -334,6 +334,7 @@ void Game::run() {
         }
 
         // ── ImGui frame ───────────────────────────────────────────────────────
+        m_rend.newFrame();          // reset the per-frame texture-load budget
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();

@@ -15,6 +15,14 @@ public:
     void init();
     void shutdown();
 
+    // Call once at the start of each frame. Resets the per-frame budget for
+    // NEW card-texture decodes+uploads: building a full gamma-correct mip
+    // chain for an 813x1185 image is a few ms of CPU, so when a whole deck
+    // or board appears at once, doing them all in one frame is a visible
+    // hitch. The budget spreads a batch over a handful of frames (cards
+    // pop in over ~0.1s instead) with no quality loss.
+    void newFrame() { m_texBudgetLeft = kTexBudgetPerFrame; }
+
     // Toggle on-demand card-image downloading (off = local files only).
     void setImageDownload(bool on) {
         m_downloadImages = on;
@@ -64,4 +72,8 @@ private:
 
     edo::ImageFetcher m_fetcher;       // on-demand card-art downloader
     bool  m_downloadImages = true;     // mirror of m_fetcher.enabled()
+
+    // Per-frame cap on brand-new texture decodes (see newFrame()).
+    static constexpr int kTexBudgetPerFrame = 5;
+    int   m_texBudgetLeft = kTexBudgetPerFrame;
 };

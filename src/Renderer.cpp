@@ -47,11 +47,26 @@ static inline float srgbToLin(uint8_t v) {
     return lut[v];
 }
 static inline uint8_t linToSrgb(float f) {
+    // LUT over quantised linear [0,1] → sRGB byte. Removes the per-pixel
+    // pow() from the mip inner loop (the dominant cost of the gamma-correct
+    // chain); 4096 steps is visually identical to the exact curve. Built on
+    // first use; loadTexture only runs on the GL/main thread, so no race.
+    static uint8_t lut[4097];
+    static bool init = false;
+    if (!init) {
+        for (int i = 0; i <= 4096; ++i) {
+            float x = (float)i / 4096.f;
+            float s = (x <= 0.0031308f) ? x * 12.92f
+                                        : 1.055f * std::pow(x, 1.f / 2.4f)
+                                          - 0.055f;
+            int v = (int)(s * 255.f + 0.5f);
+            lut[i] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+        }
+        init = true;
+    }
     if (f <= 0.f) return 0;
     if (f >= 1.f) return 255;
-    float s = (f <= 0.0031308f) ? f * 12.92f
-                                : 1.055f * std::pow(f, 1.f / 2.4f) - 0.055f;
-    return (uint8_t)(s * 255.f + 0.5f);
+    return lut[(int)(f * 4096.f + 0.5f)];
 }
 // Upload mip levels 1..N for the currently bound texture, halving each
 // step with a linear-light 2x2 box filter. Level 0 must already be set.
@@ -247,6 +262,15 @@ void* Renderer::getCardTexture(uint32_t code) {
         m_fetcher.state(code) == edo::ImageFetcher::State::InFlight)
         return m_unknownTex;
 
+    // Per-frame decode budget: a fresh decode + gamma mip build is a few ms,
+    // so cap how many NEW cards we upload per frame. When it's spent, return
+    // the placeholder WITHOUT caching — the next frame retries — so a whole
+    // deck/board spreads its loads over a handful of frames instead of one
+    // long hitch. Already-cached cards above never reach here, so scrolling a
+    // loaded collection stays free.
+    if (m_texBudgetLeft <= 0)
+        return m_unknownTex;
+
     // Try local files (bundled art, or a previously cached download).
     int w = 0, h = 0;
     void* tex = loadTexture(jpg, &w, &h);
@@ -254,6 +278,7 @@ void* Renderer::getCardTexture(uint32_t code) {
         tex = loadTexture("assets/cards/" + std::to_string(code) + ".png",
                           &w, &h);
     if (tex) {
+        --m_texBudgetLeft;         // only a real decode spends the budget
         // Old bundled packs shipped 177x254 thumbnails — too small for the
         // preview panel and hand. Kick a full-size re-download (the CDN serves
         // 813x1185); the texture swaps in the moment it lands.
