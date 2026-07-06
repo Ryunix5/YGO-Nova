@@ -12514,6 +12514,44 @@ void UI::drawDeckConsistency() {
             ImGui::SameLine(0.f, 6.f);
             if (UIStyle::GhostButton("Redraw", {90.f, 26.f}))
                 drawSampleHand((int)m_sampleHand.size());
+            // Play this exact opening out: reorder the deck so the sampled
+            // hand is on top, then run a no-shuffle goldfish (passive
+            // opponent, you go first) — the engine draws precisely this hand
+            // and you can test the line for real. Bricks a full 40 into the
+            // deck order behind the hand, so later draws are still random-ish.
+            ImGui::SameLine(0.f, 6.f);
+            bool canPlay = m_editDeck.main.size() >= 40 && m_db.isOpen();
+            if (!canPlay) ImGui::BeginDisabled();
+            if (UIStyle::PrimaryButton("Play this opening", {150.f, 26.f})) {
+                Deck d = m_editDeck;
+                std::vector<uint32_t> rest = d.main, top;
+                for (uint32_t c : m_sampleHand) {
+                    auto it = std::find(rest.begin(), rest.end(), c);
+                    if (it != rest.end()) { top.push_back(c); rest.erase(it); }
+                }
+                top.insert(top.end(), rest.begin(), rest.end());
+                d.main = top;
+                const std::string tmp = "assets/decks/.sample_open.ydk";
+                saveYdk(d, tmp);
+                m_dm.setNoShuffle(true);       // draw top-down = exactly this hand
+                m_dm.setPassiveAI(true);       // goldfish — opponent just passes
+                m_forceHumanFirstOnce = true;  // you take turn 1
+                if (startOfflineDuelWithCoinToss(
+                        tmp, tmp, 8000u, (uint32_t)m_sampleHand.size(), 1u)) {
+                    m_screen = Screen::Duel;
+                    gAudio().play("duel_start");
+                    pushToast("Goldfish — play out this opening",
+                              IM_COL32(110, 220, 140, 255), 3.0);
+                    ImGui::CloseCurrentPopup();
+                } else {
+                    gAudio().play("error");
+                    pushToast("Couldn't start — check the deck is legal",
+                              IM_COL32(232, 110, 100, 255), 2.6);
+                }
+            }
+            if (!canPlay) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered() && !canPlay)
+                ImGui::SetTooltip("Need a 40+ card main deck");
         }
         if (m_sampleHand.empty()) {
             ImGui::TextDisabled("Draw a random opening hand to feel the deck.");
