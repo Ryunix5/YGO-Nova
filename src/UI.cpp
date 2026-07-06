@@ -6910,8 +6910,19 @@ void UI::drawDuel(int w, int h) {
                 return ImVec2{(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f}; };
             if (loc == LOC_GY)   { *out = mid(m_rectGY_tl[con], m_rectGY_br[con]); return true; }
             if (loc == LOC_REM)  { *out = mid(m_rectBN_tl[con], m_rectBN_br[con]); return true; }
-            if (loc == LOC_DECK || loc == LOC_HAND)
-                                 { *out = mid(m_rectDeck_tl[con], m_rectDeck_br[con]); return true; }
+            if (loc == LOC_DECK) { *out = mid(m_rectDeck_tl[con], m_rectDeck_br[con]); return true; }
+            if (loc == LOC_HAND) {
+                // Hand activations (Spells / hand traps) have no field tile.
+                // Previously they fell back to the deck pile in the screen
+                // corner, which clipped the card name off-screen — so all
+                // you saw was a stray "CHAIN 1" stuck to the deck. Pop them
+                // in the middle of the board on the OWNER's side instead, so
+                // the activated card's name is centred and readable.
+                *out = { (float)w * 0.5f,
+                         (con == (uint8_t)m_dm.humanSeat()) ? (float)h * 0.60f
+                                                            : (float)h * 0.40f };
+                return true;
+            }
             return false;
         };
         // Short "intent verb" derived from a card's effect text, so the chain
