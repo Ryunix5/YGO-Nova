@@ -119,6 +119,12 @@ struct Settings {
     // quickly. Zero-option response windows already auto-pass in the engine, so
     // this never skips a real decision — purely timing. Toggle in-duel too.
     bool   fastTurns          = false;
+    // Auto-pass empty phases (offline): when it's your turn and a Main /
+    // Battle phase offers NO card actions (nothing to summon/activate/
+    // attack), auto-advance one phase so you don't click through dead
+    // phases. It stops the instant any real play appears, so it can't skip
+    // an intended move. Default off; toggle in Settings / the bottom bar.
+    bool   autoPassEmpty      = false;
 
     // ── Replays ──────────────────────────────────────────────────────────
     // Auto-save a JSON replay to assets/replays/ when the duel ends. On by
@@ -266,6 +272,7 @@ struct Settings {
         f << "discordPresence="    << (discordPresence    ? "1" : "0") << "\n";
         f << "discordClientId="    << discordClientId                  << "\n";
         f << "fastTurns="          << (fastTurns          ? "1" : "0") << "\n";
+        f << "autoPassEmpty="      << (autoPassEmpty      ? "1" : "0") << "\n";
         f << "\n# Replays\n";
         f << "autoSaveReplays="   << (autoSaveReplays   ? "1" : "0") << "\n";
         f << "\n# Multiplayer\n";
@@ -343,6 +350,7 @@ private:
         else if (k == "discordPresence")   discordPresence    = boolFromStr(v);
         else if (k == "discordClientId")   discordClientId    = v;
         else if (k == "fastTurns")         fastTurns          = boolFromStr(v);
+        else if (k == "autoPassEmpty")     autoPassEmpty      = boolFromStr(v);
         else if (k == "autoSaveReplays")   autoSaveReplays   = boolFromStr(v);
         else if (k == "mpDisplayName")     mpDisplayName     = v;
         else if (k == "cardSleeve")        cardSleeve        = v;

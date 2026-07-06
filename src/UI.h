@@ -752,6 +752,7 @@ private:
     // OFFLINE-only — it can't work with the host-authoritative model.
     bool        m_mpSandbox        = false;
     bool        m_mpSandboxHostReq = false;   // host UI toggle before start
+    double      m_lastAutoPass     = 0.0;     // cooldown for auto-pass empty phases
     // Suppression flag — set true while we're feeding bytes received
     // FROM the network, so the recorder hook doesn't echo them back.
     bool        m_mpFeedingRemote  = false;

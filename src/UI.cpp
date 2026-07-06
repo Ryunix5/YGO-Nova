@@ -5641,6 +5641,8 @@ void UI::drawLobby(int w, int h) {
                     &m_settings.coinTossEnabled);
         savedToggle("Fast turns (skip the pause between phases)",
                     &m_settings.fastTurns);
+        savedToggle("Auto-pass empty phases (offline — nothing to do → advance)",
+                    &m_settings.autoPassEmpty);
         if (ImGui::Checkbox("Download missing card art on demand",
                             &m_settings.downloadCardImages)) {
             m_rend.setImageDownload(m_settings.downloadCardImages);
@@ -6872,7 +6874,7 @@ void UI::drawDuel(int w, int h) {
                 // Brief flash on attacker tile + beam + impact ring/pulse.
                 ImU32 col = ev.direct ? kColDirect : kColAtk;
                 m_anim.zoneFlash(aTl, aBr, col, 0.35);
-                m_anim.beam(aCtr, tCtr, col, 0.35);
+                m_anim.beam(aCtr, tCtr, col, 0.6);   // arrow lingers to read
                 m_anim.ring(tCtr, ev.direct ? 56.f : 40.f, col, 0.55);
                 m_anim.pulse(tCtr, ev.direct ? 30.f : 24.f, col, 0.40);
 
@@ -7279,6 +7281,30 @@ void UI::drawDuel(int w, int h) {
                           psel.player == kLocalPhase;
     const bool myBattle = psel.type == WaitType::SelectBattleCmd &&
                           psel.player == kLocalPhase;
+
+    // ── Auto-pass empty phases (offline, opt-in) ─────────────────────────
+    // When it's your turn and the current Main / Battle phase offers NO card
+    // actions (psel.idle empty = nothing to summon/activate/attack), advance
+    // one phase automatically so you don't click through dead phases. It
+    // fires only when there is genuinely nothing to do, so an intended play
+    // is never skipped — the moment any action becomes available psel.idle
+    // is non-empty and this stops. A short cooldown keeps it visible and
+    // one-step-at-a-time (M1 → BP → M2 → End), giving triggers their windows.
+    if (m_settings.autoPassEmpty && m_net.isOffline() && !m_replayMode &&
+        !m_puzzleMode && !m_dm.isDone() && (myIdle || myBattle) &&
+        psel.idle.empty()) {
+        double now = ImGui::GetTime();
+        if (now - m_lastAutoPass > 0.45) {
+            m_lastAutoPass = now;
+            if (myIdle) {
+                if      (psel.toBP) submitIdleCmd(6, 0, "Battle Phase (auto)");
+                else if (psel.toEP) submitIdleCmd(7, 0, "End Turn (auto)");
+            } else { // battle phase, no attackers
+                if      (psel.toM2) submitIdleCmd(2, 0, "Main Phase 2 (auto)");
+                else if (psel.toEP) submitIdleCmd(3, 0, "End Turn (auto)");
+            }
+        }
+    }
     for (int pi = 0; pi < 6; ++pi) {
         bool active = phasesLive && (f.phase == kPhases[pi].ph);
         uint16_t ph = kPhases[pi].ph;
@@ -11455,6 +11481,16 @@ void UI::drawBottomActionStrip(int /*w*/, float /*h*/) {
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Skip the pause between phases");
+            // Auto-pass toggle — advance dead phases with no plays.
+            ImGui::SameLine(0.f, 4.f);
+            if (UIStyle::GhostButton(m_settings.autoPassEmpty ? "Auto*##autop"
+                                                              : "Auto##autop",
+                                     {kGhostW, 30.f})) {
+                m_settings.autoPassEmpty = !m_settings.autoPassEmpty;
+                saveSettings();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Auto-pass phases where you have no plays");
             // Undo — rewind to your last decision (offline practice).
             ImGui::SameLine(0.f, 4.f);
             bool canUndo = testingRewindAvailable() && m_timeline.applied() > 0;

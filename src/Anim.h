@@ -279,11 +279,29 @@ public:
             }
             case Anim::Beam: {
                 ImU32 col = withAlpha(it.color, (unsigned)(255 * a));
-                float thick = 4.0f * a + 0.8f;
+                float thick = 4.5f * a + 1.2f;
+                // Faint wide underlay so the shaft reads on a busy board.
+                dl->AddLine(it.a, it.b,
+                            withAlpha(it.color, (unsigned)(70 * a)),
+                            thick + 4.f);
                 dl->AddLine(it.a, it.b, col, thick);
-                // Tiny pulse blob at the impact end.
-                dl->AddCircleFilled(it.b, 6.0f * a + 2.0f,
-                                    withAlpha(it.color, (unsigned)(180 * a)), 16);
+                // Directional arrowhead at the impact end — turns the beam
+                // into a clear "X attacks Y" strike, not just a flash.
+                float dx = it.b.x - it.a.x, dy = it.b.y - it.a.y;
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len > 1.f) {
+                    dx /= len; dy /= len;
+                    float nx = -dy, ny = dx;          // perpendicular
+                    float hl = 20.f * a + 7.f;        // head length
+                    float hw = 10.f * a + 3.5f;       // head half-width
+                    ImVec2 base{ it.b.x - dx * hl, it.b.y - dy * hl };
+                    ImVec2 p1{ base.x + nx * hw, base.y + ny * hw };
+                    ImVec2 p2{ base.x - nx * hw, base.y - ny * hw };
+                    dl->AddTriangleFilled(it.b, p1, p2, col);
+                } else {
+                    dl->AddCircleFilled(it.b, 6.0f * a + 2.0f,
+                        withAlpha(it.color, (unsigned)(180 * a)), 16);
+                }
                 break;
             }
             case Anim::LPFlash:
