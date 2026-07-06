@@ -450,6 +450,10 @@ void UI::sendMpStartDuel() {
     };
     putDeck(m.payload, p1);
     putDeck(m.payload, p2);
+    // Sandbox flag, appended last so it stays wire-compatible (an older
+    // client just never reads it → treats the duel as normal).
+    m_mpSandbox = m_mpSandboxHostReq;
+    edo::putU8(m.payload, m_mpSandbox ? 1 : 0);
     m_net.send(m);
     // Helper: short fingerprint of the first 5 card codes so the operator
     // can eyeball that both peers agree on each deck.
@@ -2101,6 +2105,13 @@ void UI::handleNetMessage(const edo::NetMessage& m) {
                       IM_COL32(232, 110, 100, 255), 3.0);
             break;
         }
+        // Trailing sandbox flag (older host → r.u8() past the end sets
+        // r.ok=false but the decks already parsed, so treat as normal).
+        uint8_t sbx = r.u8();
+        m_mpSandbox = r.ok && sbx != 0;
+        if (m_mpSandbox)
+            pushToast("Sandbox match — the host can freely edit the board",
+                      IM_COL32(180, 220, 255, 255), 4.0);
         auto first5c = [](const Deck& d) {
             std::string s;
             for (size_t i = 0; i < d.main.size() && i < 5; ++i) {
@@ -12242,11 +12253,21 @@ void UI::drawTestingBar(int /*w*/) {
             UIStyle::DrawDivider(6.f, 6.f);
             drawTestingTimeline();
         }
+    }   // end offline-only Practice block (Restart / rewind / timeline)
 
-        // ── Add card to hand (running offline duel, not puzzle/replay) ────
-        if (m_dm.isRunning() && !m_replayMode && !m_puzzleMode) {
+    // ── Add card to hand ─────────────────────────────────────────────────
+    // Offline practice OR an online HOST sandbox match. The host owns the
+    // authoritative engine, so an added card snapshots to the client like
+    // any other board change — the client watches. NEVER available to the
+    // client or in a normal (non-sandbox) online duel.
+    {
+        bool sandboxHost = !m_net.isOffline() && m_net.isHost() &&
+                           m_mpSandbox && m_mpInDuel;
+        if ((m_net.isOffline() || sandboxHost) &&
+            m_dm.isRunning() && !m_replayMode && !m_puzzleMode) {
             UIStyle::DrawDivider(6.f, 6.f);
-            UIStyle::Subtle("Add card to hand");
+            UIStyle::Subtle(sandboxHost ? "Sandbox — add card to hand"
+                                        : "Add card to hand");
             ImGui::SetNextItemWidth(-1.f);
             if (ImGui::InputTextWithHint("##addhand", "Search name or code...",
                     m_testHandSearch, sizeof(m_testHandSearch))) {
@@ -16804,10 +16825,26 @@ void UI::drawRoomScreen(int w, int h, float topY) {
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground |
             ImGuiWindowFlags_NoSavedSettings);
         if (m_net.isHost() && !m_mpInDuel) {
+            // Sandbox / testing match: host-only board editing for setting up
+            // scenarios together. The host's edits snapshot to the client
+            // like any board change; the client watches. (Rewind stays
+            // offline-only.) Centred above the start button.
+            {
+                const char* lbl = "Sandbox match (host can edit the board)";
+                float cbw = ImGui::CalcTextSize(lbl).x + 34.f;
+                ImGui::SetCursorPosX((BW - cbw) * 0.5f);
+                ImGui::Checkbox(lbl, &m_mpSandboxHostReq);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "A relaxed testing room: you can add cards to either\n"
+                        "hand and set up positions; your friend sees it live.\n"
+                        "Not for competitive play.");
+            }
             bool canStart = m_mpReady && m_mpRemoteReady &&
                             m_mpDeckIdx >= 0 && m_mpRemoteDeckRcvd;
             if (!canStart) ImGui::BeginDisabled();
-            if (UIStyle::PrimaryButton("START DUEL", {BW, BH}))
+            if (UIStyle::PrimaryButton(m_mpSandboxHostReq
+                    ? "START SANDBOX" : "START DUEL", {BW, BH}))
                 sendMpStartDuel();
             if (!canStart) ImGui::EndDisabled();
             if (!canStart) {

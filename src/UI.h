@@ -746,6 +746,12 @@ private:
     // Active session flag — true once StartDuel has been exchanged and
     // both sides should be inside the seeded duel.
     bool        m_mpInDuel         = false;
+    // Sandbox / testing match: the host set this when starting, so the host
+    // may use free board-edit tools (add card to hand, restart) whose
+    // effects snapshot to the client. Sent in StartDuel. Rewind stays
+    // OFFLINE-only — it can't work with the host-authoritative model.
+    bool        m_mpSandbox        = false;
+    bool        m_mpSandboxHostReq = false;   // host UI toggle before start
     // Suppression flag — set true while we're feeding bytes received
     // FROM the network, so the recorder hook doesn't echo them back.
     bool        m_mpFeedingRemote  = false;
