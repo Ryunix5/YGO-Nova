@@ -103,6 +103,15 @@ private:
     int         m_arcadeView = 0;                // 0 = pack view, 1 = collection
     uint16_t    m_arcadeSecretPick = 0;          // selected key (setcode)
     bool        m_poolMode = false;              // deck builder pool restriction
+    // Draft / Sealed: a one-off mode — open N Master Packs into a sealed
+    // card pool, then build a deck from ONLY those cards and duel the AI.
+    // Reuses the arcade pool machinery (m_arcade holds the transient sealed
+    // pool; m_draftMode just relabels the deck-builder pool banner).
+    bool        m_draftMode = false;
+    bool        m_draftOpen = false;             // setup popup requested
+    int         m_draftPacks = 10;               // packs to open (sealed pool)
+    void drawDraftSetup(int w, int h);
+    void startDraft(int packs);                  // roll packs → pool → builder
     // Group-duel invites: the campaign is SHARED — you invite a friend with
     // an invite code (room code + PIN), the host syncs the campaign over the
     // wire (ArcadeSync) and the friend's save is created automatically.

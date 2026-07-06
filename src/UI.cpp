@@ -3861,6 +3861,15 @@ bool UI::draw(int winW, int winH) {
         }
     }
 
+    // A Draft session lives only while building in the deck builder. Once we
+    // leave it (Back / Esc / into a duel), discard the transient sealed pool
+    // so the Arcade screen never treats it as a loaded campaign. The drafted
+    // deck was saved as a normal .ydk, so nothing is lost.
+    if (m_draftMode && m_screen != Screen::DeckBuilder) {
+        m_draftMode = false; m_poolMode = false; m_arcadeLoaded = false;
+        m_arcade = edo::ArcadeSave{};
+    }
+
     switch (m_screen) {
         case Screen::Lobby:       drawLobby(winW, winH);       break;
         case Screen::Duel:        drawDuel(winW, winH);         break;
@@ -4697,7 +4706,7 @@ void UI::drawLobby(int w, int h) {
     // (hover = lift + glow), secondary actions live in a slim pill strip
     // below. The cinematic backdrop stays fully visible behind them.
     {
-        const int   kTiles = 5;
+        const int   kTiles = 6;
         const float gap    = 18.f;
         float tileW = std::clamp((W - 220.f - (kTiles - 1) * gap) / kTiles,
                                  170.f, 250.f);
@@ -4749,6 +4758,20 @@ void UI::drawLobby(int w, int h) {
                     tdl->AddRect({c.x - s * 0.15f, c.y - s * 0.85f},
                                  {c.x + s * 0.95f, c.y + s * 0.45f}, col, 2.f, 0, 2.f);
                     break;
+                case 5: { // stacked packs + pick arrow — draft / sealed
+                    tdl->AddRect({c.x - s * 0.85f, c.y - s * 0.35f},
+                                 {c.x + s * 0.25f, c.y + s * 0.85f}, col, 2.f, 0, 1.6f);
+                    tdl->AddRect({c.x - s * 0.25f, c.y - s * 0.85f},
+                                 {c.x + s * 0.85f, c.y + s * 0.35f}, col, 2.f, 0, 2.f);
+                    // Down-pick arrow over the top pack.
+                    tdl->AddLine({c.x + s * 0.3f, c.y - s * 0.55f},
+                                 {c.x + s * 0.3f, c.y + s * 0.05f}, col, 2.f);
+                    tdl->AddLine({c.x + s * 0.3f - 5.f, c.y - s * 0.10f},
+                                 {c.x + s * 0.3f, c.y + s * 0.05f}, col, 2.f);
+                    tdl->AddLine({c.x + s * 0.3f + 5.f, c.y - s * 0.10f},
+                                 {c.x + s * 0.3f, c.y + s * 0.05f}, col, 2.f);
+                    break;
+                }
                 default: { // booster pack with a sparkle — arcade
                     tdl->AddRect({c.x - s * 0.62f, c.y - s * 0.95f},
                                  {c.x + s * 0.62f, c.y + s * 0.95f}, col,
@@ -4838,6 +4861,8 @@ void UI::drawLobby(int w, int h) {
             m_arcadeFiles = edo::ArcadeSave::list();
             m_screen = Screen::Arcade;
         }
+        if (tile("DRAFT", "Open packs, build, duel", 5, false))
+            m_draftOpen = true;
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
@@ -4957,6 +4982,8 @@ void UI::drawLobby(int w, int h) {
     drawHistory();
     // Puzzle browser popup (opened from the PUZZLES nav item).
     drawPuzzleBrowser();
+    // Draft setup popup (opened from the DRAFT nav item).
+    drawDraftSetup(w, h);
 
     // ── Audio settings popup (opened by the top-right Audio button) ────────
     if (m_audioPopupOpen) { ImGui::OpenPopup("Audio Settings"); m_audioPopupOpen = false; }
@@ -14490,15 +14517,30 @@ void UI::drawDeckBuilder(int w, int h) {
         // and copies are capped at what was pulled. Exit returns to the full
         // card pool (the campaign itself stays loaded).
         if (m_poolMode && m_arcadeLoaded) {
-            UIStyle::StatusChip("ARCADE", C.accent);
+            UIStyle::StatusChip(m_draftMode ? "DRAFT" : "ARCADE",
+                                m_draftMode ? C.warning : C.accent);
             ImGui::SameLine(0.f, 8.f);
             ImGui::AlignTextToFramePadding();
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMd),
-                "Building from '%s' pool (%d cards)",
-                m_arcade.name.c_str(), m_arcade.poolTotal());
+            if (m_draftMode)
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMd),
+                    "Sealed pool (%d cards) — build 40+, then Solo it",
+                    m_arcade.poolTotal());
+            else
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.textMd),
+                    "Building from '%s' pool (%d cards)",
+                    m_arcade.name.c_str(), m_arcade.poolTotal());
             ImGui::SameLine(0.f, 10.f);
-            if (UIStyle::GhostButton("Exit pool##arcade", {84.f, 24.f}))
+            if (UIStyle::GhostButton(m_draftMode ? "End draft##arcade"
+                                                 : "Exit pool##arcade",
+                                     {m_draftMode ? 92.f : 84.f, 24.f})) {
                 m_poolMode = false;
+                if (m_draftMode) {
+                    // Discard the transient sealed pool so the Arcade screen
+                    // doesn't treat it as a loaded campaign.
+                    m_draftMode = false; m_arcadeLoaded = false;
+                    m_arcade = edo::ArcadeSave{};
+                }
+            }
             ImGui::Dummy({1.f, 4.f});
         }
 
@@ -18280,6 +18322,73 @@ std::string UI::deckLegality(const Deck& d) {
         }
     }
     return "";
+}
+
+// ─── Draft / Sealed ─────────────────────────────────────────────────────────
+// Open `packs` Master Packs into a transient sealed pool (held in m_arcade so
+// the pool-mode deck builder just works), then jump into the deck builder
+// restricted to that pool. Nothing is persisted; leaving the builder clears
+// the draft state. No keys / secret packs — a sealed pool is master packs only.
+void UI::startDraft(int packs) {
+    loadMdRarity();
+    // Preserve a real campaign if one is loaded (draft repurposes m_arcade).
+    if (m_arcadeLoaded && !m_draftMode) m_arcade.save();
+    m_arcade = edo::ArcadeSave{};
+    m_arcade.name = "Sealed Draft";
+    packs = std::clamp(packs, 4, 20);
+    for (int i = 0; i < packs; ++i)
+        for (uint32_t c : rollMasterPack())
+            m_arcade.pool[c]++;
+    m_arcadeLoaded = true;    // pool-mode builder gate; cleared on exit
+    m_draftMode    = true;
+    m_poolMode     = true;
+    m_draftOpen    = false;
+    refreshDeckFiles();
+    m_screen = Screen::DeckBuilder;
+    gAudio().play("draw");
+    pushToast("Sealed pool: " + std::to_string(m_arcade.poolTotal()) +
+              " cards — build a 40+ deck, then Solo-duel it",
+              IM_COL32(110, 220, 140, 255), 5.0);
+}
+
+// Draft setup popup — pack count + Open.
+void UI::drawDraftSetup(int w, int h) {
+    if (m_draftOpen) { ImGui::OpenPopup("Draft"); m_draftOpen = false; }
+    const UIStyle::Colors& C = UIStyle::C();
+    ImGui::SetNextWindowPos({(float)w * 0.5f, (float)h * 0.5f},
+                            ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({440.f, 0.f}, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.f, 20.f});
+    if (ImGui::BeginPopupModal("Draft", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings)) {
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                           "Sealed Draft");
+        UIStyle::PopFont();
+        ImGui::TextWrapped("Open a batch of Master Packs into a sealed card "
+            "pool, then build a deck from ONLY those cards and duel the AI. "
+            "Same real Master Duel pull odds. It's a fun-jank format — expect "
+            "off-meta piles.");
+        UIStyle::DrawDivider(8.f, 8.f);
+        ImGui::TextDisabled("Packs to open (8 cards each)");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::SliderInt("##draftpacks", &m_draftPacks, 6, 16, "%d packs");
+        ImGui::TextDisabled("Sealed pool: ~%d cards", m_draftPacks * 8);
+        ImGui::Dummy({1.f, 10.f});
+        bool canDraft = m_db.isOpen();
+        if (!canDraft) ImGui::BeginDisabled();
+        if (UIStyle::PrimaryButton("Open Packs & Build", {260.f, 40.f})) {
+            startDraft(m_draftPacks);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!canDraft) ImGui::EndDisabled();
+        ImGui::SameLine(0.f, 10.f);
+        if (UIStyle::GhostButton("Cancel", {120.f, 40.f}))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
 }
 
 void UI::refreshDeckFiles() {
