@@ -7231,7 +7231,21 @@ void UI::drawDuel(int w, int h) {
     // system HudPill so the bar shares one look with every other chip row.
     const float pillW = 62.f, pillH = 28.f, pillGap = 5.f;
     const float pillRowW = 6.f * pillW + 5.f * pillGap;
+    // Reserve the top-right button cluster's space up front so the phase
+    // pills never slide under Surrender/Lobby (they're drawn as opaque
+    // widgets, and a pill peeking behind a ghost button looked broken).
+    const bool topSurrender = !m_replayMode && isDuelVisiblyRunning() &&
+                              !m_dm.isDone() &&
+                              (m_net.isOffline() || m_mpInDuel);
+    const float topClusterW = m_replayMode ? 112.f
+        : 72.f + (topSurrender ? 8.f + 96.f : 0.f);
+    const float topClusterL =
+        ImGui::GetWindowContentRegionMax().x - topClusterW - 6.f;
     float pillX = (FLD_W - pillRowW) * 0.5f;
+    if (pillX < 340.f) pillX = 340.f;
+    // Keep the whole pill row a comfortable gap left of the button cluster.
+    if (pillX + pillRowW > topClusterL - 12.f)
+        pillX = topClusterL - 12.f - pillRowW;
     if (pillX < 340.f) pillX = 340.f;
     ImGui::SetCursorPos({pillX, (TOP_H - pillH) * 0.5f});
     // A phase pill is clickable when the engine offers that transition for the
@@ -10046,6 +10060,19 @@ void UI::drawSelectionPanel(int pw, int ph) {
             return out;
         };
 
+        // Float the cards you can act on to the TOP — the usual reason to
+        // open your own GY mid-chain is to use an effect, so the player
+        // shouldn't have to scroll a full pile to find it. Stable so the
+        // engine's pile order is otherwise preserved.
+        if (ownZone && expectedLoc) {
+            std::stable_sort(rows.begin(), rows.end(),
+                [&](const Row& a, const Row& b) {
+                    bool aa = resolveRowAct(a.code, a.seq).kind != 0;
+                    bool bb = resolveRowAct(b.code, b.seq).kind != 0;
+                    return aa && !bb;   // activatable first, else keep order
+                });
+        }
+
         // ── Empty pile → compact centred empty-state, no big list box ──────
         if (rows.empty()) {
             ImGui::Dummy({1.f, 14.f});
@@ -10100,8 +10127,11 @@ void UI::drawSelectionPanel(int pw, int ph) {
         // the modal cap. Scrolls only when the rows exceed that cap. rowH is
         // slightly generous (rows with an Activate button are taller) so a
         // perfectly-fitting list doesn't sprout a 1px scrollbar.
-        const float kRowH = 62.f;
-        float maxListH = std::max(120.f, kHeightCap - 210.f);
+        // Rows with an Activate button are taller than plain rows, so the
+        // estimate is generous to avoid a premature scrollbar; the list also
+        // gets more of the (now taller) window — less chrome subtracted.
+        const float kRowH = 66.f;
+        float maxListH = std::max(180.f, kHeightCap - 168.f);
         float wantH = (visibleRows > 0) ? (visibleRows * kRowH + 6.f) : 40.f;
         float listH = std::min(maxListH, wantH);
         bool  listScroll = (wantH > maxListH);
@@ -11748,13 +11778,16 @@ void UI::drawCenteredModal(int screenW, int screenH) {
     // own row count (see the viewer / option lists), so the window auto-fits
     // below maxH and the child scrolls only when it actually overflows.
     float MW, maxH;
-    if (isViewer)        { MW = 440.f; maxH = 600.f; }
+    // The GY/BN/ED viewer is a primary interaction (activating GY effects,
+    // reading a full pile) — size it generously so it shows many cards at
+    // once instead of a cramped 1-2 row strip you have to scroll.
+    if (isViewer)        { MW = 540.f; maxH = 760.f; }
     else if (listLike)   { MW = 860.f; maxH = 600.f; }   // wide card gallery
     else if (optionLike) { MW = 460.f; maxH = 440.f; }
     else if (m_dm.isDone()) { MW = 440.f; maxH = 500.f; } // game over panel
     else                 { MW = 400.f; maxH = 340.f; }   // yes/no
     if (MW > (float)screenW - 80.f) MW = (float)screenW - 80.f;
-    maxH = std::min((float)screenH - 100.f, maxH);
+    maxH = std::min((float)screenH - 80.f, maxH);
 
     // Dim the duel underneath ONLY for real decision modals — the viewer is a
     // browse panel and must keep the field fully visible/interactive. Card /
