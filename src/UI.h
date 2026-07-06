@@ -112,6 +112,9 @@ private:
     int         m_draftPacks = 10;               // packs to open (sealed pool)
     void drawDraftSetup(int w, int h);
     void startDraft(int packs);                  // roll packs → pool → builder
+    // Arcade landing: pick a sub-mode (0 = mode select, 1 = Master Saga).
+    // Draft launches straight out to the deck builder, so it has no mode id.
+    int         m_arcadeMode = 0;
     // Group-duel invites: the campaign is SHARED — you invite a friend with
     // an invite code (room code + PIN), the host syncs the campaign over the
     // wire (ArcadeSync) and the friend's save is created automatically.

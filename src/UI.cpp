@@ -4706,7 +4706,7 @@ void UI::drawLobby(int w, int h) {
     // (hover = lift + glow), secondary actions live in a slim pill strip
     // below. The cinematic backdrop stays fully visible behind them.
     {
-        const int   kTiles = 6;
+        const int   kTiles = 5;
         const float gap    = 18.f;
         float tileW = std::clamp((W - 220.f - (kTiles - 1) * gap) / kTiles,
                                  170.f, 250.f);
@@ -4758,20 +4758,6 @@ void UI::drawLobby(int w, int h) {
                     tdl->AddRect({c.x - s * 0.15f, c.y - s * 0.85f},
                                  {c.x + s * 0.95f, c.y + s * 0.45f}, col, 2.f, 0, 2.f);
                     break;
-                case 5: { // stacked packs + pick arrow — draft / sealed
-                    tdl->AddRect({c.x - s * 0.85f, c.y - s * 0.35f},
-                                 {c.x + s * 0.25f, c.y + s * 0.85f}, col, 2.f, 0, 1.6f);
-                    tdl->AddRect({c.x - s * 0.25f, c.y - s * 0.85f},
-                                 {c.x + s * 0.85f, c.y + s * 0.35f}, col, 2.f, 0, 2.f);
-                    // Down-pick arrow over the top pack.
-                    tdl->AddLine({c.x + s * 0.3f, c.y - s * 0.55f},
-                                 {c.x + s * 0.3f, c.y + s * 0.05f}, col, 2.f);
-                    tdl->AddLine({c.x + s * 0.3f - 5.f, c.y - s * 0.10f},
-                                 {c.x + s * 0.3f, c.y + s * 0.05f}, col, 2.f);
-                    tdl->AddLine({c.x + s * 0.3f + 5.f, c.y - s * 0.10f},
-                                 {c.x + s * 0.3f, c.y + s * 0.05f}, col, 2.f);
-                    break;
-                }
                 default: { // booster pack with a sparkle — arcade
                     tdl->AddRect({c.x - s * 0.62f, c.y - s * 0.95f},
                                  {c.x + s * 0.62f, c.y + s * 0.95f}, col,
@@ -4857,12 +4843,11 @@ void UI::drawLobby(int w, int h) {
             refreshDeckFiles();
             m_screen = Screen::DeckBuilder;
         }
-        if (tile("ARCADE", "Master Saga with friends", 4, false)) {
+        if (tile("ARCADE", "Master Saga, Draft & more", 4, false)) {
             m_arcadeFiles = edo::ArcadeSave::list();
+            m_arcadeMode  = 0;      // land on the mode picker
             m_screen = Screen::Arcade;
         }
-        if (tile("DRAFT", "Open packs, build, duel", 5, false))
-            m_draftOpen = true;
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
@@ -4982,8 +4967,6 @@ void UI::drawLobby(int w, int h) {
     drawHistory();
     // Puzzle browser popup (opened from the PUZZLES nav item).
     drawPuzzleBrowser();
-    // Draft setup popup (opened from the DRAFT nav item).
-    drawDraftSetup(w, h);
 
     // ── Audio settings popup (opened by the top-right Audio button) ────────
     if (m_audioPopupOpen) { ImGui::OpenPopup("Audio Settings"); m_audioPopupOpen = false; }
@@ -17225,7 +17208,14 @@ void UI::drawArcade(int w, int h) {
                      C.borderSoft, 1.f);
         if (UIStyle::GhostButton("< Back", {110.f, 32.f})) {
             if (m_arcadeLoaded) m_arcade.save();
-            m_screen = Screen::Lobby;
+            // In a sub-mode, Back returns to the Arcade mode picker; from
+            // the picker it exits to the main lobby.
+            if (m_arcadeMode != 0) {
+                m_arcadeMode   = 0;
+                m_arcadeLoaded = false;
+            } else {
+                m_screen = Screen::Lobby;
+            }
             ImGui::End();
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(2);
@@ -17235,16 +17225,104 @@ void UI::drawArcade(int w, int h) {
         if (UIStyle::fHeader) ImGui::PushFont(UIStyle::fHeader);
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::ColorConvertU32ToFloat4(C.textHi));
-        ImGui::TextUnformatted("Arcade — Master Saga");
+        ImGui::TextUnformatted(m_arcadeMode == 1 ? "Arcade — Master Saga"
+                                                 : "Arcade");
         ImGui::PopStyleColor();
         if (UIStyle::fHeader) ImGui::PopFont();
-        if (m_arcadeLoaded) {
+        if (m_arcadeMode == 1 && m_arcadeLoaded) {
             ImGui::SameLine(0.f, 14.f);
             UIStyle::StatusChip(m_arcade.name.c_str(), C.accent);
         }
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
+    }
+
+    // ── Mode picker — the Arcade landing page ────────────────────────────
+    if (m_arcadeMode == 0) {
+        drawDraftSetup(w, h);   // the Draft card opens this popup
+
+        struct Mode { const char* name; const char* sub; bool soon; int id; };
+        static const Mode kModes[] = {
+            {"Master Saga", "Open packs, duel friends, climb the\n"
+                            "shared leaderboard.", false, 1},
+            {"Draft",       "Open a sealed pool and build a deck\n"
+                            "from just those cards.", false, 2},
+            {"Progression Series", "A roguelike ladder of escalating\n"
+                            "duels. Coming soon.", true, 3},
+        };
+        const int   N = 3;
+        const float cardW = 300.f, cardH = 190.f, gapC = 22.f;
+        float rowW = N * cardW + (N - 1) * gapC;
+        float x0 = ((float)w - rowW) * 0.5f;
+        float y0 = BAR_H + ((float)h - BAR_H - cardH) * 0.5f;
+
+        ImGui::SetNextWindowPos({0.f, BAR_H});
+        ImGui::SetNextWindowSize({(float)w, (float)h - BAR_H});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::Begin("##arc_modes", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_NoSavedSettings);
+        ImDrawList* mdl = ImGui::GetWindowDrawList();
+        // Heading.
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::SetCursorScreenPos({x0, y0 - 54.f});
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                           "Choose a mode");
+        UIStyle::PopFont();
+
+        for (int i = 0; i < N; ++i) {
+            const Mode& m = kModes[i];
+            ImVec2 a{x0 + i * (cardW + gapC), y0};
+            ImVec2 b{a.x + cardW, a.y + cardH};
+            ImGui::SetCursorScreenPos(a);
+            ImGui::InvisibleButton(m.name, {cardW, cardH});
+            bool hov = ImGui::IsItemHovered() && !m.soon;
+            bool clk = ImGui::IsItemClicked() && !m.soon;
+            if (hov)
+                UIStyle::DrawGlow(mdl, a, b, (C.accent & 0x00FFFFFF) | 0x28000000,
+                                  12.f, 3);
+            UIStyle::DrawGlassPanel(mdl, a, b, 12.f,
+                m.soon ? IM_COL32(22, 24, 34, 210)
+                       : hov ? IM_COL32(44, 22, 26, 240)
+                             : IM_COL32(28, 15, 18, 228));
+            mdl->AddRectFilled({a.x + 14.f, a.y}, {b.x - 14.f, a.y + 3.f},
+                m.soon ? C.borderSoft : hov ? C.accentHi
+                                            : (C.accent & 0x00FFFFFF) | 0x99000000,
+                2.f);
+            UIStyle::PushFont(UIStyle::fHeader);
+            mdl->AddText({a.x + 20.f, a.y + 24.f},
+                         m.soon ? C.textMuted : C.textHi, m.name);
+            UIStyle::PopFont();
+            UIStyle::PushFont(UIStyle::fSmall);
+            mdl->AddText({a.x + 20.f, a.y + 64.f},
+                         m.soon ? C.textMuted : C.textLo, m.sub);
+            UIStyle::PopFont();
+            if (m.soon) {
+                const char* sc = "COMING SOON";
+                ImVec2 ts = ImGui::CalcTextSize(sc);
+                mdl->AddRectFilled({a.x + 20.f, b.y - 34.f},
+                                   {a.x + 20.f + ts.x + 14.f, b.y - 12.f},
+                                   IM_COL32(60, 50, 20, 220), 5.f);
+                mdl->AddText({a.x + 27.f, b.y - 30.f},
+                             IM_COL32(235, 200, 90, 255), sc);
+            }
+            if (clk) {
+                gAudio().play("click");
+                if (m.id == 1) {                       // Master Saga
+                    m_arcadeMode  = 1;
+                    m_arcadeFiles = edo::ArcadeSave::list();
+                } else if (m.id == 2) {                // Draft
+                    m_draftOpen = true;
+                }
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        return;
     }
 
     // Missing dataset — nothing works without the rarity table.
