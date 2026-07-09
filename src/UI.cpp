@@ -17260,6 +17260,7 @@ void UI::drawArcade(int w, int h) {
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::ColorConvertU32ToFloat4(C.textHi));
         ImGui::TextUnformatted(m_arcadeMode == 1 ? "Arcade — Master Saga"
+                             : m_arcadeMode == 3 ? "Arcade — Progression Series"
                                                  : "Arcade");
         ImGui::PopStyleColor();
         if (UIStyle::fHeader) ImGui::PopFont();
@@ -17282,8 +17283,8 @@ void UI::drawArcade(int w, int h) {
                             "shared leaderboard.", false, 1},
             {"Draft",       "Open a sealed pool and build a deck\n"
                             "from just those cards.", false, 2},
-            {"Progression Series", "A roguelike ladder of escalating\n"
-                            "duels. Coming soon.", true, 3},
+            {"Progression Series", "Climb Yu-Gi-Oh history set by set,\n"
+                            "building from what you pull.", false, 3},
         };
         const int   N = 3;
         const float cardW = 300.f, cardH = 190.f, gapC = 22.f;
@@ -17350,6 +17351,9 @@ void UI::drawArcade(int w, int h) {
                     m_arcadeFiles = edo::ArcadeSave::list();
                 } else if (m.id == 2) {                // Draft
                     m_draftOpen = true;
+                } else if (m.id == 3) {                // Progression Series
+                    m_arcadeMode   = 3;
+                    m_arcadeLoaded = false;   // land on the start/continue page
                 }
             }
         }
@@ -17358,6 +17362,9 @@ void UI::drawArcade(int w, int h) {
         ImGui::PopStyleColor();
         return;
     }
+
+    // Progression Series has its own run screen (sets, not the wheel/saga).
+    if (m_arcadeMode == 3) { drawProgression(w, h); return; }
 
     // Missing dataset — nothing works without the rarity table.
     if (m_mdRarity.empty()) {
@@ -18576,6 +18583,302 @@ void UI::drawDraftSetup(int w, int h) {
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar();
+}
+
+// ─── Progression Series ─────────────────────────────────────────────────────
+static std::mt19937& progRng() {
+    static std::mt19937 g{std::random_device{}()};
+    return g;
+}
+
+void UI::loadProgressionSets() {
+    if (m_progLoaded) return;
+    m_progLoaded = true;
+    auto rtrim = [](std::string& s) {
+        while (!s.empty() && (s.back() == '\r' || s.back() == '\n')) s.pop_back();
+    };
+    std::ifstream sf("assets/arcade/sets.txt");
+    std::string line;
+    while (std::getline(sf, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        auto t1 = line.find('\t');
+        auto t2 = (t1 == std::string::npos) ? std::string::npos
+                                            : line.find('\t', t1 + 1);
+        if (t2 == std::string::npos) continue;
+        ProgSet p;
+        p.date     = line.substr(0, t1);
+        p.numCards = atoi(line.substr(t1 + 1, t2 - t1 - 1).c_str());
+        p.name     = line.substr(t2 + 1);
+        rtrim(p.name);
+        m_progSets.push_back(std::move(p));
+    }
+    std::ifstream cf("assets/arcade/set_cards.txt");
+    while (std::getline(cf, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        auto t = line.find('\t');
+        if (t == std::string::npos) continue;
+        std::string name = line.substr(0, t), rest = line.substr(t + 1);
+        rtrim(rest);
+        std::vector<uint32_t> codes;
+        size_t p = 0;
+        while (p <= rest.size()) {
+            size_t c = rest.find(',', p);
+            if (c == std::string::npos) c = rest.size();
+            uint32_t code = (uint32_t)strtoul(rest.substr(p, c - p).c_str(),
+                                              nullptr, 10);
+            if (code) codes.push_back(code);
+            p = c + 1;
+        }
+        m_progSetCards[name] = std::move(codes);
+    }
+    // OTS / tournament packs = the loser-reward pool.
+    for (int i = 0; i < (int)m_progSets.size(); ++i) {
+        const std::string& n = m_progSets[i].name;
+        if (n.find("OTS") != std::string::npos ||
+            n.find("Tournament Pack") != std::string::npos)
+            m_progOtsIdx.push_back(i);
+    }
+    m_dm.logEvent("[PROGRESSION] loaded " + std::to_string(m_progSets.size()) +
+                  " sets, " + std::to_string(m_progOtsIdx.size()) + " OTS packs");
+}
+
+// 8 cards drawn uniformly from a set's printable pool. (Old sets don't carry
+// per-print rarity in the data, so a flat draw is the honest v1.)
+std::vector<uint32_t> UI::rollSetPack(int setIdx) {
+    std::vector<uint32_t> out;
+    if (setIdx < 0 || setIdx >= (int)m_progSets.size()) return out;
+    auto it = m_progSetCards.find(m_progSets[setIdx].name);
+    if (it == m_progSetCards.end() || it->second.empty()) return out;
+    const auto& pool = it->second;
+    std::uniform_int_distribution<size_t> pick(0, pool.size() - 1);
+    for (int i = 0; i < 8; ++i) out.push_back(pool[pick(progRng())]);
+    return out;
+}
+
+// A random OTS pack released strictly before `beforeDate` (ISO, so string
+// compare == chronological). Falls back to the earliest OTS pack.
+int UI::progOtsPackBefore(const std::string& beforeDate) {
+    std::vector<int> elig;
+    for (int i : m_progOtsIdx)
+        if (m_progSets[i].date < beforeDate) elig.push_back(i);
+    if (elig.empty()) return m_progOtsIdx.empty() ? -1 : m_progOtsIdx.front();
+    std::uniform_int_distribution<size_t> pick(0, elig.size() - 1);
+    return elig[pick(progRng())];
+}
+
+void UI::drawProgression(int w, int h) {
+    const UIStyle::Colors& C = UIStyle::C();
+    loadProgressionSets();
+    const float TOP_Y = 56.f + 16.f;
+    auto panel = [&](const char* id) {
+        ImGui::SetNextWindowPos({16.f, TOP_Y});
+        ImGui::SetNextWindowSize({(float)w - 32.f, (float)h - TOP_Y - 16.f});
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+            ImGui::ColorConvertU32ToFloat4(C.bgPanel));
+        ImGui::Begin(id, nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings);
+    };
+
+    if (m_progSets.empty()) {
+        panel("##prog_missing");
+        UIStyle::EmptyState((float)h - TOP_Y - 80.f, "Progression data missing",
+            "Run tools/fetch_progression_sets.py to build sets.txt "
+            "and set_cards.txt in assets/arcade/.");
+        ImGui::End(); ImGui::PopStyleColor();
+        return;
+    }
+
+    // ── Start / continue a run ───────────────────────────────────────────
+    if (!m_arcadeLoaded || m_arcade.progSet < 0) {
+        panel("##prog_start");
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                           "Progression Series");
+        UIStyle::PopFont();
+        ImGui::TextWrapped("Start at the very first set (%s) and climb through "
+            "Yu-Gi-Oh history. Open 24 packs from a set, build with what you "
+            "pull, and win to advance. Lose and you're handed 3 OTS packs to "
+            "recover. Your collection carries across sets.",
+            m_progSets.front().name.c_str());
+        UIStyle::DrawDivider(10.f, 10.f);
+
+        UIStyle::SectionHeader("Continue a run");
+        auto files = edo::ArcadeSave::list();
+        bool anyRun = false;
+        ImGui::BeginChild("##prog_saves", {-1.f, 200.f}, false);
+        for (auto& nm : files) {
+            edo::ArcadeSave probe;
+            if (!probe.load(nm) || probe.progSet < 0) continue;
+            anyRun = true;
+            ImVec2 rp = ImGui::GetCursorScreenPos();
+            float rw = ImGui::GetContentRegionAvail().x, rh = 40.f;
+            ImGui::PushID(nm.c_str());
+            UIStyle::DrawGlassPanel(ImGui::GetWindowDrawList(), rp,
+                                    {rp.x + rw, rp.y + rh}, 6.f);
+            int si = std::clamp(probe.progSet, 0, (int)m_progSets.size() - 1);
+            ImGui::GetWindowDrawList()->AddText({rp.x + 12.f, rp.y + 6.f},
+                C.textHi, nm.c_str());
+            char sub[96];
+            snprintf(sub, sizeof(sub), "Set %d/%d — %s   ·   %d cards",
+                     si + 1, (int)m_progSets.size(),
+                     m_progSets[si].name.c_str(), probe.poolTotal());
+            ImGui::GetWindowDrawList()->AddText({rp.x + 12.f, rp.y + 22.f},
+                C.textMuted, sub);
+            ImGui::SetCursorScreenPos({rp.x + rw - 100.f, rp.y + 6.f});
+            if (UIStyle::SecondaryButton("Continue", {88.f, 28.f})) {
+                m_arcade.load(nm);
+                m_arcadeLoaded = true;
+            }
+            ImGui::SetCursorScreenPos({rp.x, rp.y + rh + 6.f});
+            ImGui::PopID();
+        }
+        if (!anyRun) ImGui::TextDisabled("No runs yet — start one below.");
+        ImGui::EndChild();
+
+        ImGui::Dummy({1.f, 8.f});
+        UIStyle::SectionHeader("New run");
+        static char nameBuf[48] = {};
+        ImGui::SetNextItemWidth(280.f);
+        ImGui::InputTextWithHint("##prog_new", "Run name", nameBuf,
+                                 sizeof(nameBuf));
+        ImGui::SameLine(0.f, 8.f);
+        if (UIStyle::PrimaryButton("Start Progression", {180.f, 0.f})) {
+            std::string nm;
+            for (char c : std::string(nameBuf))
+                if (std::isalnum((unsigned char)c) || c == ' ' || c == '-' ||
+                    c == '_') nm += c;
+            while (!nm.empty() && nm.back() == ' ') nm.pop_back();
+            bool dup = std::find(edo::ArcadeSave::list().begin(),
+                                 edo::ArcadeSave::list().end(), nm) !=
+                       edo::ArcadeSave::list().end();
+            if (!nm.empty() && !dup) {
+                m_arcade = edo::ArcadeSave{};
+                m_arcade.name    = nm;
+                m_arcade.progSet = 0;
+                m_arcade.save();
+                m_arcadeLoaded = true;
+                nameBuf[0] = '\0';
+                gAudio().play("confirm");
+            } else gAudio().play("error");
+        }
+        ImGui::End(); ImGui::PopStyleColor();
+        return;
+    }
+
+    // ── Active run ───────────────────────────────────────────────────────
+    int setIdx = std::clamp(m_arcade.progSet, 0, (int)m_progSets.size() - 1);
+    const ProgSet& ps = m_progSets[setIdx];
+    bool opened = m_arcade.progOpenedSet >= setIdx;
+    bool complete = m_arcade.progSet >= (int)m_progSets.size() - 1 && opened;
+
+    panel("##prog_run");
+    UIStyle::PushFont(UIStyle::fHeader);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
+                       "Set %d / %d", setIdx + 1, (int)m_progSets.size());
+    UIStyle::PopFont();
+    ImGui::SameLine(0.f, 12.f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", ps.name.c_str());
+    ImGui::SameLine(0.f, 8.f);
+    ImGui::TextDisabled("(%s)", ps.date.c_str());
+    {
+        char chip[32];
+        snprintf(chip, sizeof(chip), "%d W", m_arcade.wins);
+        UIStyle::StatusChip(chip, C.success); ImGui::SameLine(0.f, 6.f);
+        snprintf(chip, sizeof(chip), "%d L", m_arcade.losses);
+        UIStyle::StatusChip(chip, C.danger); ImGui::SameLine(0.f, 6.f);
+        snprintf(chip, sizeof(chip), "%d CARDS", m_arcade.poolTotal());
+        UIStyle::StatusChip(chip, C.accent);
+        if (m_arcade.otsLeft > 0) {
+            ImGui::SameLine(0.f, 6.f);
+            snprintf(chip, sizeof(chip), "%d OTS", m_arcade.otsLeft);
+            UIStyle::StatusChip(chip, C.warning);
+        }
+    }
+    UIStyle::DrawDivider(10.f, 10.f);
+
+    // Progress bar across all sets.
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float pw = ImGui::GetContentRegionAvail().x;
+        UIStyle::ProgressBar(dl, p, {p.x + pw, p.y + 8.f},
+            (float)(setIdx + 1) / (float)m_progSets.size(), C.accent);
+        ImGui::Dummy({1.f, 16.f});
+    }
+
+    if (!opened) {
+        ImGui::TextWrapped("A new set. Open your 24 packs to see what you can "
+            "build with.");
+        ImGui::Dummy({1.f, 6.f});
+        if (UIStyle::PrimaryButton("Open 24 Packs", {-1.f, 48.f})) {
+            int added = 0;
+            for (int i = 0; i < 24; ++i)
+                for (uint32_t c : rollSetPack(setIdx)) { m_arcade.pool[c]++; ++added; }
+            m_arcade.progOpenedSet = setIdx;
+            m_arcade.save();
+            gAudio().play("draw");
+            pushToast("Opened 24 packs — +" + std::to_string(added) +
+                      " cards. Build a deck and duel!",
+                      IM_COL32(110, 220, 140, 255), 4.5);
+        }
+    } else if (complete) {
+        UIStyle::PushFont(UIStyle::fHeader);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.success),
+                           "Progression complete — you climbed every set!");
+        UIStyle::PopFont();
+    } else {
+        if (UIStyle::PrimaryButton("Build Deck from Collection", {-1.f, 44.f})) {
+            m_poolMode = true;
+            refreshDeckFiles();
+            m_screen = Screen::DeckBuilder;
+        }
+        ImGui::Dummy({1.f, 4.f});
+        ImGui::TextDisabled("Duel the AI from Solo with your built deck, then "
+                            "record the result:");
+        float half = (ImGui::GetContentRegionAvail().x - 8.f) * 0.5f;
+        if (UIStyle::GhostButton("I Won → Next Set", {half, 40.f})) {
+            m_arcade.wins++;
+            m_arcade.progSet = std::min(m_arcade.progSet + 1,
+                                        (int)m_progSets.size() - 1);
+            m_arcade.save();
+            gAudio().play("confirm");
+            pushToast("On to " + m_progSets[std::clamp(m_arcade.progSet, 0,
+                       (int)m_progSets.size()-1)].name + "!",
+                      IM_COL32(180, 220, 255, 255), 3.5);
+        }
+        ImGui::SameLine(0.f, 8.f);
+        if (UIStyle::GhostButton("I Lost → +3 OTS packs", {half, 40.f})) {
+            m_arcade.losses++;
+            int ots = progOtsPackBefore(ps.date);
+            int added = 0;
+            if (ots >= 0)
+                for (int i = 0; i < 3; ++i)
+                    for (uint32_t c : rollSetPack(ots)) { m_arcade.pool[c]++; ++added; }
+            m_arcade.save();
+            gAudio().play("confirm");
+            if (ots >= 0)
+                pushToast("3 OTS packs (" + m_progSets[ots].name + ") — +" +
+                          std::to_string(added) + " cards",
+                          IM_COL32(235, 185, 60, 255), 4.5);
+            else
+                pushToast("No earlier OTS pack available yet.",
+                          IM_COL32(180, 200, 230, 255), 3.0);
+        }
+    }
+
+    // Close/save pinned bottom.
+    {
+        float rest = ImGui::GetContentRegionAvail().y - 40.f;
+        if (rest > 0.f) ImGui::Dummy({1.f, rest});
+        if (UIStyle::GhostButton("Save & Close Run", {-1.f, 32.f})) {
+            m_arcade.save();
+            m_arcadeLoaded = false;
+        }
+    }
+    ImGui::End(); ImGui::PopStyleColor();
 }
 
 void UI::refreshDeckFiles() {

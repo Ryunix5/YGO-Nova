@@ -112,9 +112,23 @@ private:
     int         m_draftPacks = 10;               // packs to open (sealed pool)
     void drawDraftSetup(int w, int h);
     void startDraft(int packs);                  // roll packs → pool → builder
-    // Arcade landing: pick a sub-mode (0 = mode select, 1 = Master Saga).
-    // Draft launches straight out to the deck builder, so it has no mode id.
+    // Arcade landing: pick a sub-mode (0 = mode select, 1 = Master Saga,
+    // 3 = Progression Series). Draft launches straight out to the deck
+    // builder, so it has no persistent mode id.
     int         m_arcadeMode = 0;
+    // ── Progression Series ───────────────────────────────────────────────
+    // Walk the print sets oldest-first: open 24 packs from the current set,
+    // collect, duel, win → advance a set, lose → 3 OTS packs (from an OTS
+    // set released before the current one). Data from sets.txt/set_cards.txt.
+    struct ProgSet { std::string date; std::string name; int numCards; };
+    std::vector<ProgSet> m_progSets;                         // oldest-first
+    std::unordered_map<std::string, std::vector<uint32_t>> m_progSetCards;
+    std::vector<int>     m_progOtsIdx;                        // OTS-pack set rows
+    bool        m_progLoaded = false;
+    void loadProgressionSets();
+    std::vector<uint32_t> rollSetPack(int setIdx);           // 8 cards from a set
+    int  progOtsPackBefore(const std::string& beforeDate);   // OTS row or -1
+    void drawProgression(int w, int h);
     // Group-duel invites: the campaign is SHARED — you invite a friend with
     // an invite code (room code + PIN), the host syncs the campaign over the
     // wire (ArcadeSync) and the friend's save is created automatically.

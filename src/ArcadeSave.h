@@ -42,6 +42,12 @@ struct ArcadeSave {
     int secretLeft = 10;                    // secret packs still unopened
     int wins = 0, losses = 0;               // campaign record
     int spins = 0;                          // unspent wheel spins (1/duel, ALL)
+    // Progression Series: >=0 marks this save as a Progression run and holds
+    // the current set index (into sets.txt, oldest-first). -1 = a normal
+    // Master Saga save. otsLeft = unopened OTS reward packs (loser reward).
+    int progSet = -1;
+    int progOpenedSet = -1;                 // highest set whose 24 packs opened
+    int otsLeft = 0;
     int crSR = 0;                           // SR craft credits (wheel reward)
     int crNR = 0;                           // N/R craft credits (wheel reward)
     std::set<uint16_t> keys;                // unlocked secret packs (setcodes)
@@ -104,6 +110,9 @@ struct ArcadeSave {
                 else if (k == "wins")       wins       = std::stoi(v);
                 else if (k == "losses")     losses     = std::stoi(v);
                 else if (k == "spins")      spins      = std::stoi(v);
+                else if (k == "progSet")    progSet    = std::stoi(v);
+                else if (k == "progOpened") progOpenedSet = std::stoi(v);
+                else if (k == "otsLeft")    otsLeft    = std::stoi(v);
                 else if (k == "crSR")       crSR       = std::stoi(v);
                 else if (k == "crNR")       crNR       = std::stoi(v);
                 else if (k == "key")        keys.insert((uint16_t)std::stoul(v));
@@ -139,6 +148,9 @@ struct ArcadeSave {
         f << "wins="       << wins       << "\n";
         f << "losses="     << losses     << "\n";
         f << "spins="      << spins      << "\n";
+        f << "progSet="    << progSet        << "\n";
+        f << "progOpened=" << progOpenedSet  << "\n";
+        f << "otsLeft="    << otsLeft        << "\n";
         f << "crSR="       << crSR       << "\n";
         f << "crNR="       << crNR       << "\n";
         for (uint16_t k : keys)       f << "key="  << k << "\n";
