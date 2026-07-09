@@ -135,7 +135,8 @@ Get-ChildItem -Path $assetsSrc -Force | ForEach-Object {
     if ($_.PSIsContainer -and $_.Name -eq "arcade") {
         $dst = Join-Path $assetsDst "arcade"
         New-Item -ItemType Directory -Path $dst -Force | Out-Null
-        foreach ($af in @("md_rarity.txt", "setnames.txt")) {
+        foreach ($af in @("md_rarity.txt", "setnames.txt",
+                          "sets.txt", "set_cards.txt")) {
             $p = Join-Path $_.FullName $af
             if (Test-Path $p) { Copy-Item $p $dst -Force }
         }
