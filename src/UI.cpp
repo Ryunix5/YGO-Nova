@@ -6447,6 +6447,40 @@ void UI::drawDuel(int w, int h) {
             s_lastGated       = mpRemoteTurn;
         }
     }
+
+    // ── Timing HUD — "Opponent thinking… (Ns)" ───────────────────────────
+    // Online only: while we're waiting on the remote peer (input gated), show
+    // a floating spinner + elapsed seconds near the top so the wait never
+    // reads as a freeze. Resets the moment control returns to us.
+    {
+        bool waiting = m_mpInDuel && !m_net.isOffline() && !m_dm.isDone() &&
+                       mpRemoteTurn;
+        double now = ImGui::GetTime();
+        if (waiting) {
+            if (m_oppWaitStart <= 0.0) m_oppWaitStart = now;
+            float secs = (float)(now - m_oppWaitStart);
+            char lbl[48];
+            snprintf(lbl, sizeof(lbl), "Opponent thinking…  %.0fs", secs);
+            ImDrawList* fdl = ImGui::GetForegroundDrawList();
+            ImVec2 ts = ImGui::CalcTextSize(lbl);
+            float pad = 12.f, spin = 9.f;
+            float bw2 = ts.x + pad * 3.f + spin * 2.f;
+            ImVec2 c{ (float)w * 0.5f - bw2 * 0.5f, 8.f };
+            ImVec2 e{ c.x + bw2, c.y + ts.y + 12.f };
+            fdl->AddRectFilled(c, e, IM_COL32(18, 22, 40, 235), 8.f);
+            fdl->AddRect(c, e, IM_COL32(120, 150, 230, 200), 8.f, 0, 1.4f);
+            // Little arc spinner.
+            ImVec2 sc{ c.x + pad + spin, (c.y + e.y) * 0.5f };
+            float a0 = (float)now * 5.f;
+            fdl->PathArcTo(sc, spin, a0, a0 + 4.2f, 16);
+            fdl->PathStroke(IM_COL32(150, 180, 255, 255), 0, 2.2f);
+            fdl->AddText({c.x + pad * 2.f + spin * 2.f, c.y + 6.f},
+                         IM_COL32(210, 224, 250, 255), lbl);
+        } else {
+            m_oppWaitStart = 0.0;
+        }
+    }
+
     if (inputLocked) ImGui::BeginDisabled();
 
     auto& selNow = currentSelection();
@@ -18461,7 +18495,33 @@ void UI::startDraft(int packs) {
     m_arcade = edo::ArcadeSave{};
     m_arcade.name = "Sealed Draft";
     packs = std::clamp(packs, 4, 20);
-    for (int i = 0; i < packs; ++i)
+    // Archetype-seeded sealed: a straight random pool almost never forms a
+    // deck, so give it a SPINE — pick 2-3 real archetypes and pull ~2/3 of
+    // the packs from them (secret packs, archetype-filtered), then fill the
+    // rest with master packs for staples + spice. The result is a themed
+    // pool you can actually build around.
+    std::vector<uint16_t> pickable;
+    for (auto& kv : m_mdArchBuckets)
+        if (kv.second.size() >= 25) pickable.push_back(kv.first);
+    std::vector<uint16_t> seeds;
+    std::string seedNames;
+    if (!pickable.empty()) {
+        std::shuffle(pickable.begin(), pickable.end(),
+                     std::mt19937{std::random_device{}()});
+        int nSeed = std::min((int)pickable.size(), packs >= 10 ? 3 : 2);
+        for (int i = 0; i < nSeed; ++i) {
+            seeds.push_back(pickable[i]);
+            if (i) seedNames += " · ";
+            seedNames += arcadeArchLabel(m_db, mdArchetypeBucket(pickable[i]),
+                                         pickable[i]);
+        }
+    }
+    int archPacks   = seeds.empty() ? 0 : packs * 2 / 3;
+    int masterPacks = packs - archPacks;
+    for (int i = 0; i < archPacks; ++i)
+        for (uint32_t c : rollSecretPack(seeds[i % seeds.size()]))
+            m_arcade.pool[c]++;
+    for (int i = 0; i < masterPacks; ++i)
         for (uint32_t c : rollMasterPack())
             m_arcade.pool[c]++;
     m_arcadeLoaded = true;    // pool-mode builder gate; cleared on exit
@@ -18471,9 +18531,10 @@ void UI::startDraft(int packs) {
     refreshDeckFiles();
     m_screen = Screen::DeckBuilder;
     gAudio().play("draw");
-    pushToast("Sealed pool: " + std::to_string(m_arcade.poolTotal()) +
-              " cards — build a 40+ deck, then Solo-duel it",
-              IM_COL32(110, 220, 140, 255), 5.0);
+    std::string msg = "Sealed pool: " + std::to_string(m_arcade.poolTotal()) +
+                      " cards";
+    if (!seedNames.empty()) msg += "  •  built around " + seedNames;
+    pushToast(msg, IM_COL32(110, 220, 140, 255), 6.0);
 }
 
 // Draft setup popup — pack count + Open.
@@ -18491,10 +18552,11 @@ void UI::drawDraftSetup(int w, int h) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(C.accentHi),
                            "Sealed Draft");
         UIStyle::PopFont();
-        ImGui::TextWrapped("Open a batch of Master Packs into a sealed card "
-            "pool, then build a deck from ONLY those cards and duel the AI. "
-            "Same real Master Duel pull odds. It's a fun-jank format — expect "
-            "off-meta piles.");
+        ImGui::TextWrapped("Open a batch of packs into a sealed card pool, "
+            "then build a deck from ONLY those cards and duel the AI. The pool "
+            "is SEEDED around 2-3 random archetypes (plus master-pack staples) "
+            "so you get something you can actually build — you find out what "
+            "you're playing when the packs open.");
         UIStyle::DrawDivider(8.f, 8.f);
         ImGui::TextDisabled("Packs to open (8 cards each)");
         ImGui::SetNextItemWidth(-1.f);

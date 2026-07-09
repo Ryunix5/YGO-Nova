@@ -765,6 +765,7 @@ private:
     bool        m_mpSandbox        = false;
     bool        m_mpSandboxHostReq = false;   // host UI toggle before start
     double      m_lastAutoPass     = 0.0;     // cooldown for auto-pass empty phases
+    double      m_oppWaitStart      = 0.0;     // when the opponent-wait began (timing HUD)
     // Suppression flag — set true while we're feeding bytes received
     // FROM the network, so the recorder hook doesn't echo them back.
     bool        m_mpFeedingRemote  = false;
