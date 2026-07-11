@@ -41,6 +41,8 @@ CMakeFiles/
 imgui.ini
 assets/replays/*.json
 *.log
+# Crash reporter output (minidumps + reports) — local diagnostics, not source.
+crash_dumps/
 
 # Card images are downloaded on demand + cached here at runtime (Konami IP,
 # ~300 MB). Keep cards.cdb (the database) but not the image pack.

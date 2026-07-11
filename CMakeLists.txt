@@ -142,6 +142,15 @@ endif()
 # ─── Compiler flags ───────────────────────────────────────────────────────────
 if(MSVC)
     target_compile_options(EdoProPlus PRIVATE /W3 /utf-8)
+    # Emit debug info (PDB) even for optimized Release builds and keep the
+    # PDB referenced by the exe, so the crash reporter's minidumps can be
+    # symbolized after the fact. /Zi keeps optimizations; /DEBUG makes the
+    # linker write the PDB while /OPT:REF,ICF undo its default size cost.
+    target_compile_options(EdoProPlus PRIVATE
+        $<$<CONFIG:Release>:/Zi>)
+    target_link_options(EdoProPlus PRIVATE
+        $<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF>
+        $<$<CONFIG:Release>:/OPT:ICF>)
 else()
     target_compile_options(EdoProPlus PRIVATE -Wall -Wextra)
 endif()
