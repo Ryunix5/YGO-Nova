@@ -2,6 +2,59 @@
 
 All notable changes to YGO: Nova are documented here.
 
+## 1.0.6
+
+### Added — new modes
+- **Draft (Sealed)** — a new Arcade mode: open packs into a sealed pool
+  seeded around 2-3 archetypes, build a deck from only those cards, and duel
+  the AI.
+- **Progression Series** — climb Yu-Gi-Oh set by set from Legend of Blue Eyes
+  onward: open 24 packs from a set, build with what you pull, win to advance,
+  lose for 3 OTS packs from an earlier set. Your collection carries across
+  sets. (Single-player v1.)
+- **Arcade mode picker** — ARCADE now opens a chooser: Master Saga, Draft, and
+  Progression Series.
+- **Online sandbox (testing) match** — hosts can flip a "Sandbox match" toggle
+  to freely edit the board (add cards to either hand) for setting up scenarios
+  together.
+- **Play this opening** — the deck tester can drop you into a no-shuffle
+  goldfish of your exact sampled hand.
+
+### Fixed — online duels
+- Surrender / Lobby are clickable on the opponent's turn (were greyed out).
+- Emotes and chat now show their text (they were arriving empty).
+- Keepalive heartbeat stops random mid-duel disconnects (the relay's 45s idle
+  drop).
+- Phase pills no longer overlap the Surrender button.
+- Quitting a group duel now counts as a loss; the opponent quitting is your
+  win — recorded automatically.
+
+### Fixed — performance & visuals
+- **Smoother everywhere** — `getCard` is cached (it was running a DB query
+  dozens of times per frame), and new card textures load on a per-frame budget
+  so a full board/deck no longer hitches.
+- **Crisp card text** — gamma-correct mipmaps + a sharper LOD bias; downscaled
+  card text is no longer pixelated.
+- Activation of a hand card pops in the middle of the board instead of a stray
+  "CHAIN 1" stuck on the deck.
+
+### Changed — deck builder & UI
+- EdoPro-style deck area (full-width section bars with composition counts,
+  full-art tiles, everything on screen with no scrolling), Master Duel-style
+  search grid, single-click to add, Format/sleeve moved to a top-bar popup.
+- Bigger, activatable-first GY/Banished/Extra viewer.
+- Arcade collection: search box + sort (rarity / name / copies).
+- Solo setup and Puzzles screens reorganised.
+
+### Added — quality of life
+- **Auto-pass empty phases** (offline, opt-in) — advance dead phases with no
+  plays.
+- **Attack arrow** — attacks read as a clear directional strike.
+- **Timing HUD** — an "Opponent thinking… Ns" indicator during the online wait.
+- **Image mirror** setting — point card-art downloads at a mirror where the
+  default CDN is blocked.
+- Optional room passwords when hosting online.
+
 ## 1.0.5
 
 ### Added — Arcade (Master Saga) overhaul
